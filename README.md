@@ -12,7 +12,7 @@ Requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
 uv sync --frozen
-uv run kilde run --organisations batch.jsonl --output out/envelopes.jsonl
+uv run --frozen kilde run --organisations batch.jsonl --output out/envelopes.jsonl
 ```
 
 That is the whole command. `batch.jsonl` can be JSONL rows (the public universe format, or `{"organisation_number": "..."}`), a JSON list, or plain text with one number per line.
@@ -30,12 +30,12 @@ It writes, next to `--output`:
 The flags of the Signalpost starter kit are accepted too, so a harness written for the starter can call Kilde unchanged:
 
 ```bash
-uv run kilde run --organisations smoke-companies.jsonl --bulk brreg-enheter.csv \
+uv run --frozen kilde run --organisations smoke/smoke-companies.jsonl --bulk brreg-enheter.csv \
   --profiles-output out/smoke-profiles.jsonl --output out/smoke-envelopes.jsonl \
   --report out/smoke-report.json --run-id smoke-001 --expected-count 100
 ```
 
-Options: `--previous <envelopes.jsonl>` (refresh against an earlier run), `--state-dir` (default `state/`, keeps the latest envelopes so the next run diffs against them), `--max-requests`, `--time-budget` (seconds), `--concurrency`. The same budgets can be set with `KILDE_MAX_REQUESTS` and `KILDE_TIME_BUDGET`.
+Options: `--previous <envelopes.jsonl>` (refresh against an earlier run), `--state-dir <folder>` (off by default; keeps the latest envelopes so the next run diffs against them), `--max-requests`, `--time-budget` (seconds, default 1800), `--concurrency`, `--bulk` (Builderr's frozen registry snapshot, used for identity if the live API fails). The starter kit's `--workers`, `--resume`, `--checkpoint-every` and `--modules` are accepted and ignored. The same budgets can be set with `KILDE_MAX_REQUESTS` and `KILDE_TIME_BUDGET`. An invalid or duplicate input never stops the batch: each distinct input gets exactly one envelope.
 
 ## Envelope
 
@@ -64,7 +64,7 @@ Availability states: `available`, `not_available` (checked, nothing there), `blo
 
 Values in the four external families use Builderr's published shapes: `official_website` is the registered domain (`example.no`, full address in `official_website_url`), `social_profile` is `platform.com/handle` in lower case without scheme or `www`, `hiring_signal` is a careers page or job posting URL, and `dated_news` is `title (datetime)` with the source's own datetime and offset. NAV ads are `job_ad` claims.
 
-`claim_span` is always copied verbatim from the saved snapshot (`span_exact: true`), so it can be found with a plain text search. JSON evidence quotes the exact `"key":value` pair, scoped to the right record; extra supporting quotes are in `span_context`.
+For every published (`available`) claim, `claim_span` is copied verbatim from the saved snapshot (`span_exact: true`), so it can be found with a plain text search. Evidence for an absence (`not_available`) may describe the empty result instead and is then marked `span_exact: false`. Brønnøysund role responses are saved with people's birth dates removed before hashing; such evidence says so in its note. JSON evidence quotes the exact `"key":value` pair, scoped to the right record; extra supporting quotes are in `span_context`.
 
 ## Sources
 
@@ -85,9 +85,9 @@ Values in the four external families use Builderr's published shapes: `official_
 | Wikidata (via QLever, then EntityData JSON) | ticker, ISIN, website, socials, employees for larger firms | P2333 equals the org number | CC0; robots-compliant route |
 | SSB Klass (bundled) | readable names for industry, sector and legal-form codes | code lookup | CC BY 4.0 |
 
-Not used: aggregators whose terms forbid automated copying (Proff, Forvalt, 1881, Gule Sider, regnskapstall, OpenCorporates), search-engine result pages, Brønnøysund announcement pages (robots.txt disallows them), NAV's internal search, DiBK's `/api/` path (robots.txt disallows it), and LinkedIn, Meta, Glassdoor or Indeed scraping. Social profiles are reported only when the verified company site links to them; Kilde never crawls the platforms.
+Social profiles come from links on an exclusive verified company site, from the registry website field, or from Wikidata items matched on the org number. Not used: aggregators whose terms forbid automated copying (Proff, Forvalt, 1881, Gule Sider, regnskapstall, OpenCorporates), search-engine result pages, Brønnøysund announcement pages (robots.txt disallows them), NAV's internal search, DiBK's `/api/` path (robots.txt disallows it), and LinkedIn, Meta, Glassdoor or Indeed scraping. Kilde never crawls the platforms.
 
-Contains data under the Norwegian licence for Open Government data (NLOD) distributed by Brønnøysundregistrene. Code names come from Statistics Norway (SSB), Klass, licensed CC BY 4.0. Website candidate seeds contain information from OpenStreetMap (© OpenStreetMap contributors, ODbL 1.0) and Overture Maps (CDLA-Permissive 2.0). Personal names are shown only as registered roles of the company looked up; birth dates are dropped.
+Contains data under the Norwegian licence for Open Government data (NLOD) distributed by Brønnøysundregistrene. Code names come from Statistics Norway (SSB), Klass, licensed CC BY 4.0. Website candidate seeds contain information from OpenStreetMap (© OpenStreetMap contributors, ODbL 1.0; the seeds file is shared under ODbL) and Overture Maps (CDLA-Permissive 2.0). Mattilsynet Smilefjes data is CC BY 4.0. SkatteFUNN lists: no licence stated; public information published by the Research Council of Norway (forskningsradet.no). TED notices may be freely reused. GLEIF and Wikidata data are CC0. Personal names are shown only as registered roles of the company looked up; birth dates are dropped.
 
 ## How a company match is proven
 
@@ -108,7 +108,7 @@ Every run can diff against the previous envelopes (`--previous`, or automaticall
 
 Every request goes through one budgeted client. Defaults: 20 outbound HTTP requests per company and 45 minutes per batch, both configurable. Identity, roles, accounts and workplaces for every company run first; external sources share what is left. Each step has a timeout; a step that times out rolls back anything it published half-way, and timed-out website steps get one unhurried second pass. DNS or network failures are reported as `failed`, never as absence. When time or requests run out, the remaining facts are marked `failed` with the reason and every envelope is still written.
 
-Measured: 1,000 random universe companies in about 16 minutes and about 10 requests per company. Two runs of the same batch produce identical facts (Builderr runs each entry twice and compares).
+Measured: see the 1,000-company figures in [EVAL.md](EVAL.md). The run report gives HTTP requests and DNS lookups separately; DNS lookups are used only to drop name-derived domains that do not exist before any HTTP request. Fetches to private, loopback, link-local or other non-public addresses are refused, including on redirects. Two runs of the same batch produce identical facts (Builderr runs each entry twice and compares).
 
 | Item | Cost |
 |---|---|
@@ -151,4 +151,4 @@ uv run python scorer/score.py --envelopes out/envelopes.jsonl --expected-count 1
 
 ## Licence
 
-MIT. See [LICENSE](LICENSE).
+The code is MIT (see [LICENSE](LICENSE)). Data files under `src/kilde/data/` keep the licences of their sources (listed above). Saved snapshots under `smoke/` and run outputs are third-party content kept only as evidence for the published claims.
