@@ -112,9 +112,13 @@ def test_large_runs_embed_compressed_exact_data(tmp_path, monkeypatch):
     assert data == json.loads(json.dumps(build_data(load())))
 
 
-def test_sidebar_list_scrolls_inside_the_sidebar():
-    # Without min-height:0 the list overflows the sticky sidebar and stretches the page.
-    from kilde import report
-    import inspect
-    css = inspect.getsource(report)
-    assert "overflow:auto;flex:1;min-height:0" in css
+def test_page_explains_itself_and_keeps_full_evidence(tmp_path):
+    # First-time visitors get a plain opening line; judges still get every fact with its evidence.
+    p = tmp_path / "r.html"
+    write_report(load(), str(p), {"run_id": "run-x"})
+    html = p.read_text(encoding="utf-8")
+    assert "Norwegian companies" in html and "built from public sources" in html
+    assert "Every fact links to where it came from" in html
+    assert 'id="about"' in html and "About this report" in html
+    assert "All facts and evidence" in html and "Show sources" in html
+    assert "Ask anything about this company" in html

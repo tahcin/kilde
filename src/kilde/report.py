@@ -214,17 +214,6 @@ def write_report(envelopes: list[dict], path: str, run_report: dict) -> None:
         fh.write(page)
 
 
-ICON = {
-    "search": '<path d="m21 21-4.3-4.3"/><circle cx="11" cy="11" r="8"/>',
-    "filter": '<path d="M3 6h18"/><path d="M7 12h10"/><path d="M10 18h4"/>',
-}
-
-
-def _icon(name: str) -> str:
-    return ('<svg class="ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" '
-            'stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' + ICON[name] + '</svg>')
-
-
 PAGE = """<!doctype html>
 <html lang="en">
 <head>
@@ -235,53 +224,29 @@ PAGE = """<!doctype html>
 <style>/*CSS*/</style>
 </head>
 <body>
-<a class="skip" href="#main">Skip to company profile</a>
+<a class="skip" href="#main">Skip to content</a>
 <header class="bar">
-  <a class="word" href="#" aria-label="Kilde, back to the first company"><span class="mark" aria-hidden="true"></span>Kilde</a>
-  <dl class="run" id="run"></dl>
-  <a class="bar-link" href="#sources">Sources and licences</a>
+  <a class="word" href="#" aria-label="Kilde, all companies"><span class="mark" aria-hidden="true"></span>Kilde</a>
+  <nav class="barnav" aria-label="Main">
+    <a href="#">All companies</a>
+    <a href="#compare" id="nav-cmp" hidden>Compare (<span id="nav-cmp-n">0</span>)</a>
+    <a href="#about">About this report</a>
+  </nav>
 </header>
-<div class="layout" id="layout">
-  <aside class="side" aria-label="Companies">
-    <div class="tools" role="search">
-      <div class="search">""" + _icon("search") + """
-        <label class="vh" for="q">Search by name or organisation number</label>
-        <input id="q" type="search" placeholder="Search name or org number" autocomplete="off" spellcheck="false">
-      </div>
-      <div class="tools-row">
-        <p class="count" id="count" aria-live="polite"></p>
-        <button type="button" class="tbtn" id="ftoggle" aria-expanded="false" aria-controls="filters">""" + _icon("filter") + """<span>Filter</span></button>
-        <label class="sortl"><span class="vh">Sort companies</span><select id="sort">
-          <option value="name">Name</option><option value="org">Org number</option>
-          <option value="rev">Revenue</option><option value="facts">Facts found</option>
-          <option value="chg">Changes</option></select></label>
-      </div>
-      <div class="filters" id="filters" hidden>
-        <fieldset><legend class="vh">Show only companies with</legend>
-          <label><input type="checkbox" id="f-web"> Verified website</label>
-          <label><input type="checkbox" id="f-jobs"> Job ads</label>
-          <label><input type="checkbox" id="f-chg"> Registry changes</label>
-        </fieldset>
-        <div class="fsel">
-          <label><span>Section</span><select id="f-sec"></select></label>
-          <label><span>State</span><select id="f-state"></select></label>
-        </div>
-        <div class="legend" id="legend"></div>
-      </div>
-    </div>
-    <ul class="list" id="list"></ul>
-    <button type="button" class="tbtn more" id="more" hidden>Show more companies</button>
-    <div class="tray" id="tray" hidden><span id="tray-text"></span><a class="btn" id="tray-go" href="#">Compare</a><button type="button" class="tbtn" id="tray-clear">Clear</button></div>
-  </aside>
-  <main id="main" class="main" tabindex="-1"></main>
-</div>
-<footer class="foot" id="sources">
-  <h2>Sources and licences</h2>
-  <div id="srclist"></div>
-  <p>__NLOD__.</p>
-  <p>__SSB__</p>
-  <p id="colophon"></p>
+<main id="main" class="main" tabindex="-1"></main>
+<footer class="foot" id="about" aria-labelledby="h-about">
+  <div class="footin">
+    <h2 id="h-about">About this report</h2>
+    <p class="aboutlead">Kilde builds each profile from Norway&#8217;s public registers and the company&#8217;s own website. For every fact it keeps the web address, the time it was read and the exact text, so anyone can check it. Nothing is estimated: missing figures are shown as missing, never as zero.</p>
+    <dl class="runinfo" id="runinfo"></dl>
+    <h3>Sources and licences</h3>
+    <div id="srclist"></div>
+    <p>__NLOD__.</p>
+    <p>__SSB__</p>
+    <p>Typeface Figtree, SIL Open Font License 1.1.</p>
+  </div>
 </footer>
+<div class="cmpbar" id="cmpbar" hidden></div>
 <div class="scrim" id="scrim" hidden></div>
 <div class="pop" id="pop" role="dialog" aria-modal="false" aria-label="Source" tabindex="-1" hidden></div>
 <noscript><p>This report needs JavaScript for search and profiles. Companies in this run:</p><ul>__NOSCRIPT__</ul></noscript>
@@ -298,20 +263,20 @@ CSS = r"""
 :root{
   --bg:#f6f4ef;--raise:#fcfbf8;--well:#edeae2;--ink:#1c262b;--ink2:#3a464c;--muted:#5a666c;--faint:#a3aaa9;
   --line:#d9d5ca;--line2:#e6e2d9;--edge:#b9b4a8;--accent:#1f5673;--accent2:#163f55;--on:#ffffff;
-  --sel:#e5e9e6;--hover:#eeece5;--hl:#f1e2b0;
+  --sel:#e5e9e6;--hover:#efede6;--hl:#f1e2b0;--tag:#e9e6dd;
   --ok:#3b6b4c;--amb:#8a6410;--blk:#6d4b7f;--fail:#a12b3b;--na:#7c868b;
   --scrim:rgba(28,38,43,.28);
 }
 @media (prefers-color-scheme:dark){:root{
   --bg:#13181b;--raise:#1a2125;--well:#222a2e;--ink:#e6e3dc;--ink2:#c9cdcb;--muted:#9da7ab;--faint:#58636a;
   --line:#2c353a;--line2:#232b30;--edge:#46525a;--accent:#8cc3de;--accent2:#b3d8ea;--on:#0f1a20;
-  --sel:#1f2a30;--hover:#1a2226;--hl:#4b4020;
+  --sel:#1f2a30;--hover:#192024;--hl:#4b4020;--tag:#242d32;
   --ok:#8dc49f;--amb:#ddb663;--blk:#c4a6d6;--fail:#ef939f;--na:#8b969b;
   --scrim:rgba(0,0,0,.5);
 }}
 *{box-sizing:border-box}
 [hidden]{display:none!important}
-html{-webkit-text-size-adjust:100%;scroll-behavior:smooth}
+html{-webkit-text-size-adjust:100%}
 body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 "Figtree",ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
   -webkit-font-smoothing:antialiased;font-kerning:normal}
 em,i,cite,dfn,address,var{font-style:normal}
@@ -321,252 +286,290 @@ button,input,select{font:inherit;color:inherit}
 :focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
 h1,h2,h3{margin:0;line-height:1.25;font-weight:600}
 p{margin:0}
-.num,table,.run dd,.stat-v{font-variant-numeric:tabular-nums}
+.num,table{font-variant-numeric:tabular-nums}
 .vh{position:absolute!important;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 .skip{position:absolute;left:12px;top:-48px;background:var(--raise);padding:8px 12px;z-index:60;border:1px solid var(--edge)}
 .skip:focus{top:12px}
 .ic{width:16px;height:16px;flex:none}
 .muted{color:var(--muted)}
+.sub2{color:var(--muted);font-size:13.5px}
+.fine{color:var(--muted);font-size:13.5px;margin-top:12px;max-width:68ch}
+.loading{padding:48px 0;color:var(--muted)}
 
-/* run bar */
+/* top bar */
 .mark{display:inline-block;width:22px;height:22px;border-radius:6px;background:var(--accent);box-shadow:inset -7px -7px 0 0 color-mix(in srgb,var(--accent) 38%,#ffffff);margin-right:9px;vertical-align:-4px;flex:none}
-.bar{display:flex;align-items:center;gap:10px 36px;flex-wrap:wrap;padding:14px 28px;border-bottom:1px solid var(--line)}
+.bar{display:flex;align-items:center;gap:10px 28px;flex-wrap:wrap;padding:14px max(20px,calc((100vw - 1120px)/2));border-bottom:1px solid var(--line)}
 .word{font-size:19px;font-weight:700;letter-spacing:-.02em;color:var(--ink);text-decoration:none}
-.run{display:flex;flex-wrap:wrap;gap:4px 24px;margin:0;font-size:13.5px}
-.run div{display:flex;gap:6px}
-.run dt{color:var(--muted)}
-.run dd{margin:0;font-weight:500}
-.bar-link{margin-left:auto;font-size:13.5px}
+.word:hover{color:var(--ink)}
+.barnav{display:flex;gap:4px 22px;margin-left:auto;font-size:14px;flex-wrap:wrap}
+.barnav a{color:var(--ink2);text-decoration:none}
+.barnav a:hover{color:var(--accent);text-decoration:underline}
+.main{max-width:1120px;margin:0 auto;padding:0 20px 96px;min-height:70vh}
+.main:focus{outline:none}
 
-/* layout */
-.layout{display:grid;grid-template-columns:340px minmax(0,1fr)}
-.side{border-right:1px solid var(--line);display:flex;flex-direction:column;min-width:0}
-@media (min-width:901px){.side{position:sticky;top:0;height:100vh;align-self:start;overflow:hidden}}
-.tools{padding:16px 16px 12px;border-bottom:1px solid var(--line)}
-.search{position:relative}
-.search .ic{position:absolute;left:11px;top:11px;color:var(--muted);pointer-events:none}
-input[type=search],input[type=text]{width:100%;height:38px;padding:0 12px 0 34px;border:1px solid var(--line);border-radius:6px;background:var(--raise);font-size:15px;
-  transition:border-color .12s}
-input[type=search]:focus,input[type=text]:focus{border-color:var(--accent);outline:none}
-input[type=search]:focus-visible,input[type=text]:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
-.tools-row{display:flex;align-items:center;gap:6px;margin-top:10px}
-.count{flex:1;font-size:13px;color:var(--muted)}
-select{background:transparent;border:1px solid transparent;border-radius:5px;padding:4px 6px;font-size:13px;color:var(--ink2);cursor:pointer}
-select:hover{border-color:var(--line)}
-.tbtn{display:inline-flex;align-items:center;gap:6px;background:none;border:1px solid transparent;border-radius:5px;padding:4px 8px;font-size:13px;color:var(--ink2);cursor:pointer}
-.tbtn:hover{border-color:var(--line)}
-.tbtn[aria-expanded=true]{color:var(--accent)}
-.tbtn .ic{width:14px;height:14px}
-.filters{padding-top:12px;font-size:13.5px}
-.filters fieldset{border:0;margin:0;padding:0;display:grid;gap:6px}
-.filters fieldset label{display:flex;gap:8px;align-items:center;cursor:pointer}
-.filters input[type=checkbox]{width:15px;height:15px;margin:0;accent-color:var(--accent)}
-.fsel{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:10px}
-.fsel label{display:grid;gap:2px;color:var(--muted);font-size:12.5px}
-.fsel select{border-color:var(--line);background:var(--raise);width:100%;padding:5px 6px}
-.legend{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:12px;color:var(--muted);font-size:12.5px}
-.legend span{display:inline-flex;align-items:center;gap:5px}
-
-.list{list-style:none;margin:0;padding:0;overflow:auto;flex:1;min-height:0;overscroll-behavior:contain}
-.row{display:grid;grid-template-columns:minmax(0,1fr) auto 22px;align-items:center;gap:0 10px;padding:0 12px 0 0;border-bottom:1px solid var(--line2);transition:background-color .12s}
-.row:hover{background:var(--hover)}
-.row.cur{background:var(--sel)}
-.row-link{display:block;padding:10px 0 10px 16px;color:var(--ink);text-decoration:none;min-width:0}
-.row-link:hover{color:var(--ink)}
-.row-link:focus-visible{outline-offset:-2px}
-.nm{display:block;font-size:14px;font-weight:500;line-height:1.35;overflow-wrap:anywhere}
-.row.cur .nm{font-weight:600}
-.sub{display:flex;gap:10px;font-size:12.5px;color:var(--muted);margin-top:2px}
-.cov{display:block;line-height:0}
-.pick{display:flex;align-items:center;justify-content:center;opacity:0;transition:opacity .12s}
-.row:hover .pick,.pick:focus-within,.pick:has(input:checked){opacity:1}
-@media (hover:none){.pick{opacity:1}}
-.pick input{width:16px;height:16px;margin:0;accent-color:var(--accent);cursor:pointer}
-.empty{color:var(--muted);padding:16px}
-.more{margin:12px 16px;align-self:flex-start;color:var(--accent)}
-.tray{position:sticky;bottom:0;display:flex;align-items:center;gap:10px;padding:10px 16px;border-top:1px solid var(--line);background:var(--bg);font-size:13px}
-.tray span{flex:1}
-.btn{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:6px;border:1px solid var(--accent);background:var(--accent);color:var(--on);font-size:13.5px;font-weight:500;text-decoration:none;cursor:pointer;transition:background-color .12s,color .12s}
+/* buttons */
+.btn{display:inline-flex;align-items:center;gap:6px;padding:8px 14px;border-radius:7px;border:1px solid var(--accent);background:var(--accent);color:var(--on);font-size:14.5px;font-weight:500;text-decoration:none;cursor:pointer;transition:background-color .12s,border-color .12s,color .12s;white-space:nowrap}
 .btn:hover{color:var(--on);background:var(--accent2);border-color:var(--accent2)}
-.btn[aria-disabled=true]{opacity:.45;cursor:not-allowed}
 .btn.quiet{background:transparent;color:var(--accent);border-color:var(--line)}
 .btn.quiet:hover{border-color:var(--accent);color:var(--accent)}
-.btn .ic{width:15px;height:15px}
+.btn.quiet[aria-pressed=true]{background:var(--sel);border-color:var(--sel);color:var(--ink)}
+.btn .ic{width:16px;height:16px}
+.tbtn{display:inline-flex;align-items:center;gap:6px;background:none;border:0;padding:4px 2px;font-size:14px;color:var(--accent);cursor:pointer}
+.tbtn:hover{text-decoration:underline;text-underline-offset:3px}
 
-/* state marks */
+/* home */
+.hero{padding:56px 0 8px;max-width:760px}
+.hero h1{font-size:34px;line-height:1.18;letter-spacing:-.02em}
+.lead{font-size:17px;color:var(--ink2);margin-top:12px;max-width:62ch;line-height:1.55}
+.bigsearch{position:relative;margin-top:28px}
+.bigsearch .ic{position:absolute;left:16px;top:17px;width:20px;height:20px;color:var(--muted);pointer-events:none}
+.bigsearch input{width:100%;height:54px;padding:0 16px 0 48px;border:1px solid var(--edge);border-radius:10px;background:var(--raise);font-size:17px;transition:border-color .12s}
+.bigsearch input:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent)}
+.controls{display:flex;flex-wrap:wrap;align-items:center;gap:10px 24px;margin-top:16px;font-size:14px}
+.cks{display:flex;flex-wrap:wrap;gap:6px 18px;align-items:center}
+.ck{display:inline-flex;align-items:center;gap:7px;cursor:pointer;color:var(--ink2)}
+.ck input{width:16px;height:16px;margin:0;accent-color:var(--accent)}
+.sort{display:inline-flex;align-items:center;gap:8px;margin-left:auto}
+select{border:1px solid var(--line);border-radius:6px;padding:5px 8px;background:var(--raise);font-size:14px;color:var(--ink);cursor:pointer}
+.count{margin:36px 0 10px;color:var(--muted);font-size:14px}
+.clist{list-style:none;margin:0;padding:0;border-top:1px solid var(--line)}
+.crow{display:grid;grid-template-columns:minmax(0,1fr) 120px 250px 112px;gap:6px 24px;align-items:center;padding:14px 4px;border-bottom:1px solid var(--line2);transition:background-color .12s}
+.crow:hover{background:var(--hover)}
+.cl{display:block;min-width:0;text-decoration:none;color:var(--ink)}
+.cl:hover{color:var(--ink)}
+.cl:hover .cn{color:var(--accent);text-decoration:underline;text-underline-offset:3px}
+.cn{display:block;font-size:16px;font-weight:600;line-height:1.3;overflow-wrap:anywhere}
+.cw{display:block;color:var(--muted);font-size:14px;margin-top:2px}
+.cr{text-align:right;font-size:15px;font-weight:500;line-height:1.3}
+.cr .num{display:block}
+.cy{display:block;font-size:12.5px;font-weight:400;color:var(--muted)}
+.tags{display:flex;flex-wrap:wrap;gap:5px}
+.tag{font-size:12.5px;line-height:1;padding:5px 7px;border-radius:4px;background:var(--tag);color:var(--ink2);white-space:nowrap}
+.tag.warn{background:transparent;color:var(--fail);border:1px solid var(--fail);padding:4px 6px}
+.addc{justify-self:end;display:inline-flex;align-items:center;gap:5px;background:none;border:1px solid var(--line);border-radius:6px;padding:5px 9px;font-size:13.5px;color:var(--accent);cursor:pointer;white-space:nowrap}
+.addc:hover{border-color:var(--accent)}
+.addc[aria-pressed=true]{background:var(--sel);border-color:var(--sel);color:var(--ink)}
+.addc .ic{width:14px;height:14px}
+.empty{padding:28px 4px;color:var(--muted);list-style:none}
+.more{margin-top:20px}
+.cmpbar{position:fixed;left:0;right:0;bottom:0;z-index:30;background:var(--raise);border-top:1px solid var(--edge)}
+.cbin{max-width:1120px;margin:0 auto;padding:12px 20px;display:flex;align-items:center;gap:10px 18px;flex-wrap:wrap;font-size:14.5px}
+.cbin .msg{flex:1;min-width:200px}
+.ccount{display:none}
+
+/* company page */
+.back{display:inline-flex;align-items:center;gap:4px;margin:24px 0 0 -4px;padding:4px;font-size:14.5px;color:var(--accent);text-decoration:none}
+.back:hover{text-decoration:underline}
+.co{max-width:820px}
+.cohead{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:14px 24px;margin-top:14px}
+.cohead h1{font-size:34px;line-height:1.15;letter-spacing:-.02em;overflow-wrap:anywhere}
+.cosub{color:var(--ink2);font-size:16px;margin-top:8px}
+.alert{display:flex;gap:10px;align-items:flex-start;margin-top:20px;padding:12px 14px;border:1px solid var(--fail);border-radius:8px;color:var(--ink)}
+.alert .ic{color:var(--fail);margin-top:3px}
+.intro{margin-top:24px}
+.sumtext{font-size:17px;line-height:1.65;max-width:68ch}
+.sumtext p+p{margin-top:12px}
+.sumtext .cites{display:none}
+.sumtext.showsrc .cites{display:inline}
+.cites{font-size:11px;line-height:0;margin-left:2px;color:var(--muted);white-space:nowrap;vertical-align:super}
+.cite{background:none;border:0;padding:2px 1px;font:600 11px/1 inherit;color:var(--accent);cursor:pointer;font-variant-numeric:tabular-nums}
+.cite:hover{text-decoration:underline}
+.sumctl{display:flex;flex-wrap:wrap;gap:4px 20px;margin-top:8px}
+.sumctl .tbtn{font-size:14px}
+.ask{margin-top:26px}
+.askrow{display:flex;gap:8px;max-width:640px}
+.askrow input{flex:1;min-width:0;height:44px;padding:0 14px;border:1px solid var(--edge);border-radius:8px;background:var(--raise);font-size:16px}
+.askrow input:focus{outline:2px solid var(--accent);outline-offset:1px;border-color:var(--accent)}
+.askrow .btn{height:44px}
+.sugg{display:flex;flex-wrap:wrap;gap:4px 16px;margin-top:10px;font-size:14px;align-items:baseline}
+.sugg button{background:none;border:0;padding:2px 0;color:var(--accent);cursor:pointer;text-align:left}
+.sugg button:hover{text-decoration:underline;text-underline-offset:3px}
+.answer{margin-top:14px;max-width:640px;padding:14px 16px;border:1px solid var(--line);border-radius:8px;background:var(--raise);font-size:15.5px;line-height:1.55}
+.answer .q{color:var(--muted);font-size:13.5px;margin-bottom:6px}
+.answer p+p{margin-top:6px}
+.cards{display:grid;gap:16px;margin-top:32px}
+.card{background:var(--raise);border:1px solid var(--line);border-radius:10px;padding:20px 22px 18px;min-width:0;scroll-margin-top:16px}
+.ch{display:flex;align-items:baseline;justify-content:space-between;gap:12px}
+.card h2{font-size:19px;letter-spacing:-.01em}
+.ans{margin-top:8px;font-size:16.5px;line-height:1.55;max-width:66ch}
+.ans p+p{margin-top:8px}
+.ans .quote{color:var(--ink2);font-size:15.5px}
+.srcl{background:none;border:0;padding:2px 0;font-size:13px;color:var(--muted);cursor:pointer;white-space:nowrap;text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:3px}
+.srcl:hover{color:var(--accent);text-decoration-color:currentColor}
+.ans .srcl{margin-left:4px}
+.miss{color:var(--ink2)}
+.whyb{background:none;border:0;padding:0 2px;cursor:pointer;color:var(--muted);font-size:13.5px;text-decoration:underline;text-decoration-color:var(--edge);text-underline-offset:3px}
+.whyb:hover,.whyb[aria-expanded=true]{color:var(--accent)}
+.whyt{display:block;color:var(--muted);font-size:14px;margin:4px 0 2px;max-width:62ch}
+dl.det{margin:16px 0 0;border-top:1px solid var(--line2)}
+.dr{display:grid;grid-template-columns:200px minmax(0,1fr) auto;gap:2px 18px;padding:9px 0;border-bottom:1px solid var(--line2);font-size:15px}
+.dr:last-child{border-bottom:0}
+.dr dt{color:var(--muted);font-size:14px;padding-top:1px}
+.dr dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.dr .ds{text-align:right}
+.yl{display:flex;flex-wrap:wrap;gap:2px 12px}
+.charts{display:grid;grid-template-columns:1fr 1fr;gap:12px 28px;margin-top:18px}
+.chart{margin:0;min-width:0}
+.chart figcaption{font-size:14px;font-weight:600;margin-bottom:4px}
+.chart svg{display:block;width:100%;height:auto;overflow:visible}
+.bpos{fill:var(--accent)}
+.bneg{fill:var(--fail)}
+.base{stroke:var(--edge);stroke-width:1}
+.bl{font-size:12px;fill:var(--ink2);font-variant-numeric:tabular-nums;font-weight:500}
+.bx{font-size:12px;fill:var(--muted)}
+details.more{margin-top:14px}
+details.more>summary,details.allfacts>summary{cursor:pointer;color:var(--accent);font-size:14.5px;width:max-content;max-width:100%}
+details.more>summary:hover{text-decoration:underline;text-underline-offset:3px}
+details.more[open]>summary{margin-bottom:12px}
+details.allfacts{margin-top:40px;border-top:1px solid var(--line);padding-top:20px}
+details.allfacts>summary{display:block;width:auto;list-style:none}
+details.allfacts>summary::-webkit-details-marker{display:none}
+.st1{display:block;font-size:19px;font-weight:600;color:var(--ink)}
+.st1::after{content:" +";color:var(--muted);font-weight:400}
+details.allfacts[open] .st1::after{content:" \2212"}
+.st2{display:block;font-size:14px;color:var(--muted);margin-top:2px}
+.afbody{margin-top:8px}
+
+/* all facts (technical) */
 .mk{width:9px;height:9px;flex:none;vertical-align:-1px}
 .st-available{color:var(--ok)}.st-not_available{color:var(--na)}.st-ambiguous{color:var(--amb)}
 .st-blocked{color:var(--blk)}.st-failed{color:var(--fail)}.st-not_applicable{color:var(--na)}
-.badge{display:inline-flex;align-items:center;gap:6px;font-weight:500}
+.badge{display:inline-flex;align-items:center;gap:6px;font-weight:500;margin-right:10px}
 .badge .w{color:var(--ink2)}
-
-/* profile */
-.main{padding:32px 48px 96px;min-width:0}
-.main:focus{outline:none}
-.pro,.cmpv{max-width:920px}
-.back{display:none;align-items:center;gap:4px;margin:0 0 14px -4px;padding:4px;font-size:14px;color:var(--accent);background:none;border:0;text-decoration:none}
-.head{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 24px;align-items:start}
-.head h1{font-size:28px;letter-spacing:-.015em;overflow-wrap:anywhere}
-.idline{grid-column:1;display:flex;flex-wrap:wrap;gap:2px 14px;color:var(--ink2);font-size:15px}
-.idline .num{color:var(--ink)}
-.head .btn{grid-column:2;grid-row:1}
-.stats{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:14px 24px;margin:24px 0 0;padding:16px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}
-.stat dt{font-size:13px;color:var(--muted)}
-.stat dd{margin:2px 0 0}
-.stat-v{display:block;font-size:20px;font-weight:600;letter-spacing:-.01em;line-height:1.3}
-.stat-v.none{font-size:15px;font-weight:500;color:var(--muted);line-height:1.75}
-.stat-s{display:block;font-size:12.5px;color:var(--muted)}
-button.vbtn{background:none;border:0;padding:0;text-align:left;cursor:pointer;color:inherit;font:inherit;text-decoration:underline;text-decoration-color:transparent;text-underline-offset:4px;text-decoration-thickness:1px;transition:text-decoration-color .12s}
-button.vbtn:hover{text-decoration-color:var(--muted)}
-.toc{position:sticky;top:0;z-index:5;display:flex;flex-wrap:wrap;gap:2px 18px;margin:20px 0 0;padding:10px 0;background:var(--bg);border-bottom:1px solid var(--line);font-size:13.5px}
-.toc a{color:var(--ink2);text-decoration:none;padding:2px 0}
-.toc a:hover{color:var(--accent)}
-.toc a[aria-current=true]{color:var(--accent);font-weight:600}
-.sec{padding-top:36px;scroll-margin-top:52px}
-.sh{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 14px;margin-bottom:12px}
-.sh h2{font-size:19px;letter-spacing:-.01em}
+.sec{padding-top:28px;scroll-margin-top:16px}
+.sh{display:flex;flex-wrap:wrap;align-items:baseline;gap:4px 14px;margin-bottom:10px}
+.sh h3{font-size:16.5px}
 .sh .badge{font-size:13.5px}
-.lede{max-width:68ch;font-size:16.5px;line-height:1.65;color:var(--ink)}
-.lede p+p{margin-top:10px}
-.cites{font-size:11px;line-height:0;margin-left:2px;color:var(--muted);white-space:nowrap}
-.cite{background:none;border:0;padding:2px 1px;font:600 11px/1 inherit;color:var(--accent);cursor:pointer;font-variant-numeric:tabular-nums}
-.cite:hover{text-decoration:underline}
-.gaps{margin-top:14px;color:var(--muted);font-size:14px;max-width:68ch}
-.gaps a{color:var(--ink2)}
-.ask form{display:flex;gap:8px;max-width:620px}
-.ask input[type=text]{padding-left:12px}
-.sugg{display:flex;flex-wrap:wrap;gap:4px 16px;margin-top:10px;font-size:14px}
-.sugg button{background:none;border:0;padding:2px 0;color:var(--accent);cursor:pointer;text-align:left}
-.sugg button:hover{text-decoration:underline;text-underline-offset:3px}
-.answer{margin-top:16px;max-width:68ch;font-size:15.5px;line-height:1.6}
-.answer:empty{display:none}
-.answer .q{color:var(--muted);font-size:13.5px;margin-bottom:4px}
-.answer p+p{margin-top:6px}
-.answer .nf{color:var(--ink2)}
-
 dl.facts{margin:0}
-.fr{display:grid;grid-template-columns:190px minmax(0,1fr) auto;gap:2px 20px;padding:9px 0;border-top:1px solid var(--line2);transition:background-color .6s}
-.fr dt{color:var(--muted);font-size:14px;padding-top:1px}
+.fr,.it{display:grid;grid-template-columns:190px minmax(0,1fr) auto;gap:2px 20px;padding:8px 0;border-top:1px solid var(--line2);font-size:14.5px;transition:background-color .6s}
+.fr dt,.it .k{color:var(--muted);font-size:13.5px;padding-top:1px}
+.it .k.num{color:var(--ink2)}
 .fr dd{margin:0;min-width:0;overflow-wrap:anywhere}
-.fr dd.sc{text-align:right}
-.grp{font-size:15px;margin:22px 0 6px}
-.grp:first-child{margin-top:0}
+.it .v{min-width:0;overflow-wrap:anywhere}
+.fr dd.sc,.it .sc{text-align:right}
+.grp{font-size:14.5px;margin:18px 0 4px}
 .note{display:block;color:var(--muted);font-size:13.5px;margin-top:2px}
-.sub2{color:var(--muted);font-size:13.5px}
+.items{list-style:none;margin:0;padding:0}
+.t{font-weight:500}
 button.src{background:none;border:0;padding:1px 0;font-size:12.5px;color:var(--muted);cursor:pointer;white-space:nowrap;text-align:right}
 button.src:hover{color:var(--accent);text-decoration:underline;text-underline-offset:3px}
+button.vbtn{background:none;border:0;padding:0;text-align:left;cursor:pointer;color:inherit;font:inherit;text-decoration:underline;text-decoration-color:var(--line);text-underline-offset:4px;text-decoration-thickness:1px}
+button.vbtn:hover{text-decoration-color:var(--accent)}
 .flash{background:var(--hl)!important;transition:none}
-
-.tablewrap{max-width:100%}
+.matchp{max-width:68ch;font-size:14.5px}
+.matchp p+p{margin-top:8px}
+.errs{margin-top:20px;color:var(--muted);font-size:13.5px}
 table{border-collapse:collapse;width:100%}
 .tcap{display:flex;flex-wrap:wrap;gap:2px 12px;align-items:baseline;margin:0 0 6px}
 .tcap h3{font-size:15px}
 .tcap p{color:var(--muted);font-size:13.5px}
-.fin{width:auto;min-width:min(100%,520px)}
-.fin td,.fin thead th:not(:first-child){min-width:132px}
-.fin th[scope=row]{min-width:180px}
-.fin th,.fin td{padding:8px 0 8px 20px;text-align:right;vertical-align:baseline;border-top:1px solid var(--line2)}
+.fin{width:auto;min-width:min(100%,480px)}
+.fin td,.fin thead th:not(:first-child){min-width:120px}
+.fin th[scope=row]{min-width:170px}
+.fin th,.fin td{padding:7px 0 7px 18px;text-align:right;vertical-align:baseline;border-top:1px solid var(--line2);font-size:14.5px}
 .fin th[scope=row]{padding-left:0;text-align:left;font-weight:400;color:var(--muted);font-size:14px}
-.fin thead th{border-top:0;border-bottom:1px solid var(--line);font-weight:600;font-size:14px;padding-top:0}
+.fin thead th{border-top:0;border-bottom:1px solid var(--line);font-weight:600;padding-top:0}
 .fin thead th:first-child{padding-left:0}
 .fin .per{display:block;font-weight:400;font-size:12px;color:var(--muted)}
-.fin tr.brk th,.fin tr.brk td{padding-top:20px}
+.fin tr.brk th,.fin tr.brk td{padding-top:18px}
 .fin tfoot td,.fin tfoot th{border-top:1px solid var(--line);padding-top:8px}
 .nr{color:var(--muted);font-size:13px}
-.fin+.tcap,.tablewrap+.tablewrap{margin-top:28px}
-.facts.after{margin-top:20px}
-.yl{display:flex;flex-wrap:wrap;gap:2px 12px}
-
-.items{list-style:none;margin:0;padding:0}
-.it{display:grid;grid-template-columns:190px minmax(0,1fr) auto;gap:2px 20px;padding:9px 0;border-top:1px solid var(--line2);transition:background-color .6s}
-.it .k{color:var(--muted);font-size:14px}
-.it .k.num{color:var(--ink2)}
-.it .v{min-width:0;overflow-wrap:anywhere}
-.it .sc{text-align:right}
-.t{font-weight:500}
-.chg .arrow{color:var(--muted)}
-
-.matchp{max-width:68ch}
-.matchp p+p{margin-top:8px}
-.srct.srcs{margin-top:18px;max-width:640px}
-
-.errs{margin-top:28px;color:var(--muted);font-size:13.5px}
+.tablewrap+.tablewrap{margin-top:24px}
+.facts.after{margin-top:18px}
+.srct{max-width:760px;margin:6px 0 14px;font-size:14px}
+.srct th,.srct td{text-align:left;padding:6px 16px 6px 0;border-top:1px solid var(--line2);vertical-align:top}
+.srct thead th{border-top:0;font-weight:600;color:var(--ink)}
+.srct td.r,.srct th.r{text-align:right;padding-right:0}
+.srcs{margin-top:16px;max-width:620px}
 
 /* compare */
-.cmpv h1{font-size:24px;letter-spacing:-.01em;margin-bottom:18px}
+.cmpv h1{font-size:30px;letter-spacing:-.02em;margin-top:14px}
+.cmpv .lead{margin-bottom:24px}
 .cmp{table-layout:fixed}
-.cmp th,.cmp td{padding:9px 16px 9px 0;text-align:left;vertical-align:top;border-top:1px solid var(--line2);overflow-wrap:anywhere}
+.cmp .c0{width:200px}
+.cmp th,.cmp td{padding:10px 18px 10px 0;text-align:left;vertical-align:top;border-top:1px solid var(--line2);overflow-wrap:anywhere;font-size:15px}
 .cmp thead th{border-top:0;padding-bottom:12px;font-weight:600;vertical-align:bottom}
-.cmp thead th a{color:var(--ink);text-decoration:none;font-size:16px;display:block;line-height:1.3}
-.cmp thead th a:hover{color:var(--accent)}
+.cmp thead th a{color:var(--ink);text-decoration:none;font-size:17px;display:block;line-height:1.3}
+.cmp thead th a:hover{color:var(--accent);text-decoration:underline}
 .cmp thead .sub2{display:flex;gap:6px 10px;align-items:center;font-weight:400}
-.cmp .num{white-space:nowrap;overflow-wrap:normal}
+.cmp .num{white-space:nowrap}
 .cmp thead .rm{background:none;border:0;padding:2px;color:var(--muted);cursor:pointer;line-height:0}
 .cmp thead .rm:hover{color:var(--fail)}
-.cmp th[scope=row]{font-weight:400;color:var(--muted);font-size:14px;width:190px}
-.cmp tr.g th{border-top:0;padding-top:26px;color:var(--ink);font-weight:600;font-size:15px}
+.cmp th[scope=row]{font-weight:400;color:var(--muted);font-size:14px}
+.cmp tr.g th{border-top:0;padding-top:28px;color:var(--ink);font-weight:600;font-size:16px}
 .cmp .yr{display:block;color:var(--muted);font-size:12.5px}
-.cmp .cov{display:block;margin:5px 0 4px}
 
 /* popover */
-.pop{position:absolute;z-index:50;width:420px;max-width:calc(100vw - 24px);max-height:min(70vh,560px);overflow:auto;
-  background:var(--raise);border:1px solid var(--edge);border-radius:8px;padding:14px 16px 16px;font-size:14px;
+.pop{position:absolute;z-index:50;width:440px;max-width:calc(100vw - 24px);max-height:min(72vh,600px);overflow:auto;
+  background:var(--raise);border:1px solid var(--edge);border-radius:10px;padding:14px 16px 16px;font-size:14px;
   opacity:0;transform:translateY(-3px);transition:opacity .12s ease-out,transform .12s ease-out}
 .pop.open{opacity:1;transform:none}
 .pop:focus{outline:none}
 .pop-h{display:flex;align-items:flex-start;gap:12px;margin-bottom:6px}
-.pop-h strong{flex:1;font-weight:600;font-size:14.5px}
+.pop-h strong{flex:1;font-weight:600;font-size:15px}
 .pop .x{background:none;border:0;padding:2px;margin:-2px -4px 0 0;color:var(--muted);cursor:pointer;line-height:0}
 .pop .x:hover{color:var(--ink)}
 .pop-v{color:var(--ink);overflow-wrap:anywhere}
-.pop-e{margin-top:12px;padding-top:12px;border-top:1px solid var(--line2)}
+.pop-c{padding-top:12px;margin-top:12px;border-top:1px solid var(--line)}
+.pop-c:first-of-type{border-top:0;margin-top:0;padding-top:4px}
+.pop-cl{font-weight:600;margin-bottom:2px}
+.pop-e{margin-top:10px;padding-top:10px;border-top:1px solid var(--line2)}
 .pop-e a.u{display:inline-flex;gap:5px;align-items:baseline;word-break:break-all}
 .pop-e a.u .ic{width:13px;height:13px;flex:none;align-self:center}
 .pop-m{color:var(--muted);font-size:13px;margin-top:3px}
+.pop-match{margin-top:10px}
 .pop-ql{color:var(--muted);font-size:13px;margin-top:10px}
 pre.q{margin:4px 0 0;padding:8px 10px;background:var(--well);border-radius:4px;font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;white-space:pre-wrap;overflow-wrap:anywhere;max-height:200px;overflow:auto;color:var(--ink)}
 pre.q mark{background:var(--hl);color:var(--ink);border-radius:2px}
-.pop-j{display:inline-block;margin-top:12px;font-size:13.5px}
 .scrim{position:fixed;inset:0;z-index:40;background:var(--scrim)}
-.pop.sheet{position:fixed;left:0;right:0;bottom:0;top:auto!important;width:auto;max-width:none;max-height:78vh;border-radius:12px 12px 0 0;border-bottom:0;padding:16px 16px 24px;transform:translateY(8px)}
+.pop.sheet{position:fixed;left:0;right:0;bottom:0;top:auto!important;width:auto;max-width:none;max-height:80vh;border-radius:12px 12px 0 0;border-bottom:0;padding:16px 16px 24px;transform:translateY(8px)}
 .pop.sheet.open{transform:none}
 
 /* footer */
-.foot{border-top:1px solid var(--line);padding:28px 28px 48px;color:var(--ink2);font-size:13.5px}
-.foot h2{font-size:15px;margin-bottom:10px;color:var(--ink)}
-.foot p{max-width:90ch;margin-top:8px}
-.srct{max-width:900px;margin-bottom:14px}
-.srct th,.srct td{text-align:left;padding:6px 16px 6px 0;border-top:1px solid var(--line2);vertical-align:top}
-.srct thead th{border-top:0;font-weight:600;color:var(--ink)}
-.srct td.r,.srct th.r{text-align:right;padding-right:0}
+.foot{border-top:1px solid var(--line);margin-top:24px;color:var(--ink2);font-size:14px}
+.footin{max-width:1120px;margin:0 auto;padding:32px 20px 120px}
+.foot h2{font-size:19px;color:var(--ink);margin-bottom:8px}
+.foot h3{font-size:15px;color:var(--ink);margin-top:24px}
+.foot p{max-width:80ch;margin-top:8px}
+.aboutlead{font-size:15px}
+.runinfo{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px 24px;margin:18px 0 0;max-width:900px}
+.runinfo dt{color:var(--muted);font-size:13px}
+.runinfo dd{margin:2px 0 0;font-weight:500;font-variant-numeric:tabular-nums}
 
 @media (max-width:900px){
-  .bar{padding:12px 16px;gap:6px 20px}
-  .run{gap:2px 16px;font-size:13px;order:3;width:100%}
-  .layout{grid-template-columns:minmax(0,1fr)}
-  .side{border-right:0}
-  .layout.detail .side{display:none}
-  .layout:not(.detail) .main{display:none}
-  .layout:not(.detail) .list{padding-bottom:60px}
-  .layout:not(.detail) .tray{position:fixed;left:0;right:0;bottom:0;z-index:20}
-  .back{display:inline-flex}
-  .main{padding:16px 16px 72px}
-  .foot{padding:24px 16px 40px}
+  .crow{grid-template-columns:minmax(0,1fr) auto;gap:8px 12px}
+  .cl{grid-column:1}
+  .addc{grid-column:2;grid-row:1;align-self:start}
+  .cr{grid-column:1;grid-row:2;text-align:left;display:flex;gap:8px;align-items:baseline}
+  .cr .num{display:inline}
+  .cy{display:inline}
+  .tags{grid-column:1/-1;grid-row:3}
+  .tags:empty{display:none}
+  .sort{margin-left:0}
 }
 @media (max-width:640px){
-  .head{grid-template-columns:minmax(0,1fr)}
-  .head .btn{grid-column:1;grid-row:auto;justify-self:start;margin-top:8px}
-  .head h1{font-size:23px}
-  .stats{grid-template-columns:1fr 1fr;gap:14px 16px}
-  .stat-v{font-size:18px}
-  .toc{flex-wrap:nowrap;overflow-x:auto;scrollbar-width:none;gap:16px;font-size:13.5px;margin-left:-16px;margin-right:-16px;padding-left:16px;padding-right:16px}
-  .toc::-webkit-scrollbar{display:none}
-  .toc a{white-space:nowrap}
-  .fr,.it{grid-template-columns:minmax(0,1fr);gap:1px}
-  .fr dt,.it .k{font-size:13px}
-  .fr dd.sc,.it .sc{text-align:left}
+  .bar{padding:12px 16px;gap:8px 16px}
+  .barnav{gap:4px 14px;font-size:13.5px;margin-left:0;width:100%}
+  .main{padding:0 16px 96px}
+  .hero{padding-top:28px}
+  .hero h1{font-size:25px}
+  .lead{font-size:15.5px}
+  .bigsearch input{font-size:16px;height:50px}
+  .bigsearch .ic{top:15px}
+  .controls{gap:10px 16px}
+  .count{margin-top:24px}
+  .cohead h1{font-size:26px}
+  .cosub{font-size:15px}
+  .sumtext{font-size:16px}
+  .card{padding:16px 16px 14px}
+  .card h2{font-size:18px}
+  .ans{font-size:16px}
+  .dr,.fr,.it{grid-template-columns:minmax(0,1fr);gap:1px}
+  .dr dt,.fr dt,.it .k{font-size:13px}
+  .dr .ds,.fr dd.sc,.it .sc{text-align:left}
   button.src{text-align:left;white-space:normal}
-  .lede{font-size:16px}
+  .charts{grid-template-columns:1fr}
+  .askrow .btn{padding:8px 12px}
   .fin{width:100%;min-width:0}
   .fin th,.fin td,.fin thead th:not(:first-child),.fin th[scope=row]{min-width:0}
   .fin thead tr,.fin tbody tr,.fin tfoot tr{display:grid;grid-template-columns:repeat(var(--n),minmax(0,1fr));column-gap:12px}
@@ -577,28 +580,31 @@ pre.q mark{background:var(--hl);color:var(--ink);border-radius:2px}
   .fin tbody tr{border-top:1px solid var(--line2);padding-top:7px}
   .fin th[scope=row]{grid-column:1/-1;padding:0 0 1px;font-size:13px;text-align:left}
   .fin tr.brk th,.fin tr.brk td{padding-top:0}
-  .fin tr.brk{margin-top:12px}
   .fin tfoot tr{border-top:1px solid var(--line);padding-top:6px}
   .fin.many td::before{content:attr(data-y);display:block;font-size:11.5px;color:var(--muted)}
+  .cmpv h1{font-size:24px}
   .cmp,.cmp thead,.cmp tbody{display:block}
-  .cmp tr{display:grid;grid-template-columns:repeat(var(--n),minmax(0,1fr));column-gap:12px;border-top:1px solid var(--line2);padding:7px 0}
+  .cmp colgroup{display:none}
   .cmp thead{position:sticky;top:0;z-index:2;background:var(--bg)}
+  .cmp tr{display:grid;grid-template-columns:repeat(var(--n),minmax(0,1fr));column-gap:12px;border-top:1px solid var(--line2);padding:7px 0}
   .cmp thead tr{border-top:0;border-bottom:1px solid var(--line)}
   .cmp thead th:first-child{display:none}
   .cmp th,.cmp td{display:block;border:0;padding:0 0 2px;font-size:14px}
   .cmp thead th a{font-size:14px}
   .cmp thead .sub2{font-size:12px}
-  .cmp th[scope=row]{grid-column:1/-1;width:auto;font-size:12.5px}
+  .cmp th[scope=row]{grid-column:1/-1;font-size:12.5px}
   .cmp tr.g{border-top:0;padding-top:18px}
   .cmp tr.g th{padding-top:0;grid-column:1/-1}
-  .run div:nth-child(n+2){font-size:12.5px}
-  .bar-link{font-size:13px}
+  .cbin{padding:10px 16px;font-size:14px;flex-wrap:nowrap}
+  .cbin .msg{min-width:0}
+  .cnames{display:none}
+  .ccount{display:inline}
+  .footin{padding:28px 16px 120px}
 }
 @media (prefers-reduced-motion:reduce){
-  html{scroll-behavior:auto}
-  *,*::before,*::after{transition:none!important;animation:none!important}
+  *,*::before,*::after{transition:none!important;animation:none!important;scroll-behavior:auto!important}
 }
-@media print{.side,.back,.skip,.toc,.ask,.pop,.scrim{display:none!important}.layout{display:block}.main{padding:0}}
+@media print{.bar,.back,.skip,.ask,.pop,.scrim,.cmpbar,.addc{display:none!important}}
 """
 
 JS = r"""
@@ -654,8 +660,10 @@ var MON=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'
 var SVG='<svg class="ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">';
 var IC={x:SVG+'<path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>',back:SVG+'<path d="m15 18-6-6 6-6"/></svg>',
  ext:SVG+'<path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>',
- plus:SVG+'<path d="M5 12h14"/><path d="M12 5v14"/></svg>',check:SVG+'<path d="M20 6 9 17l-5-5"/></svg>'};
-var PAGE=200, shown=PAGE, filtered=[], compare=[], current=null;
+ plus:SVG+'<path d="M5 12h14"/><path d="M12 5v14"/></svg>',check:SVG+'<path d="M20 6 9 17l-5-5"/></svg>',
+ search:SVG+'<path d="m21 21-4.3-4.3"/><circle cx="11" cy="11" r="8"/></svg>',
+ alert:SVG+'<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>'};
+var PAGE=60, shown=PAGE, filtered=[], compare=[], current=null;
 
 /* ----- formatting ----- */
 function esc(s){return String(s==null?'':s).replace(/[&<>"']/g,function(ch){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch];});}
@@ -762,90 +770,138 @@ function srcBtn(co,cl){
 }
 function vbtn(co,cl,inner){return '<button type="button" class="vbtn" data-o="'+co.o+'" data-c="'+esc(cl.i)+'" aria-haspopup="dialog">'+inner+'</button>';}
 
-/* ----- list ----- */
-function initControls(){
-  var sec=$('f-sec'),stt=$('f-state');
-  sec.innerHTML='<option value="">Any section</option>'+SECTIONS.map(function(s){return '<option value="'+s+'">'+SEC_LABEL[s]+'</option>';}).join('');
-  stt.innerHTML='<option value="">Any state</option>'+STATES.map(function(s){return '<option value="'+s+'">'+STATE_LABEL[s]+'</option>';}).join('');
-  $('legend').innerHTML='<span>Marks, in section order:</span>'+STATES.map(function(s){return '<span>'+mark(s)+STATE_LABEL[s]+'</span>';}).join('');
-  ['q','f-web','f-jobs','f-chg','f-sec','f-state','sort'].forEach(function(id){$(id).addEventListener(id==='q'?'input':'change',function(){shown=PAGE;applyFilters();});});
-  $('ftoggle').addEventListener('click',function(){var open=this.getAttribute('aria-expanded')!=='true';this.setAttribute('aria-expanded',String(open));$('filters').hidden=!open;});
-  $('more').addEventListener('click',function(){shown+=PAGE;drawList();});
-  $('tray-clear').addEventListener('click',function(){compare=[];drawList();drawTray();refreshCmpBtn();});
+/* ----- plain language ----- */
+var IND={'00.000':'','01.130':'Vegetable farming','03.110':'Sea fishing','16.110':'Sawmill','33.120':'Machinery repair','35.122':'Wind power','35.210':'Gas production',
+ '41.000':'Building construction','43.120':'Groundwork and site preparation','43.210':'Electrical installation','43.221':'Plumbing','43.222':'Heating and ventilation installation',
+ '43.320':'Carpentry','43.340':'Painting and glazing','43.910':'Masonry','43.990':'Specialised construction',
+ '46.180':'Sales agent','46.710':'Vehicle wholesale','46.720':'Vehicle parts wholesale','47.110':'Grocery store','47.300':'Fuel station','47.540':'Electrical appliance shop',
+ '47.810':'Car dealer','49.330':'Taxi and passenger transport','49.410':'Road freight','53.200':'Courier and delivery','55.101':'Hotel','56.101':'Restaurant','56.110':'Restaurant',
+ '62.010':'Software development','62.100':'Software development','62.020':'IT consulting','62.200':'IT consulting and operations','64.202':'Holding company','64.323':'Investment company',
+ '68.100':'Buying and selling own property','68.110':'Buying and selling own property','68.120':'Property development','68.200':'Property rental','68.209':'Property rental',
+ '69.100':'Legal services','69.201':'Accounting','70.100':'Head office','70.200':'Management consulting','71.112':'Architecture','71.129':'Technical consulting',
+ '73.110':'Advertising agency','74.120':'Graphic design','75.000':'Veterinary services','77.320':'Construction machinery rental','79.121':'Excursions and events',
+ '79.122':'Tour operator','81.100':'Facility management','81.210':'Cleaning','81.230':'Cleaning and snow clearing','85.201':'Primary school','85.531':'Driving school',
+ '85.597':'Education and training','86.210':'General practitioner (doctor)','90.390':'Arts and entertainment services','94.991':'Charitable foundation',
+ '95.310':'Car repair and servicing','97.001':'Housing cooperative or co-owned building'};
+var DIV={'01':'Farming','02':'Forestry','03':'Fishing and aquaculture','06':'Oil and gas','09':'Oil and gas services','10':'Food production','11':'Drinks production',
+ '16':'Wood products','18':'Printing','20':'Chemicals','22':'Rubber and plastics','23':'Building materials','25':'Metal products','26':'Electronics','27':'Electrical equipment',
+ '28':'Machinery','29':'Vehicles','30':'Ships and transport equipment','31':'Furniture','32':'Manufacturing','33':'Machinery repair and installation','35':'Energy',
+ '36':'Water supply','37':'Sewage','38':'Waste and recycling','41':'Building construction','42':'Civil engineering','43':'Construction trades','45':'Vehicle trade and repair',
+ '46':'Wholesale','47':'Retail','49':'Land transport','50':'Shipping','51':'Aviation','52':'Warehousing and logistics','53':'Post and courier','55':'Accommodation',
+ '56':'Restaurants and catering','58':'Publishing','59':'Film and music','60':'Broadcasting','61':'Telecoms','62':'Software and IT services','63':'Information services',
+ '64':'Financial services','65':'Insurance','66':'Financial support services','68':'Real estate','69':'Legal and accounting','70':'Management consulting',
+ '71':'Architecture and engineering','72':'Research','73':'Advertising and market research','74':'Design and other professional services','75':'Veterinary services',
+ '77':'Rental and leasing','78':'Recruitment and staffing','79':'Travel','80':'Security','81':'Building services and cleaning','82':'Office and business support',
+ '84':'Public administration','85':'Education','86':'Health care','87':'Residential care','88':'Social services','90':'Arts and entertainment','91':'Libraries and museums',
+ '92':'Gambling','93':'Sports and recreation','94':'Associations and foundations','95':'Repair services','96':'Personal services','97':'Housing associations'};
+var LF={AS:'Private limited company',ASA:'Public limited company',ENK:'Sole proprietorship',ANS:'General partnership',DA:'Partnership with shared liability',
+ NUF:'Norwegian branch of a foreign company',SA:'Cooperative',BA:'Company with limited liability',STI:'Foundation',FLI:'Association',ESEK:'Co-owned residential building',
+ BRL:'Housing cooperative',KS:'Limited partnership',IKS:'Inter-municipal company',SAM:'Co-ownership',ORGL:'Organisation',KF:'Municipal enterprise',PK:'Pension fund',
+ SPA:'Savings bank',GFS:'Mutual insurance company',KOMM:'Municipality',STAT:'State body'};
+var SIG={'styrets leder alene':'the board chair alone','daglig leder alene':'the general manager alone','to styremedlemmer i fellesskap':'any two board members together',
+ 'to av styrets medlemmer i fellesskap':'any two board members together','styrets medlemmer hver for seg':'each board member alone',
+ 'styrets leder og ett styremedlem i fellesskap':'the board chair together with one board member','daglig leder og styrets leder i fellesskap':'the general manager and the board chair together',
+ 'daglig leder eller styrets leder hver for seg':'the general manager or the board chair, each alone','styret i fellesskap':'the full board together',
+ 'deltakerene hver for seg':'each partner alone','deltakerne hver for seg':'each partner alone','innehaver':'the owner','styrets leder og nestleder i fellesskap':'the board chair and deputy chair together'};
+var KEEPU={AS:1,ASA:1,ANS:1,DA:1,SA:1,BA:1,NUF:1,ENK:1,KS:1,IKS:1,STI:1,LTD:1,AB:1,BRL:1,ESEK:1,II:1,III:1,IT:1,TV:1};
+function dn(n){n=String(n||'');if(!n||n!==n.toUpperCase())return n;var first=true;
+  return n.split(/([\s.\-\/&]+)/).map(function(w){if(!w||/^[\s.\-\/&]+$/.test(w))return w;var u=w.toUpperCase(),out;
+    if(KEEPU[u]||/\d/.test(w)||(first&&w.length<=3))out=u;else out=u.charAt(0)+u.slice(1).toLowerCase();first=false;return out;}).join('');}
+function what(co){var c=one(co,'industry');if(!c||!c.v)return '';var code=String(c.v.code||'');
+  if(Object.prototype.hasOwnProperty.call(IND,code))return IND[code];return DIV[code.slice(0,2)]||cap(String(c.v.name||'').toLowerCase());}
+function signText(v){var parts=String(v||'').split(/\.\s*/).filter(Boolean),out=[],ok=true;
+  parts.forEach(function(p){var t=SIG[p.trim().toLowerCase()];if(t)out.push(t);else ok=false;});
+  return ok&&out.length?cap(out.join(', or ')):'';}
+function series(co,f){var xs=accounts(co).filter(function(c){return c.f===f&&c.v.amount!=null;});xs.sort(function(a,b){return String(a.v.year).localeCompare(String(b.v.year));});return xs;}
+function short(x){var a=Math.abs(Number(x)),s;if(a>=1e9)s=(a/1e9).toFixed(1).replace(/\.0$/,'')+'B';else if(a>=1e6)s=(a/1e6).toFixed(1).replace(/\.0$/,'')+'M';
+  else if(a>=1e3)s=Math.round(a/1e3)+'k';else s=String(Math.round(a));return (x<0?'−':'')+s;}
+function words(x){var a=Math.abs(Number(x));if(a>=1e9)return (a/1e9).toFixed(1).replace(/\.0$/,'')+' billion';if(a>=1e6)return (a/1e6).toFixed(1).replace(/\.0$/,'')+' million';
+  if(a>=1e4)return Math.round(a/1e3)+' thousand';return nfmt(a);}
+var GEN=Date.parse(META.generated_at||'')||Date.now();
+function daysAgo(d){var t=Date.parse(d);return isFinite(t)?(GEN-t)/864e5:1e9;}
+function regChanges(co){return av(co,'registry_change').slice().sort(function(a,b){return (b.d||'').localeCompare(a.d||'');});}
+function recent(co){var r=regChanges(co)[0];return co.ch.length>0||!!(r&&r.d&&daysAgo(r.d)<=92);}
+function statusWarn(co){var s=one(co,'legal_status');if(!s||!s.v||typeof s.v!=='object')return '';var v=s.v;
+  return v.konkurs?'Bankrupt':v.underTvangsavviklingEllerTvangsopplosning?'Being forcibly dissolved':v.underAvvikling?'Being wound up':'';}
+function tags(co){var t=[],w=statusWarn(co);if(w)t.push('<span class="tag warn">'+w+'</span>');if(co.fl.web)t.push('<span class="tag">Website</span>');
+  if(av(co,'job_ad').length)t.push('<span class="tag">Hiring</span>');if(recent(co))t.push('<span class="tag">Changed recently</span>');return t.join('');}
+function empText(v){if(typeof v==='number')return nfmt(v);var s=String(v||'');return /fewer than 5/i.test(s)?'Fewer than 5':cap(s.replace(/\s*\(.*\)$/,''));}
+function srcLink(co,cls){cls=(cls||[]).filter(function(c){return c&&c.e&&c.e.length;});if(!cls.length)return '';
+  return '<button type="button" class="srcl" data-o="'+co.o+'" data-c="'+cls.map(function(c){return esc(c.i);}).join(',')+'" aria-haspopup="dialog">Source</button>';}
+var whyN=0;
+function why(n){if(!n)return '';var id='why'+(++whyN);return ' <button type="button" class="whyb" aria-expanded="false" aria-controls="'+id+'">Why?</button><span class="whyt" id="'+id+'" hidden>'+esc(cap(n))+'</span>';}
+
+/* ----- home ----- */
+var UI={q:'',web:false,hire:false,chg:false,sort:'name'},homeY=0;
+function chk(id,text,on){return '<label class="ck"><input type="checkbox" id="'+id+'"'+(on?' checked':'')+'> '+text+'</label>';}
+function home(){
+  return '<section class="hero" aria-labelledby="h-home"><h1 id="h-home">Profiles of '+plural(CO.length,'Norwegian company','Norwegian companies')+', built from public sources.</h1>'+
+    '<p class="lead">Every fact links to where it came from. Open a company to see what it does, who runs it, how it is doing and what changed.</p>'+
+    '<div class="bigsearch" role="search">'+IC.search+'<label class="vh" for="q">Search companies</label><input id="q" type="search" placeholder="Search name, town or industry" autocomplete="off" spellcheck="false" value="'+esc(UI.q)+'"></div>'+
+    '<div class="controls"><div class="cks" role="group" aria-label="Show only"><span class="muted">Show only</span>'+
+      chk('f-web','With a website',UI.web)+chk('f-hire','Hiring',UI.hire)+chk('f-chg','Changed in the last 3 months',UI.chg)+'</div>'+
+    '<label class="sort"><span class="muted">Sort by</span><select id="sort">'+[['name','Name'],['rev','Revenue, highest first'],['chg','Latest change first']].map(function(o){
+      return '<option value="'+o[0]+'"'+(UI.sort===o[0]?' selected':'')+'>'+o[1]+'</option>';}).join('')+'</select></label></div></section>'+
+    '<p class="count" id="count" aria-live="polite"></p><ul class="clist" id="list"></ul>'+
+    '<button type="button" class="btn quiet more" id="more" hidden>Show more companies</button>';
 }
+function bindHome(){
+  $('q').addEventListener('input',function(){UI.q=this.value;shown=PAGE;applyFilters();});
+  [['f-web','web'],['f-hire','hire'],['f-chg','chg']].forEach(function(p){$(p[0]).addEventListener('change',function(){UI[p[1]]=this.checked;shown=PAGE;applyFilters();});});
+  $('sort').addEventListener('change',function(){UI.sort=this.value;applyFilters();});
+  $('more').addEventListener('click',function(){shown+=PAGE;drawList();});
+}
+function hay(c){if(!c._q){var ind=one(c,'industry');c._q=[c.n,dn(c.n),muni(c),what(c),ind&&ind.v?ind.v.name:'',c.o].join(' ').toLowerCase();}return c._q;}
 function applyFilters(){
-  var q=$('q').value.trim().toLowerCase(),qd=q.replace(/\s/g,'');
-  var w=$('f-web').checked,j=$('f-jobs').checked,ch=$('f-chg').checked,sec=$('f-sec').value,sv=$('f-state').value;
+  var q=UI.q.trim().toLowerCase(),qd=q.replace(/\s/g,'');
   filtered=CO.filter(function(c){
-    if(q){if(!c._q)c._q=(c.n+' '+muni(c)).toLowerCase();if(c._q.indexOf(q)<0&&(!/^\d+$/.test(qd)||c.o.indexOf(qd)<0))return false;}
-    if(w&&!c.fl.web)return false;if(j&&!c.fl.jobs)return false;if(ch&&!c.fl.chg)return false;
-    if(sv){if(sec){if(c.sec[sec]!==sv)return false;}else if(!SECTIONS.some(function(s){return c.sec[s]===sv;}))return false;}
-    else if(sec&&c.sec[sec]!=='available')return false;
-    return true;});
-  var s=$('sort').value;
+    if(q&&hay(c).indexOf(q)<0&&!(/^\d+$/.test(qd)&&c.o.indexOf(qd)>=0))return false;
+    if(UI.web&&!c.fl.web)return false;if(UI.hire&&!av(c,'job_ad').length)return false;if(UI.chg&&!recent(c))return false;return true;});
   filtered.sort(function(a,b){
-    if(s==='org')return a.o<b.o?-1:1;
-    if(s==='rev'){var x=a.rev==null?-Infinity:a.rev,y=b.rev==null?-Infinity:b.rev;if(x!==y)return y-x;}
-    if(s==='facts'&&a.nf!==b.nf)return b.nf-a.nf;
-    if(s==='chg'){var d=(b.ch.length+av(b,'registry_change').length)-(a.ch.length+av(a,'registry_change').length);if(d)return d;}
-    return a.n.localeCompare(b.n,'nb');});
+    if(UI.sort==='rev'){var x=a.rev==null?-Infinity:a.rev,y=b.rev==null?-Infinity:b.rev;if(x!==y)return y-x;}
+    if(UI.sort==='chg'){var p=(regChanges(a)[0]||{}).d||'',r=(regChanges(b)[0]||{}).d||'';if(p!==r)return r.localeCompare(p);}
+    return dn(a.n).localeCompare(dn(b.n),'nb');});
   drawList();
 }
+function addBtn(c){var on=compare.indexOf(c.o)>=0;
+  return '<button type="button" class="addc" data-add="'+c.o+'" aria-pressed="'+on+'" aria-label="'+(on?'Remove ':'Add ')+esc(dn(c.n))+(on?' from':' to')+' compare">'+(on?IC.check+'<span>Added</span>':IC.plus+'<span>Compare</span>')+'</button>';}
+function rowHtml(c){var r=latestFig(c,'revenue'),w=what(c),t=muni(c);
+  return '<li class="crow"><a class="cl" href="#org-'+c.o+'"><span class="cn">'+esc(dn(c.n||c.o))+'</span><span class="cw">'+esc([w,t].filter(Boolean).join(' · ')||('Org. no. '+orgf(c.o)))+'</span></a>'+
+    '<span class="cr">'+(r?'<span class="num">'+short(r.v.amount)+' NOK</span><span class="cy">revenue '+esc(r.v.year)+'</span>':'<span class="cy">No revenue filed</span>')+'</span>'+
+    '<span class="tags">'+tags(c)+'</span>'+addBtn(c)+'</li>';}
 function drawList(){
-  var html=filtered.slice(0,shown).map(function(c){
-    var on=compare.indexOf(c.o)>=0,cur=current===c.o;
-    return '<li class="row'+(cur?' cur':'')+'"><a class="row-link" href="#org-'+c.o+'"'+(cur?' aria-current="page"':'')+'><span class="nm">'+esc(c.n||c.o)+'</span>'+
-      '<span class="sub"><span class="num">'+orgf(c.o)+'</span><span>'+esc(muni(c))+'</span></span></a>'+coverage(c)+
-      '<label class="pick"><input type="checkbox" data-cmp="'+c.o+'"'+(on?' checked':'')+'><span class="vh">Compare '+esc(c.n)+'</span></label></li>';}).join('');
-  $('list').innerHTML=html||'<li class="empty">No companies match. Clear the search or filters.</li>';
-  $('count').textContent=filtered.length===CO.length?plural(CO.length,'company','companies'):filtered.length+' of '+CO.length;
+  var list=$('list');if(!list)return;
+  list.innerHTML=filtered.slice(0,shown).map(rowHtml).join('')||'<li class="empty">No companies match. Try a shorter search or clear the filters.</li>';
+  $('count').textContent=(filtered.length===CO.length?'Showing all '+CO.length+' companies.':'Showing '+filtered.length+' of '+CO.length+' companies.')+' Press Compare on two or three to see them side by side.';
   $('more').hidden=filtered.length<=shown;
 }
-function drawTray(){
-  $('tray').hidden=compare.length===0;
-  $('tray-text').textContent=compare.length+' of 3 selected'+(compare.length<2?', pick one more':'');
-  $('tray-go').href='#compare='+compare.join(',');
-  $('tray-go').setAttribute('aria-disabled',compare.length<2?'true':'false');
+function toggleCompare(o){
+  if(compare.indexOf(o)>=0)compare=compare.filter(function(x){return x!==o;});
+  else{if(compare.length>=3){flash('You can compare up to 3 companies. Remove one first.');return;}compare.push(o);}
+  refreshBtns(o);drawCmpBar();
 }
-function toggleCompare(o,on){
-  if(on){if(compare.indexOf(o)<0){if(compare.length>=3){$('tray-text').textContent='Compare holds up to 3 companies';return false;}compare.push(o);}}
-  else compare=compare.filter(function(x){return x!==o;});
-  drawTray();return true;
+function refreshBtns(o){[].forEach.call(document.querySelectorAll('[data-add="'+o+'"]'),function(b){var had=document.activeElement===b,tmp=document.createElement('div');
+  tmp.innerHTML=b.classList.contains('big')?cmpToggle(BY[o]):addBtn(BY[o]);var nb=tmp.firstChild;b.replaceWith(nb);if(had)nb.focus();});}
+function cmpToggle(co){var on=compare.indexOf(co.o)>=0;
+  return '<button type="button" class="btn quiet big" data-add="'+co.o+'" aria-pressed="'+on+'">'+(on?IC.check+'Added to compare':IC.plus+'Add to compare')+'</button>';}
+function flash(msg){var b=$('cmpbar');b.hidden=false;var p=b.querySelector('.msg');if(p){p.textContent=msg;setTimeout(drawCmpBar,2600);}}
+function drawCmpBar(){
+  var bar=$('cmpbar'),onCmp=/^#compare/.test(location.hash);
+  $('nav-cmp').hidden=!compare.length;$('nav-cmp').href='#compare='+compare.join(',');$('nav-cmp-n').textContent=compare.length;
+  bar.hidden=!compare.length||onCmp;if(bar.hidden)return;
+  var names=compare.map(function(o){return '<strong>'+esc(dn(BY[o].n))+'</strong>';}).join(', ');
+  bar.innerHTML='<div class="cbin"><p class="msg"><span class="cnames">Compare '+names+(compare.length<2?'. Add one or two more companies.':'')+'</span>'+
+    '<span class="ccount">'+(compare.length<2?'1 company picked. Add one or two more.':compare.length+' companies picked')+'</span></p>'+
+    (compare.length>=2?'<a class="btn" href="#compare='+compare.join(',')+'">Compare '+compare.length+' companies</a>':'')+
+    '<button type="button" class="tbtn" data-clear>Clear</button></div>';
 }
-function refreshCmpBtn(){var b=document.querySelector('[data-addcmp]');if(!b)return;var on=compare.indexOf(b.getAttribute('data-addcmp'))>=0;
-  b.setAttribute('aria-pressed',String(on));b.innerHTML=(on?IC.check+'In compare':IC.plus+'Compare');}
 
 /* ----- profile parts ----- */
-function stats(co){
-  function cell(lab,inner,sub,none){return '<div class="stat"><dt>'+lab+'</dt><dd>'+(none?'<span class="stat-v none">'+inner+'</span>':'<span class="stat-v">'+inner+'</span>')+(sub?'<span class="stat-s">'+sub+'</span>':'')+'</dd></div>';}
-  var out=[];
-  [['revenue','Revenue'],['annual_result','Annual result']].forEach(function(p){var c=latestFig(co,p[0]);
-    out.push(c?cell(p[1],vbtn(co,c,nfmt(c.v.amount)),esc(c.v.currency||'')+' '+esc(c.v.year)):cell(p[1],'Not available','',true));});
-  var e=any(co,'employees_registered')[0];
-  if(e&&e.a==='available'){var ev=typeof e.v==='string'&&/fewer than 5/i.test(e.v)?'Under 5':(typeof e.v==='number'?nfmt(e.v):esc(String(e.v)));out.push(cell('Employees',vbtn(co,e,ev),'Registry'));}
-  else out.push(cell('Employees',e&&e.a==='not_available'&&/no employees/i.test(e.n||'')?vbtn(co,e,'None registered'):'Not available',e&&e.a==='not_available'&&/no employees/i.test(e.n||'')?'Registry':'',!(e&&/no employees/i.test(e.n||''))));
-  var w=av(co,'registered_workplace'),wn=any(co,'registered_workplace')[0];
-  out.push(w.length?cell('Workplaces',vbtn(co,w[0],String(w.length)),'Registered'):(wn&&wn.a==='not_available'?cell('Workplaces',vbtn(co,wn,'None'),'Registered'):cell('Workplaces',STATE_LABEL[st(wn?wn.a:'failed')],'',true)));
-  var j=av(co,'job_ad'),jn=any(co,'job_ad')[0];
-  out.push(j.length?cell('Job ads',vbtn(co,j[0],String(j.length)),'NAV'):(jn&&jn.a==='not_available'?cell('Job ads',vbtn(co,jn,'None'),'NAV'):cell('Job ads',jn&&jn.a==='failed'?'Not checked':'Not available',jn&&jn.a==='failed'?'NAV feed failed':'',true)));
-  return '<dl class="stats">'+out.join('')+'</dl>';
-}
 function cites(co,ids,refs){
   var I=ix(co),b=(ids||[]).filter(function(id){return I[id];}).map(function(id){if(!refs.m[id])refs.m[id]=++refs.n;
     return '<button type="button" class="cite" data-o="'+co.o+'" data-c="'+esc(id)+'" aria-haspopup="dialog" aria-label="Source '+refs.m[id]+': '+esc(label(I[id].f))+'">'+refs.m[id]+'</button>';});
   return b.length?'<sup class="cites">'+b.join('<span aria-hidden="true">,</span>')+'</sup>':'';
 }
-function summary(co){
-  var refs={n:0,m:{}};
-  var parts=co.sum.t.map(function(s){return esc(s[0])+cites(co,s[1],refs);}),cut=parts.length>4?Math.ceil(parts.length/2):parts.length;
-  var body=parts.length?'<p>'+parts.slice(0,cut).join(' ')+'</p>'+(cut<parts.length?'<p>'+parts.slice(cut).join(' ')+'</p>':''):'<p class="muted">No summary was written for this company.</p>';
-  var gaps=co.sum.u.map(function(u){var m=/^([^:(]+?)\s*:\s*(not available|ambiguous|blocked|failed|not applicable)/i.exec(u);
-    if(!m)return esc(u);var sec=gapSection(m[1]);return (sec?'<a href="#s-'+sec+'" data-jump="s-'+sec+'">':'')+esc(m[1])+(sec?'</a>':'')+' <span>('+esc(m[2].toLowerCase())+')</span>';});
-  return '<section class="sec" id="s-summary" aria-labelledby="h-summary"><div class="sh"><h2 id="h-summary">Summary</h2></div><div class="lede">'+body+'</div>'+
-    (gaps.length?'<p class="gaps">Not found: '+gaps.join(', ')+'.</p>':'')+'</section>';
-}
-function gapSection(t){t=t.toLowerCase();if(/website|social/.test(t))return 'web_presence';if(/job|hiring|career/.test(t))return 'hiring';if(/workplace|sub-unit/.test(t))return 'locations';
-  if(/account|financ|revenue/.test(t))return 'financials';if(/general manager|board|role/.test(t))return 'leadership';if(/change|update/.test(t))return 'activity';if(/lei|employee/.test(t))return 'identity';return '';}
 function sectionHead(co,id,title){var s=co.sec[id],has=co.c.some(function(c){return c.s===id;});return '<div class="sh"><h2 id="h-'+id+'">'+title+'</h2>'+(s&&s!=='available'&&!has?stateLine(s):'')+'</div>';}
 function factRow(co,cl,lab){return '<div class="fr" id="'+fid(co,cl)+'"><dt>'+esc(lab||label(cl.f))+'</dt><dd>'+valueOf(cl)+'</dd><dd class="sc">'+srcBtn(co,cl)+'</dd></div>';}
 function identity(co){
@@ -859,7 +915,7 @@ function identity(co){
   if(rest.length)out+='<h3 class="grp">Other</h3><dl class="facts">'+rest.map(function(c){return factRow(co,c);}).join('')+'</dl>';
   return '<section class="sec" id="s-identity" aria-labelledby="h-identity">'+sectionHead(co,'identity','Identity')+out+'</section>';
 }
-function finTable(co,kind){
+function finTable(co,kind,noid){
   var rows=accounts(co,kind);if(!rows.length)return '';
   var audited=co.c.filter(function(c){return c.f==='accounts_audited'&&c.a==='available'&&c.v&&(c.v.account_type||'company')===kind;});
   var years=[],per={};rows.forEach(function(c){var y=String(c.v.year||'');if(years.indexOf(y)<0){years.push(y);per[y]=c.v;}});
@@ -867,7 +923,7 @@ function finTable(co,kind){
   var cur={};rows.forEach(function(c){if(c.v.currency)cur[c.v.currency]=1;});
   var fields=FIN.filter(function(f){return rows.some(function(c){return c.f===f;});});
   var calendar=years.every(function(y){var p=per[y];return !p.period_start||(/-01-01$/.test(p.period_start)&&/-12-31$/.test(p.period_end||''));});
-  function cellFor(c,y){return '<td data-y="'+esc(y)+'"'+(c?' id="'+fid(co,c)+'"':'')+'>'+(c?vbtn(co,c,nfmt(c.v.amount)):'<span class="nr">Not reported</span>')+'</td>';}
+  function cellFor(c,y){return '<td data-y="'+esc(y)+'"'+(c&&!noid?' id="'+fid(co,c)+'"':'')+'>'+(c?vbtn(co,c,nfmt(c.v.amount)):'<span class="nr">Not reported</span>')+'</td>';}
   var n=years.length;
   var h='<div class="tablewrap"><div class="tcap"><h3>'+(kind==='group'?'Group accounts':'Company accounts')+'</h3><p>'+esc(Object.keys(cur).join(', ')||'Currency not stated')+
     ', as filed with Regnskapsregisteret'+(calendar?', calendar years':'')+'</p></div>'+
@@ -876,7 +932,7 @@ function finTable(co,kind){
     fields.map(function(f){return '<tr'+(BREAK[f]?' class="brk"':'')+'><th scope="row">'+esc(label(f))+'</th>'+years.map(function(y){
       return cellFor(rows.filter(function(x){return x.f===f&&String(x.v.year)===y;})[0],y);}).join('')+'</tr>';}).join('')+
     (audited.length?'<tr><th scope="row">Audited</th>'+years.map(function(y){var c=audited.filter(function(x){return String(x.v.year)===y;})[0];
-      return '<td data-y="'+esc(y)+'"'+(c?' id="'+fid(co,c)+'"':'')+'>'+(c?vbtn(co,c,c.v.audited?'Yes':'No'):'<span class="nr">Not reported</span>')+'</td>';}).join('')+'</tr>':'')+
+      return '<td data-y="'+esc(y)+'"'+(c&&!noid?' id="'+fid(co,c)+'"':'')+'>'+(c?vbtn(co,c,c.v.audited?'Yes':'No'):'<span class="nr">Not reported</span>')+'</td>';}).join('')+'</tr>':'')+
     '</tbody><tfoot><tr><th scope="row">Source</th>'+years.map(function(y){var c=rows.filter(function(x){return String(x.v.year)===y;})[0];return '<td>'+(c?srcBtn(co,c):'')+'</td>';}).join('')+'</tr></tfoot></table></div>';
   return h;
 }
@@ -965,7 +1021,7 @@ function errs(co){
 }
 
 /* ----- ask ----- */
-var SUGG=['What does it do?','Who runs it?','How did it do last year?','Is it hiring?','What changed recently?','Is the website verified?'];
+var SUGG=['What does it do?','Who runs it?','How did it do last year?','Is it hiring?','What changed recently?'];
 var INTENTS=[
  ['what',/what does|what do|does it do|do they do|business|industry|purpose|sector|activity|hva gj\u00f8r|gj\u00f8r|driver med|bransje|form\u00e5l|virksomhet|n\u00e6ring/g],
  ['who',/who|runs?\b|ceo|manag|leader|leads?\b|board|chair|owner|director|daglig|leder|styre|eier|innehaver/g],
@@ -1018,59 +1074,250 @@ function answerFor(co,intent){
   return out;
 }
 function ask(co,q){
-  var el=$('answer');if(!el)return;q=String(q||'').trim();if(!q){el.innerHTML='';return;}
-  var its=intents(q),refs={n:0,m:{}},sents=[];
+  var el=$('answer');if(!el)return;q=String(q||'').trim();if(!q){el.innerHTML='';el.hidden=true;return;}
+  var its=intents(q),sents=[];
   its.forEach(function(it){sents=sents.concat(answerFor(co,it));});
-  var html='<p class="q">'+esc(q)+'</p>';
-  if(!its.length)html+='<p class="nf">This box answers from the facts in this profile only. Ask about what the company does, who runs it, its accounts, hiring, recent changes, where it is, its website, contacts, size or group.</p>';
-  else if(!sents.length)html+='<p class="nf">Not found in the checked sources.</p>';
-  else html+=sents.map(function(s){return '<p>'+esc(s[0])+cites(co,s[1].map(function(x){return x.i;}),refs)+'</p>';}).join('');
-  el.innerHTML=html;
+  var html;
+  if(!its.length)html='<p>I can only answer from the facts in this profile. Try asking what it does, who runs it, how it did last year, whether it is hiring, what changed, where it is, its website, contacts, size or owners.</p>';
+  else if(!sents.length)html='<p>Not found in the sources Kilde checked.</p>';
+  else html=sents.map(function(s){return '<p>'+prettyDates(esc(s[0]))+' '+srcLink(co,s[1])+'</p>';}).join('');
+  el.innerHTML='<p class="q">'+esc(q)+'</p>'+html;el.hidden=false;
 }
 function askPanel(co){
-  return '<section class="sec ask" id="s-ask" aria-labelledby="h-ask"><div class="sh"><h2 id="h-ask">Ask about this company</h2></div>'+
-    '<form id="askf" data-o="'+co.o+'"><label class="vh" for="askq">Question</label><input id="askq" type="text" autocomplete="off" placeholder="For example: who is on the board?"><button class="btn" type="submit">Ask</button></form>'+
-    '<div class="sugg">'+SUGG.map(function(s){return '<button type="button" data-ask="'+esc(s)+'">'+esc(s)+'</button>';}).join('')+'</div>'+
-    '<div class="answer" id="answer" aria-live="polite"></div></section>';
+  return '<section class="ask" aria-labelledby="h-ask"><h2 id="h-ask" class="vh">Ask about this company</h2>'+
+    '<form id="askf" data-o="'+co.o+'"><label class="vh" for="askq">Ask anything about this company</label><div class="askrow">'+
+    '<input id="askq" type="text" autocomplete="off" placeholder="Ask anything about this company"><button class="btn" type="submit">Ask</button></div></form>'+
+    '<p class="sugg"><span class="muted">For example</span>'+SUGG.map(function(s){return '<button type="button" data-ask="'+esc(s)+'">'+esc(s)+'</button>';}).join('')+'</p>'+
+    '<div class="answer" id="answer" aria-live="polite" hidden></div></section>';
 }
 
-/* ----- profile ----- */
-var TOC=[['summary','Summary'],['ask','Ask'],['identity','Identity'],['financials','Financials'],['leadership','Leadership'],['locations','Workplaces'],['web_presence','Web'],['hiring','Hiring'],['activity','Activity'],['changes','Changes'],['matching','Matching']];
-function profile(o){
-  var co=BY[o];if(!co)return '<a class="back" href="#">'+IC.back+'Companies</a><p class="muted">No company '+esc(o)+' in this run.</p>';
+/* ----- company page ----- */
+function prettyDates(s){return s.replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g,function(m){return dfmt(m);});}
+function intro(co){
+  var refs={n:0,m:{}},exact=esc(co.n),nice=esc(dn(co.n));
+  var parts=co.sum.t.map(function(s){return prettyDates(esc(s[0])).split(exact).join(nice)+cites(co,s[1],refs);});
+  if(!parts.length)return '';
+  var head=parts.slice(0,3).join(' '),rest=parts.slice(3).join(' ');
+  return '<section class="intro" aria-labelledby="h-intro"><h2 id="h-intro" class="vh">Summary</h2><div class="sumtext" id="sumtext"><p>'+head+
+    (rest?' <span id="sumrest" hidden>'+rest+'</span>':'')+'</p></div><p class="sumctl">'+
+    (rest?'<button type="button" class="tbtn" data-more aria-expanded="false" aria-controls="sumrest">Read the full summary</button>':'')+
+    '<button type="button" class="tbtn" data-showsrc aria-pressed="false" aria-controls="sumtext">Show sources</button></p></section>';
+}
+function card(id,q,ans,cls,co,det,extra){
+  return '<section class="card" id="q-'+id+'" aria-labelledby="hq-'+id+'"><div class="ch"><h2 id="hq-'+id+'">'+q+'</h2>'+srcLink(co,cls)+'</div>'+
+    '<div class="ans">'+ans+'</div>'+(det?'<dl class="det">'+det+'</dl>':'')+(extra||'')+'</section>';
+}
+function drow(co,lab,val,cls){return '<div class="dr"><dt>'+esc(lab)+'</dt><dd>'+val+'</dd><dd class="ds">'+srcLink(co,cls)+'</dd></div>';}
+function crow(co,cl,lab,val){if(!cl)return '';return drow(co,lab||label(cl.f),val!=null?val:(cl.a==='available'?render(cl.f,cl.v):'<span class="miss">Not found</span>'+why(cl.n)),[cl]);}
+function nm(v){return esc(dn(v&&v.name||''));}
+function P(s){return '<p>'+s+'</p>';}
+
+function cardWhat(co){
+  var ind=one(co,'industry'),pur=one(co,'statutory_purpose')||one(co,'registered_activity'),desc=one(co,'website_description'),
+      inc=one(co,'incorporation_date')||one(co,'registration_date'),emp=any(co,'employees_registered')[0],lf=one(co,'legal_form'),
+      st=one(co,'legal_status'),reg=one(co,'register_memberships'),fn=one(co,'former_names');
+  var w=what(co),t=muni(co),a=[],cls=[];
+  if(w){a.push(esc(w)+(t?' in '+esc(t):'')+'.');cls.push(ind);}
+  else a.push('The registry does not say what line of business it is in.');
+  var bits=[];if(inc){bits.push('founded in '+String(inc.v).slice(0,4));cls.push(inc);}
+  if(emp&&emp.a==='available'){bits.push(empText(emp.v).toLowerCase()+' employees');cls.push(emp);}
+  else if(emp&&/no employees/i.test(emp.n||'')){bits.push('no employees registered');cls.push(emp);}
+  if(bits.length)a.push(cap(bits.join(', '))+'.');
+  if(desc&&co.sum.t.some(function(x){return String(x[0]).indexOf(String(desc.v).slice(0,40))>=0;}))desc=null;
+  var ans=P(a.join(' '))+(desc?'<p class="quote">In its own words: “'+esc(desc.v)+'”</p>':'');
+  if(desc)cls.push(desc);
+  var det=(lf?crow(co,lf,'Company type',esc(LF[lf.v.code]||lf.v.name)+' <span class="sub2">'+esc(lf.v.name)+' ('+esc(lf.v.code)+')</span>'):'')+
+    (ind?crow(co,ind,'Registered industry',esc(ind.v.name)+' <span class="sub2 num">'+esc(ind.v.code)+'</span>'):'')+
+    (pur?crow(co,pur,'Registered purpose',esc(pur.v)+' <span class="sub2">(Norwegian)</span>'):'')+
+    (st?crow(co,st,'Status'):'')+
+    (reg&&reg.v?crow(co,reg,'Registered for VAT',reg.v.registrertIMvaregisteret?'Yes':'No'):'')+
+    (fn?crow(co,fn,'Former names'):'');
+  return card('what','What does it do?',ans,cls,co,det);
+}
+function roleName(c){var v=c.v||{};return esc(v.organisation_number?dn(v.name):v.name||'')+(v.organisation_number?' <span class="sub2 num">'+orgf(v.organisation_number)+'</span>':'');}
+function cardWho(co){
+  var ceo=one(co,'ceo'),ch=one(co,'board_chair'),own=av(co,'owner'),parts=av(co,'partner'),mem=av(co,'board_member'),dep=av(co,'board_deputy_member'),
+      aud=one(co,'auditor'),acc=one(co,'accountant'),sig=one(co,'signature_rule'),bm=av(co,'business_manager'),a=[],cls=[];
+  if(own.length){a.push(esc(own[0].v.name)+' owns and runs it as a sole proprietor.');cls.push(own[0]);}
+  if(ceo&&ch&&ceo.v.name===ch.v.name){a.push(esc(ceo.v.name)+' is both general manager and board chair.');cls.push(ceo,ch);}
+  else{if(ceo){a.push(esc(ceo.v.name)+' is the general manager.');cls.push(ceo);}if(ch){a.push(esc(ch.v.name)+' chairs the board.');cls.push(ch);}}
+  if(parts.length){a.push('Partners: '+parts.map(function(p){return esc(p.v.name);}).join(', ')+'.');cls=cls.concat(parts);}
+  if(bm.length){a.push(esc(dn(bm[0].v.name))+' manages the business.');cls.push(bm[0]);}
+  if(mem.length){a.push(mem.length===1?'The board has one more member.':'The board has '+mem.length+' more members.');}
+  if(!a.length)a.push('No general manager, board or owner is registered.');
+  var ceoMiss=any(co,'ceo')[0];
+  var people=co.c.filter(function(c){return c.s==='leadership'&&c.a==='available'&&c.f!=='signature_rule';});
+  people.sort(function(x,y){return ROLE_ORDER.indexOf(x.f)-ROLE_ORDER.indexOf(y.f);});
+  var det=people.map(function(c){return drow(co,c.f==='other_role'?cap(String(c.v.role||'Role').toLowerCase())+' (Norwegian)':label(c.f),roleName(c),[c]);}).join('')+
+    (!ceo&&ceoMiss&&ceoMiss.n?drow(co,'General manager','<span class="miss">None registered</span>'+why(ceoMiss.n),[ceoMiss]):'')+
+    (sig?drow(co,'Who can sign for it',(signText(sig.v)?esc(signText(sig.v))+' <span class="sub2">'+esc(sig.v)+'</span>':esc(sig.v)+' <span class="sub2">(Norwegian)</span>'),[sig]):'');
+  return card('who','Who runs it?',P(a.join(' ')),cls,co,det);
+}
+function barChart(title,cls){
+  if(!cls.length)return '';cls=cls.slice(-5);
+  var W=320,H=158,pt=22,pb=24,n=cls.length,vals=cls.map(function(c){return Number(c.v.amount);});
+  var max=Math.max(0,Math.max.apply(null,vals)),min=Math.min(0,Math.min.apply(null,vals)),span=(max-min)||1,ih=H-pt-pb,y0=pt+ih*(max/span);
+  var slot=W/n,bw=Math.min(46,slot*0.5);
+  var g=cls.map(function(c,i){var v=vals[i],x=slot*i+(slot-bw)/2,cx=x+bw/2,h=Math.abs(v)/span*ih,r=Math.min(4,h/2),d='';
+    if(h>=0.5){if(v>=0){var y=y0-h;d='M'+x+' '+y0+'V'+(y+r)+'Q'+x+' '+y+' '+(x+r)+' '+y+'H'+(x+bw-r)+'Q'+(x+bw)+' '+y+' '+(x+bw)+' '+(y+r)+'V'+y0+'Z';}
+      else{var yb=y0+h;d='M'+x+' '+y0+'V'+(yb-r)+'Q'+x+' '+yb+' '+(x+r)+' '+yb+'H'+(x+bw-r)+'Q'+(x+bw)+' '+yb+' '+(x+bw)+' '+(yb-r)+'V'+y0+'Z';}}
+    var ly=v>=0?y0-h-7:y0-7;
+    return '<g><title>'+esc(c.v.year)+': NOK '+nfmt(v)+'</title><rect x="'+(slot*i)+'" y="0" width="'+slot+'" height="'+H+'" fill="transparent"/>'+
+      (d?'<path class="'+(v<0?'bneg':'bpos')+'" d="'+d+'"/>':'')+'<text class="bl" x="'+cx+'" y="'+ly+'" text-anchor="middle">'+short(v)+'</text>'+
+      '<text class="bx" x="'+cx+'" y="'+(H-6)+'" text-anchor="middle">'+esc(c.v.year)+'</text></g>';}).join('');
+  return '<figure class="chart"><figcaption>'+title+' <span class="muted">NOK</span></figcaption><svg viewBox="0 0 '+W+' '+H+'" role="img" aria-label="'+esc(title)+' by year: '+
+    cls.map(function(c){return esc(c.v.year)+' NOK '+nfmt(c.v.amount);}).join('; ')+'"><line class="base" x1="0" x2="'+W+'" y1="'+y0+'" y2="'+y0+'"/>'+g+'</svg></figure>';
+}
+function cardMoney(co){
+  var rev=series(co,'revenue'),res=series(co,'annual_result'),cls=[],a=[],pct=false;
+  var lat=any(co,'latest_filed_accounts_year')[0];
+  if(!rev.length&&!res.length){
+    var f=co.c.filter(function(c){return c.s==='financials'&&c.a!=='available';})[0];
+    a.push('No annual accounts were found for this company.'+why(f&&f.n?f.n:'Brønnøysundregistrene has no filed accounts for this organisation number.'));
+    return card('money','How is it doing?',P(a.join(' ')),f?[f]:[],co,'');
+  }
+  var Y=String((rev.length?rev[rev.length-1]:res[res.length-1]).v.year);
+  var r=rev.filter(function(c){return String(c.v.year)===Y;})[0],r0=r?rev[rev.indexOf(r)-1]:null,s=res.filter(function(c){return String(c.v.year)===Y;})[0];
+  var t='In '+esc(Y);
+  if(r){t+=' it had revenue of '+(Number(r.v.amount)<0?'\u2212':'')+words(r.v.amount)+' NOK';cls.push(r);
+    if(r0&&Number(r0.v.amount)!==0){var ch=(Number(r.v.amount)-Number(r0.v.amount))/Math.abs(Number(r0.v.amount))*100;pct=true;cls.push(r0);
+      t+=Math.abs(ch)<0.5?', about the same as in '+esc(r0.v.year):(ch>0?', up ':', down ')+(Math.abs(ch)>=10?Math.round(Math.abs(ch)):Math.abs(ch).toFixed(1))+'% from '+esc(r0.v.year);}
+    t+=s?', and ':'.';}
+  else t+=' it reported no revenue figure, and ';
+  if(s){var v=Number(s.v.amount);t+=v>=0?'made a profit of '+words(v)+' NOK.':'made a loss of '+words(v)+' NOK.';cls.push(s);}
+  a.push(t);
+  var grp=accounts(co,'group').length;
+  var note='<p class="fine">Amounts are copied from the accounts filed with Brønnøysundregistrene'+(pct?'. The percentage is worked out by Kilde from those filed figures':'')+'.'+
+    (grp?' Group accounts are also filed and are listed under all figures.':'')+'</p>';
+  var charts='<div class="charts">'+barChart('Revenue',rev)+barChart('Annual result',res)+'</div>';
+  var pdfs=av(co,'annual_report_pdf').sort(function(x,y){return String(y.v.year).localeCompare(String(x.v.year));});
+  var more='<details class="more"><summary>All filed figures</summary>'+finTable(co,'company',true)+finTable(co,'group',true)+
+    (pdfs.length?'<dl class="det">'+drow(co,'Annual report copies','<span class="yl">'+pdfs.map(function(c){return link(c.v.url,String(c.v.year));}).join('')+'</span>',[pdfs[0]])+'</dl>':'')+'</details>';
+  return card('money','How is it doing?',P(a.join(' '))+charts+note,cls,co,'',more);
+}
+function cardWhere(co){
+  var ad=one(co,'business_address'),po=one(co,'postal_address'),mu=one(co,'municipality'),wp=av(co,'registered_workplace'),wn=any(co,'registered_workplace')[0],a=[],cls=[];
+  if(ad){a.push('Registered address: '+esc(ad.v)+(mu?' ('+esc(tc(mu.v.name))+' municipality)':'')+'.');cls.push(ad);if(mu)cls.push(mu);}
+  else a.push('No business address is registered.');
+  if(wp.length){var ms={};wp.forEach(function(c){if(c.v.municipality)ms[tc(c.v.municipality)]=1;});var m=Object.keys(ms);
+    a.push((wp.length===1?'It has one registered workplace':'It has '+wp.length+' registered workplaces')+(m.length?' in '+esc(m.slice(0,4).join(', '))+(m.length>4?' and more':''):'')+'.');cls.push(wp[0]);}
+  else if(wn&&wn.a==='not_available'){a.push('No separate workplaces are registered.');cls.push(wn);}
+  var det=(po?crow(co,po,'Postal address'):'')+wp.slice(0,8).map(function(c){var v=c.v;
+    var ex=[v.start_date?'since '+dfmt(v.start_date):'',v.employees!=null?plural(v.employees,'employee'):''].filter(Boolean).join(', ');
+    return drow(co,dn(v.name||'Workplace'),esc(v.address||'')+(ex?'<span class="note">'+ex+'</span>':''),[c]);}).join('')+
+    (wp.length>8?'<p class="fine">'+plural(wp.length-8,'more workplace')+' listed under all facts.</p>':'');
+  return card('where','Where is it?',P(a.join(' ')),cls,co,det);
+}
+function proof(c){if(c.m==='orgnr_on_page')return 'the site shows its organisation number';return c.md?mdText(c.md):'it passed the identity check';}
+function cardOnline(co){
+  var w=any(co,'official_website')[0],a=[],cls=[],soc=av(co,'social_profile'),rw=one(co,'registry_website'),rel=one(co,'related_website');
+  if(w&&w.a==='available'){a.push('Yes, at '+link(w.v)+'. Kilde confirmed it belongs to this company because '+esc(proof(w))+'.');cls.push(w);}
+  else{var reason={ambiguous:'A possible site was found, but nothing on it proves it belongs to this company.',blocked:'The likely sites block automated visits, so none could be checked.',
+      failed:'The website check did not finish in this run.'}[w?w.a:'']||'';
+    a.push((w&&w.a==='failed'?'Not checked.':'No website found.')+why((reason?reason+' ':'')+(w&&w.n?cap(w.n)+'.':'')));if(w)cls.push(w);}
+  if(soc.length){a.push('Its site links to '+soc.map(function(c){return esc(PLAT[String(c.v.platform).toLowerCase()]||c.v.platform);}).join(', ')+'.');cls=cls.concat(soc);}
+  var det=soc.map(function(c){return drow(co,PLAT[String(c.v.platform).toLowerCase()]||cap(c.v.platform),link(c.v.url,bare(c.v.url)),[c]);}).join('');
+  [['site_contact_email','Email (website)'],['site_contact_phone','Phone (website)'],['registry_email','Email (registry)'],['registry_phone','Phone (registry)'],['registry_mobile','Mobile (registry)']].forEach(function(p){
+    av(co,p[0]).forEach(function(c){det+=crow(co,c,p[1]);});});
+  if(rw&&!(w&&w.a==='available'))det+=crow(co,rw,'Website in the registry',render('registry_website',rw.v)+' <span class="sub2">not confirmed</span>');
+  if(rel)det+=crow(co,rel,'Related site',render('related_website',rel.v)+' <span class="sub2">belongs to another company</span>');
+  var lang=one(co,'site_language');if(lang)det+=crow(co,lang,'Site language');
+  return card('online','Is it online?',P(a.join(' ')),cls,co,det);
+}
+function cardHiring(co){
+  var ads=av(co,'job_ad'),jn=any(co,'job_ad')[0],car=one(co,'careers_page'),a=[],cls=[];
+  if(ads.length){a.push('Yes. '+(ads.length===1?'One open job ad':ads.length+' open job ads')+' on NAV, Norway’s public job board.');cls=cls.concat(ads);}
+  else if(jn&&jn.a==='failed'){a.push('Unknown. Job ads could not be checked in this run.'+why(jn.n));cls.push(jn);}
+  else if(jn){a.push('No open job ads on NAV, Norway’s public job board.');cls.push(jn);}
+  else a.push('Job ads were not checked for this company.');
+  if(car){a.push('Its website has a careers page.');cls.push(car);}
+  var det=ads.map(function(c){return drow(co,'Job ad',render('job_ad',c.v),[c]);}).join('')+(car?crow(co,car,'Careers page'):'');
+  return card('hiring','Is it hiring?',P(a.join(' ')),cls,co,det);
+}
+function cardChanged(co){
+  var regs=regChanges(co),sites=av(co,'site_page_updated').sort(function(x,y){return (y.d||'').localeCompare(x.d||'');}),a=[],cls=[];
+  if(regs.length){var r=regs[0];a.push((regs.length===1?'One registry update':regs.length+' registry updates')+' in the last 12 months. The latest, on '+dfmt(r.d)+', '+
+      (r.v.changed&&r.v.changed.length?'changed the '+esc(r.v.changed.join(', '))+'.':'did not say what changed.'));cls.push(r);}
+  else a.push('No registry updates in the last 12 months.');
+  if(co.ch.length)a.push(co.ch.length+' differences since the previous Kilde run.');
+  var det=regs.slice(0,6).map(function(c){return drow(co,dfmt(c.d),render('registry_change',c.v),[c]);}).join('')+
+    co.ch.map(function(ch){var cl=ch.current_claim_id?ix(co)[ch.current_claim_id]:null;
+      return drow(co,ch.detected_at?dfmt(ch.detected_at):'Since last run',esc(label(ch.field))+': '+esc(String(ch.type||'change').replace(/_/g,' ')),cl?[cl]:[]);}).join('')+
+    sites.slice(0,3).map(function(c){return drow(co,dfmt(c.d),render('site_page_updated',c.v),[c]);}).join('');
+  var extra=(regs.length>6?'<p class="fine">'+(regs.length-6===1?'One older update is':(regs.length-6)+' older updates are')+' listed under all facts.</p>':'')+
+    (!co.ch.length&&META.previous===0?'<p class="fine">This is the first Kilde run for these companies, so there is no earlier profile to compare with yet.</p>':'');
+  return card('changed','What changed recently?',P(a.join(' ')),cls,co,det,extra);
+}
+function cardOwner(co){
+  var par=one(co,'group_parent'),ult=one(co,'group_ultimate_parent'),subs=av(co,'group_subsidiary'),pog=one(co,'part_of_group'),
+      lp=one(co,'lei_direct_parent')||one(co,'lei_ultimate_parent'),lei=one(co,'lei'),own=av(co,'owner'),pt=av(co,'partner'),lf=one(co,'legal_form'),
+      cap_=one(co,'share_capital'),wd=one(co,'wikidata_item'),a=[],cls=[],code=lf&&lf.v?lf.v.code:'';
+  if(par){a.push('It is owned by '+nm(par.v)+(par.v.ownership?' ('+esc(par.v.ownership)+')':'')+'.');cls.push(par);}
+  else if(lp){a.push('GLEIF lists '+nm(lp.v)+' as its parent company.');cls.push(lp);}
+  else if(own.length){a.push('It belongs to its owner, '+esc(own[0].v.name)+'.');cls.push(own[0]);}
+  else if(pt.length){a.push('It is owned by its partners.');cls=cls.concat(pt);}
+  else if(code==='STI'){a.push('It is a foundation, so it has no owners.');cls.push(lf);}
+  else if(code==='ESEK'||code==='BRL'){a.push('It is owned by the residents of the building.');cls.push(lf);}
+  else if(pog&&pog.v===true){a.push('It is registered as part of a group.');cls.push(pog);}
+  else if(pog){a.push('It is not registered as part of a group.');cls.push(pog);}
+  if(subs.length){a.push('It owns '+(subs.length===1?'one registered subsidiary':subs.length+' registered subsidiaries')+'.');cls=cls.concat(subs);}
+  var det=(par?crow(co,par,'Parent company'):'')+(ult?crow(co,ult,'Top parent company'):'')+subs.map(function(c){return crow(co,c,'Subsidiary');}).join('')+
+    (lei?crow(co,lei,'LEI (global company ID)'):'')+(lp?crow(co,lp,'Parent in GLEIF'):'')+(cap_?crow(co,cap_,'Share capital'):'')+(wd?crow(co,wd,'Wikidata'):'');
+  var fine=(code==='AS'||code==='ASA')&&!par?'<p class="fine">Shareholders are not in the open registers Kilde reads, so owners appear only when a group record names them.</p>':'';
+  return card('owner','Who owns it?',P(a.join(' ')||'Nothing is registered about its owners.'),cls,co,det,fine);
+}
+function allFacts(co){
+  var inner=(identity(co)+financials(co)+leadership(co)+locations(co)+web(co)+hiring(co)+activity(co)+changes(co)+matching(co)+errs(co)).replace(/<(\/?)h2/g,'<$1h3');
+  return '<details class="allfacts" id="allfacts"><summary><span class="st1">All facts and evidence</span><span class="st2">'+plural(co.c.length,'fact')+
+    ' with source, exact quote, state and match method. For checking the details.</span></summary><div class="afbody">'+
+    '<p class="fine">Every fact has one of these states: '+STATES.map(function(s){return stateLine(s);}).join(' ')+'</p>'+inner+'</div></details>';
+}
+function company(o){
+  var co=BY[o];if(!co)return '<div class="co"><a class="back" href="#">'+IC.back+'All companies</a><p>No company '+esc(o)+' in this report.</p></div>';
   current=o;
-  var lf=one(co,'legal_form'),on=compare.indexOf(o)>=0;
-  return '<article class="pro" aria-labelledby="h-name"><a class="back" href="#">'+IC.back+'Companies</a>'+
-    '<header class="head"><h1 id="h-name">'+esc(co.n||co.o)+'</h1>'+
-    '<p class="idline"><span class="num">'+orgf(co.o)+'</span>'+(lf?'<span>'+esc(lf.v.name||'')+(lf.v.code?' ('+esc(lf.v.code)+')':'')+'</span>':'')+'<span>'+esc(muni(co))+'</span></p>'+
-    '<button type="button" class="btn quiet" data-addcmp="'+o+'" aria-pressed="'+on+'">'+(on?IC.check+'In compare':IC.plus+'Compare')+'</button></header>'+
-    stats(co)+
-    '<nav class="toc" aria-label="Sections">'+TOC.map(function(t){return '<a href="#s-'+t[0]+'" data-jump="s-'+t[0]+'">'+t[1]+'</a>';}).join('')+'</nav>'+
-    summary(co)+askPanel(co)+identity(co)+financials(co)+leadership(co)+locations(co)+web(co)+hiring(co)+activity(co)+changes(co)+matching(co)+errs(co)+'</article>';
+  var lf=one(co,'legal_form'),w=what(co),t=muni(co),warn=statusWarn(co);
+  var sub=[w&&t?w+' in '+t:(w||t),lf&&lf.v?(LF[lf.v.code]||lf.v.name)+' ('+lf.v.code+')':'','Org. no. '+orgf(co.o)].filter(Boolean);
+  return '<article class="co"><a class="back" href="#">'+IC.back+'All companies</a>'+
+    '<header class="cohead"><div><h1 id="h-name">'+esc(dn(co.n||co.o))+'</h1><p class="cosub">'+sub.map(esc).join(' · ')+'</p></div>'+cmpToggle(co)+'</header>'+
+    (warn?'<p class="alert">'+IC.alert+'<span><strong>'+warn+'.</strong> This status is registered with Brønnøysundregistrene. '+srcLink(co,[one(co,'legal_status')])+'</span></p>':'')+
+    intro(co)+askPanel(co)+
+    '<div class="cards">'+cardWhat(co)+cardWho(co)+cardMoney(co)+cardWhere(co)+cardOnline(co)+cardHiring(co)+cardChanged(co)+cardOwner(co)+'</div>'+
+    allFacts(co)+'</article>';
 }
 
 /* ----- compare ----- */
 function compareView(list){
   var cos=list.map(function(o){return BY[o];}).filter(Boolean).slice(0,3);
-  if(cos.length<2)return '<a class="back" href="#">'+IC.back+'Companies</a><p class="muted">Tick the box next to 2 or 3 companies in the list, or use Compare on a profile, then press Compare.</p>';
-  current=null;
-  var n=cos.length;
-  function cellC(co,cl,sub){return '<td>'+vbtn(co,cl,render(cl.f,cl.v))+(sub?'<span class="yr">'+sub+'</span>':'')+'</td>';}
-  function miss(co,f){var c=any(co,f)[0];return '<td>'+(c?stateLine(c.a):'<span class="muted">Not available</span>')+'</td>';}
+  if(cos.length<2)return '<div class="cmpv"><a class="back" href="#">'+IC.back+'All companies</a><h1>Compare companies</h1>'+
+    '<p class="lead">See two or three companies side by side. Press <strong>Compare</strong> next to a company in the list, or <strong>Add to compare</strong> on a company page.</p>'+
+    (cos.length===1?'<p>So far you have picked '+esc(dn(cos[0].n))+'. Pick one or two more.</p>':'')+'<p><a class="btn" href="#">Browse companies</a></p></div>';
+  current=null;var n=cos.length;
+  function cell(co,cl,html,sub){return '<td>'+(cl?vbtn(co,cl,html):'<span class="miss">'+html+'</span>')+(sub?'<span class="yr">'+sub+'</span>':'')+'</td>';}
   function row(lab,fn){return '<tr><th scope="row">'+esc(lab)+'</th>'+cos.map(fn).join('')+'</tr>';}
-  function f1(f){return function(co){var c=one(co,f);return c?cellC(co,c):miss(co,f);};}
-  function fin(f){return function(co){var c=latestFig(co,f);return c?'<td>'+vbtn(co,c,money(c.v,true))+'<span class="yr">'+esc(c.v.year)+'</span></td>':'<td><span class="muted">Not available</span></td>';};}
-  function cnt(f,w){return function(co){var k=av(co,f),c=any(co,f)[0];if(k.length)return '<td>'+vbtn(co,k[0],plural(k.length,w))+'</td>';return c?'<td>'+stateLine(c.a,c.a==='not_available'?'None':null)+'</td>':'<td><span class="muted">None found</span></td>';};}
   function grp(t){return '<tr class="g"><th scope="rowgroup" colspan="'+(n+1)+'">'+t+'</th></tr>';}
-  return '<div class="cmpv"><a class="back" href="#">'+IC.back+'Companies</a><h1>Compare '+n+' companies</h1>'+
-    '<table class="cmp" style="--n:'+n+'"><colgroup><col style="width:190px">'+cos.map(function(){return '<col>';}).join('')+'</colgroup>'+
-    '<thead><tr><th scope="col"><span class="vh">Field</span></th>'+cos.map(function(co){return '<th scope="col"><a href="#org-'+co.o+'">'+esc(co.n)+'</a><span class="sub2"><span class="num">'+orgf(co.o)+'</span><button type="button" class="rm" data-rm="'+co.o+'" aria-label="Remove '+esc(co.n)+' from compare">'+IC.x+'</button></span></th>';}).join('')+'</tr></thead><tbody>'+
-    grp('Identity')+row('Legal form',f1('legal_form'))+row('Municipality',f1('municipality'))+row('Industry',f1('industry'))+row('Incorporated',f1('incorporation_date'))+row('Employees (registry)',function(co){var c=any(co,'employees_registered')[0];return c&&c.a==='available'?cellC(co,c):c?'<td>'+stateLine(c.a)+'</td>':'<td><span class="muted">Not available</span></td>';})+
-    grp('Latest company accounts')+row('Revenue',fin('revenue'))+row('Operating result',fin('operating_result'))+row('Annual result',fin('annual_result'))+row('Equity',fin('equity'))+row('Total assets',fin('total_assets'))+
-    grp('People')+row('General manager',f1('ceo'))+row('Board chair',f1('board_chair'))+row('Board members',cnt('board_member','member'))+
-    grp('Presence')+row('Verified website',f1('official_website'))+row('Social profiles',cnt('social_profile','profile'))+row('Workplaces',cnt('registered_workplace','workplace'))+row('Job ads',cnt('job_ad','ad'))+row('Registry updates, 12 months',cnt('registry_change','update'))+
-    grp('Coverage')+row('Sections',function(co){var gaps=SECTIONS.filter(function(s){return co.sec[s]!=='available';});
-      return '<td>'+coverage(co)+'<span class="yr">'+(gaps.length?gaps.map(function(s){return SEC_LABEL[s]+' '+STATE_LABEL[st(co.sec[s])].toLowerCase();}).join(', '):'All seven available')+'</span></td>';})+
+  function fig(f){return function(co){var c=latestFig(co,f);if(!c)return cell(co,null,'Not filed');var v=Number(c.v.amount);
+    var txt=f==='annual_result'?(v<0?'Loss of ':'Profit of ')+words(v)+' NOK':(v<0?'\u2212':'')+words(v)+' NOK';return cell(co,c,txt,esc(c.v.year));};}
+  function person(f){return function(co){var c=one(co,f);return c?cell(co,c,esc(c.v.name)):cell(co,null,'None registered');};}
+  return '<div class="cmpv"><a class="back" href="#">'+IC.back+'All companies</a><h1>Comparing '+n+' companies</h1>'+
+    '<p class="lead">Select any value to see where it came from.</p>'+
+    '<table class="cmp" style="--n:'+n+'"><colgroup><col class="c0">'+cos.map(function(){return '<col>';}).join('')+'</colgroup>'+
+    '<thead><tr><th scope="col"><span class="vh">Question</span></th>'+cos.map(function(co){return '<th scope="col"><a href="#org-'+co.o+'">'+esc(dn(co.n))+'</a>'+
+      '<span class="sub2"><span class="num">'+orgf(co.o)+'</span><button type="button" class="rm" data-rm="'+co.o+'" aria-label="Remove '+esc(dn(co.n))+' from compare">'+IC.x+'</button></span></th>';}).join('')+'</tr></thead><tbody>'+
+    grp('The basics')+
+    row('What it does',function(co){var c=one(co,'industry');return cell(co,c,esc(what(co)||'Not stated'));})+
+    row('Town',function(co){var c=one(co,'municipality');return cell(co,c,esc(muni(co)||'Not stated'));})+
+    row('Company type',function(co){var c=one(co,'legal_form');return c?cell(co,c,esc(LF[c.v.code]||c.v.name)):cell(co,null,'Not stated');})+
+    row('Founded',function(co){var c=one(co,'incorporation_date')||one(co,'registration_date');return c?cell(co,c,String(c.v).slice(0,4)):cell(co,null,'Not stated');})+
+    row('Employees',function(co){var c=any(co,'employees_registered')[0];return c&&c.a==='available'?cell(co,c,esc(empText(c.v))):cell(co,c&&/no employees/i.test(c.n||'')?c:null,'None registered');})+
+    grp('Money, latest filed year')+row('Revenue',fig('revenue'))+
+    row('Revenue change (worked out by Kilde)',function(co){var r=series(co,'revenue');if(r.length<2||!Number(r[r.length-2].v.amount))return cell(co,null,'Not enough years');
+      var a=r[r.length-1],b=r[r.length-2],ch=(a.v.amount-b.v.amount)/Math.abs(b.v.amount)*100;return '<td>'+vbtn(co,a,(ch>=0?'Up ':'Down ')+Math.round(Math.abs(ch))+'%')+'<span class="yr">'+esc(b.v.year)+' to '+esc(a.v.year)+'</span></td>';})+
+    row('Annual result',fig('annual_result'))+row('Equity',fig('equity'))+
+    grp('People')+row('General manager',person('ceo'))+row('Board chair',person('board_chair'))+
+    grp('Online and activity')+
+    row('Website',function(co){var c=any(co,'official_website')[0];return c&&c.a==='available'?cell(co,c,esc(bare(c.v))):cell(co,null,'No website found');})+
+    row('Open job ads',function(co){var k=av(co,'job_ad'),c=any(co,'job_ad')[0];return k.length?cell(co,k[0],String(k.length)):cell(co,null,c&&c.a==='failed'?'Not checked':'None');})+
+    row('Registry updates, last 12 months',function(co){var k=regChanges(co);return k.length?cell(co,k[0],String(k.length),'latest '+dfmt(k[0].d)):cell(co,null,'None');})+
     '</tbody></table></div>';
 }
 
@@ -1084,24 +1331,30 @@ function highlight(span,cl){
     if(k>=0)return e.slice(0,k)+'<mark>'+e.slice(k,k+nd.length)+'</mark>'+e.slice(k+nd.length);}
   return e;
 }
-function popHtml(co,cl,fromRow){
-  var h='<div class="pop-h"><strong>'+esc(label(cl.f))+'</strong><button type="button" class="x" data-close aria-label="Close">'+IC.x+'</button></div><div class="pop-v">'+valueOf(cl)+'</div>';
+function claimBody(co,cl){
+  var h='<div class="pop-v">'+valueOf(cl)+'</div>';
   (cl.e||[]).forEach(function(i){var ev=co.ev[i];if(!ev)return;var u=U[ev[0]]||'';
     var meta=['Retrieved '+dfmt(ev[1])+(tfmt(ev[1])?', '+tfmt(ev[1]):'')];if(ev[2])meta.push('dated '+dfmt(ev[2]));if(SRC_CLASS[ev[4]])meta.push(SRC_CLASS[ev[4]].toLowerCase());
     h+='<div class="pop-e">'+(safeUrl(u)?'<a class="u" href="'+esc(u)+'" target="_blank" rel="noopener noreferrer"><span>'+esc(bare(u).length>110?bare(u).slice(0,107)+'...':bare(u))+'</span>'+IC.ext+'</a>':esc(u))+
       '<p class="pop-m">'+meta.join(', ')+'</p>'+(ev[3]?'<p class="pop-ql">Exact text read from the source</p><pre class="q">'+highlight(ev[3],cl)+'</pre>':'')+'</div>';});
-  if(cl.m&&(cl.md||METHOD[cl.m]))h+='<p class="pop-m" style="margin-top:10px">'+esc(cl.md?'Match: '+mdText(cl.md)+'.':METHOD[cl.m])+'</p>';
-  if(!fromRow&&document.getElementById(fid(co,cl)))h+='<a class="pop-j" href="#'+fid(co,cl)+'" data-jump="'+fid(co,cl)+'">Show in profile</a>';
+  if(cl.m&&(cl.md||METHOD[cl.m]))h+='<p class="pop-m pop-match">'+esc(cl.md?'How it was matched: '+mdText(cl.md)+'.':METHOD[cl.m])+'</p>';
   return h;
 }
+function popHtml(co,cls){
+  var x='<button type="button" class="x" data-close aria-label="Close">'+IC.x+'</button>';
+  if(cls.length===1)return '<div class="pop-h"><strong>'+esc(label(cls[0].f))+'</strong>'+x+'</div>'+claimBody(co,cls[0]);
+  return '<div class="pop-h"><strong>Sources</strong>'+x+'</div>'+cls.map(function(cl){return '<div class="pop-c"><p class="pop-cl">'+esc(label(cl.f))+'</p>'+claimBody(co,cl)+'</div>';}).join('');
+}
 function openPop(btn){
-  var co=BY[btn.getAttribute('data-o')];if(!co)return;var cl=ix(co)[btn.getAttribute('data-c')];if(!cl)return;
-  var pop=$('pop'),fromRow=!!btn.closest('#'+CSS.escape(fid(co,cl)));
+  var co=BY[btn.getAttribute('data-o')];if(!co)return;var I=ix(co);
+  var cls=String(btn.getAttribute('data-c')||'').split(',').map(function(id){return I[id];}).filter(Boolean);if(!cls.length)return;
+  var pop=$('pop');
   if(popTrigger===btn&&!pop.hidden){closePop();return;}
-  popTrigger=btn;pop.innerHTML=popHtml(co,cl,fromRow);pop.setAttribute('aria-label','Source for '+label(cl.f));pop.hidden=false;pop.classList.remove('open');
+  popTrigger=btn;pop.innerHTML=popHtml(co,cls);pop.setAttribute('aria-label','Source for '+label(cls[0].f));pop.hidden=false;pop.classList.remove('open');
   var sheet=window.innerWidth<640;pop.classList.toggle('sheet',sheet);$('scrim').hidden=!sheet;
-  if(!sheet){var r=btn.getBoundingClientRect(),w=Math.min(420,window.innerWidth-24);pop.style.width=w+'px';
-    var left=Math.min(Math.max(12,r.left),window.innerWidth-w-12),ph=pop.offsetHeight,top=r.bottom+6;
+  if(!sheet){var r=btn.getBoundingClientRect(),w=Math.min(440,window.innerWidth-24);pop.style.width=w+'px';
+    var left=Math.min(Math.max(12,r.right-w),window.innerWidth-w-12);if(r.left+w<window.innerWidth-12)left=Math.max(12,r.left);
+    var ph=pop.offsetHeight,top=r.bottom+6;
     if(top+ph>window.innerHeight-12&&r.top-ph-6>12)top=r.top-ph-6;
     pop.style.left=(left+window.scrollX)+'px';pop.style.top=(top+window.scrollY)+'px';}
   else{pop.style.left='';pop.style.top='';pop.style.width='';}
@@ -1110,79 +1363,70 @@ function openPop(btn){
 }
 function closePop(back){var pop=$('pop');if(pop.hidden)return;pop.hidden=true;pop.classList.remove('open');$('scrim').hidden=true;
   if(popTrigger){popTrigger.setAttribute('aria-expanded','false');if(back!==false&&document.body.contains(popTrigger))popTrigger.focus({preventScroll:true});}popTrigger=null;}
-function jump(id){var el=document.getElementById(id);if(!el)return;el.scrollIntoView({behavior:matchMedia('(prefers-reduced-motion:reduce)').matches?'auto':'smooth',block:id.indexOf('f-')===0?'center':'start'});
+function jump(id){var el=document.getElementById(id);if(!el)return;var d=el.closest('details');while(d){d.open=true;d=d.parentElement?d.parentElement.closest('details'):null;}
+  el.scrollIntoView({block:id.indexOf('f-')===0?'center':'start'});
   if(id.indexOf('f-')===0){el.classList.add('flash');setTimeout(function(){el.classList.remove('flash');},1400);}}
 
 /* ----- events ----- */
-document.addEventListener('change',function(e){
-  var o=e.target.getAttribute&&e.target.getAttribute('data-cmp');if(!o)return;
-  if(!toggleCompare(o,e.target.checked))e.target.checked=false;refreshCmpBtn();
-});
 document.addEventListener('click',function(e){
   var t=e.target;
   var b=t.closest('button[data-c]');if(b){e.preventDefault();openPop(b);return;}
   if(t.closest('[data-close]')||t.closest('#scrim')){closePop();return;}
-  var j=t.closest('[data-jump]');if(j){e.preventDefault();closePop(false);jump(j.getAttribute('data-jump'));return;}
   if(!t.closest('#pop'))closePop(false);
+  var j=t.closest('[data-jump]');if(j){e.preventDefault();jump(j.getAttribute('data-jump'));return;}
   var a=t.closest('[data-ask]');if(a){var q=$('askq');q.value=a.getAttribute('data-ask');ask(BY[$('askf').getAttribute('data-o')],q.value);return;}
-  var ac=t.closest('[data-addcmp]');if(ac){var o=ac.getAttribute('data-addcmp');toggleCompare(o,compare.indexOf(o)<0);refreshCmpBtn();drawList();return;}
-  var rm=t.closest('[data-rm]');if(rm){compare=compare.filter(function(x){return x!==rm.getAttribute('data-rm');});drawTray();drawList();
-    location.hash=compare.length>=2?'compare='+compare.join(','):(compare.length?'org-'+compare[0]:'');return;}
-  var g=t.closest('#tray-go');if(g&&compare.length<2)e.preventDefault();
+  var ad=t.closest('[data-add]');if(ad){toggleCompare(ad.getAttribute('data-add'));return;}
+  if(t.closest('[data-clear]')){var old=compare;compare=[];old.forEach(refreshBtns);drawCmpBar();return;}
+  var rm=t.closest('[data-rm]');if(rm){compare=compare.filter(function(x){return x!==rm.getAttribute('data-rm');});
+    location.hash=compare.length>=2?'compare='+compare.join(','):'compare';return;}
+  var wb=t.closest('.whyb');if(wb){var wt=$(wb.getAttribute('aria-controls'));var op=wb.getAttribute('aria-expanded')!=='true';wb.setAttribute('aria-expanded',String(op));wt.hidden=!op;return;}
+  var mo=t.closest('[data-more]');if(mo){var op2=mo.getAttribute('aria-expanded')!=='true';mo.setAttribute('aria-expanded',String(op2));$('sumrest').hidden=!op2;mo.textContent=op2?'Show less':'Read the full summary';return;}
+  var ss=t.closest('[data-showsrc]');if(ss){var on=ss.getAttribute('aria-pressed')!=='true';ss.setAttribute('aria-pressed',String(on));ss.textContent=on?'Hide sources':'Show sources';
+    $('sumtext').classList.toggle('showsrc',on);return;}
 });
 document.addEventListener('submit',function(e){if(e.target.id==='askf'){e.preventDefault();ask(BY[e.target.getAttribute('data-o')],$('askq').value);}});
 document.addEventListener('keydown',function(e){
   if(e.key==='Escape'){closePop();return;}
   var tag=(e.target.tagName||'').toLowerCase();
-  if(e.key==='/'&&tag!=='input'&&tag!=='textarea'&&tag!=='select'){e.preventDefault();$('q').focus();return;}
-  if((e.key==='ArrowDown'||e.key==='ArrowUp')&&(e.target.classList.contains('row-link')||e.target.id==='q')){
-    var links=[].slice.call(document.querySelectorAll('.row-link'));if(!links.length)return;e.preventDefault();
+  if(e.key==='/'&&tag!=='input'&&tag!=='textarea'&&tag!=='select'){e.preventDefault();if($('q'))$('q').focus();else{location.hash='';setTimeout(function(){if($('q'))$('q').focus();},0);}return;}
+  if((e.key==='ArrowDown'||e.key==='ArrowUp')&&(e.target.classList.contains('cl')||e.target.id==='q')){
+    var links=[].slice.call(document.querySelectorAll('.cl'));if(!links.length)return;e.preventDefault();
     var i=links.indexOf(e.target);i=e.target.id==='q'?0:Math.max(0,Math.min(links.length-1,i+(e.key==='ArrowDown'?1:-1)));links[i].focus();}
 });
 window.addEventListener('resize',function(){closePop(false);});
 
-/* ----- toc highlight ----- */
-var tocTick=false;
-function tocUpdate(){tocTick=false;var links=document.querySelectorAll('.toc a');if(!links.length)return;var cur=null;
-  [].forEach.call(document.querySelectorAll('.pro .sec'),function(sec){if(sec.getBoundingClientRect().top<=90)cur=sec.id;});
-  [].forEach.call(links,function(a){if(a.getAttribute('data-jump')===cur)a.setAttribute('aria-current','true');else a.removeAttribute('aria-current');});}
-function watchToc(){tocUpdate();}
-window.addEventListener('scroll',function(){if(!tocTick){tocTick=true;requestAnimationFrame(tocUpdate);}},{passive:true});
-
 /* ----- routing ----- */
-function wide(){return window.matchMedia('(min-width:901px)').matches;}
+var lastView='';
 function route(){
   closePop(false);
-  var hsh=decodeURIComponent(location.hash.slice(1)),main=$('main'),lay=$('layout');
-  var m=/^org-(\d{9})$/.exec(hsh),c=/^compare=([\d,]+)$/.exec(hsh);
-  if(/^(s-|f-)/.test(hsh)&&main.innerHTML){jump(hsh);return;}
-  if(m){main.innerHTML=profile(m[1]);lay.classList.add('detail');}
-  else if(c){var l=c[1].split(',');compare=l.filter(function(o){return BY[o];}).slice(0,3);main.innerHTML=compareView(l);lay.classList.add('detail');drawTray();}
-  else if(hsh==='sources'){return;}
-  else{lay.classList.remove('detail');current=null;
-    if(wide()&&filtered.length){main.innerHTML=profile(filtered[0].o);}else main.innerHTML='';}
-  drawList();watchToc();
-  if(m||c){if(!wide())window.scrollTo(0,0);else if(window.scrollY>200)window.scrollTo(0,0);main.focus({preventScroll:true});}
+  var h=decodeURIComponent(location.hash.slice(1)),main=$('main');
+  if(h==='about'){var ab=$('about');if(ab)ab.scrollIntoView();return;}
+  if(/^(q-|f-|s-)/.test(h)&&main.innerHTML){jump(h);return;}
+  if(lastView==='home')homeY=window.scrollY;
+  var m=/^org-(\d{9})$/.exec(h),c=/^compare(?:=([\d,]*))?$/.exec(h);
+  if(m){main.innerHTML=company(m[1]);lastView='co';document.title=(BY[m[1]]?dn(BY[m[1]].n)+' | ':'')+'Kilde';}
+  else if(c){var l=c[1]?c[1].split(','):compare.slice();compare=l.filter(function(o){return BY[o];}).slice(0,3);main.innerHTML=compareView(compare);lastView='cmp';document.title='Compare | Kilde';}
+  else{current=null;main.innerHTML=home();bindHome();applyFilters();document.title=TITLE;
+    var y=lastView&&lastView!=='home'?homeY:0;lastView='home';window.scrollTo(0,y);drawCmpBar();return;}
+  drawCmpBar();window.scrollTo(0,0);main.focus({preventScroll:true});
 }
-function runHeader(){
+var TITLE=document.title;
+function about(){
   var r=META,ms=r.runtime_ms,rt='not recorded';
   if(ms!=null){var s=Math.round(ms/1000);rt=s>=60?Math.floor(s/60)+' min '+(s%60)+' s':s+' s';}
-  var cost=Number(r.cost_usd||0);
-  var items=[['Run',esc(r.run_id||'not recorded')],['Companies',nfmt(r.companies)],['Requests',nfmt(r.requests)],['Runtime',rt],['Cost',cost===0?'$0':'$'+cost.toFixed(2)]];
-  $('run').innerHTML=items.map(function(x){return '<div><dt>'+x[0]+'</dt><dd>'+x[1]+'</dd></div>';}).join('');
-  $('srclist').innerHTML='<table class="srct"><thead><tr><th scope="col">Source</th><th scope="col">Licence or terms</th><th scope="col" class="r">Evidence records</th></tr></thead><tbody>'+
+  var cost=Number(r.cost_usd||0),a=r.agent||{};
+  var items=[['Run',esc(r.run_id||'not recorded')],['Run started',r.started_at?dfmt(r.started_at)+', '+tfmt(r.started_at):'not recorded'],['Companies',nfmt(r.companies)],
+    ['Web requests',nfmt(r.requests)],['Runtime',rt],['Cost of paid services',cost===0?'$0, none used':'$'+cost.toFixed(2)],
+    ['Built by',esc(a.name||'Kilde')+(a.version?' '+esc(a.version):'')+(a.commit?', commit <span class="num">'+esc(String(a.commit).slice(0,7))+'</span>':'')]];
+  $('runinfo').innerHTML=items.map(function(x){return '<div><dt>'+x[0]+'</dt><dd>'+x[1]+'</dd></div>';}).join('');
+  $('srclist').innerHTML='<table class="srct"><thead><tr><th scope="col">Source</th><th scope="col">Licence or terms</th><th scope="col" class="r">Facts backed</th></tr></thead><tbody>'+
     (r.sources||[]).map(function(s){return '<tr><td>'+esc(s.name)+'</td><td>'+esc(s.licence||'')+'</td><td class="r num">'+(s.evidence!=null?nfmt(s.evidence):'')+'</td></tr>';}).join('')+'</tbody></table>';
-  var a=r.agent||{};
-  $('colophon').innerHTML='Generated '+dfmt(r.generated_at)+' by '+esc(a.name||'Kilde')+(a.version?' '+esc(a.version):'')+(a.commit?', commit <span class="num">'+esc(String(a.commit).slice(0,7))+'</span>':'')+
-    (r.started_at?'. Run started '+dfmt(r.started_at)+' at '+tfmt(r.started_at):'')+'. Every value links to the page or API response it was read from, with the exact text. Typeface Figtree, SIL Open Font License 1.1.';
 }
-$('count').textContent='Loading companies';
+$('main').innerHTML='<p class="loading">Loading companies</p>';
 loadData().then(function(d){
   DATA=d;U=d.u;CO=d.co;CO.forEach(function(c){BY[c.o]=c;});
-  initControls();runHeader();applyFilters();drawTray();route();
-  window.addEventListener('hashchange',route);
-  window.matchMedia('(min-width:901px)').addEventListener('change',function(){if(!location.hash||location.hash==='#')route();});
-}).catch(function(err){$('count').textContent='This browser could not open the report data ('+String(err&&err.message||err)+').';});
+  about();route();window.addEventListener('hashchange',route);
+}).catch(function(err){$('main').innerHTML='<p class="loading">This browser could not open the report data ('+esc(String(err&&err.message||err))+').</p>';});
 })();
 """
 
