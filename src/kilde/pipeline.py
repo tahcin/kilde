@@ -156,13 +156,6 @@ async def run_batch(orgs: list[str], opt: Options) -> tuple[list[dict], dict]:
                 batch_info["change_feed"] = await brreg.fetch_change_feed(f, orgs)
             except Exception as exc:  # noqa: BLE001
                 log.warning("change feed failed: %r", exc)
-        if nav and want("jobs"):
-            try:
-                names = {o: "" for o in orgs}
-                batch_info["jobs"] = await nav.prepare(f, orgs, names)
-            except Exception as exc:  # noqa: BLE001
-                log.warning("jobs prepare failed: %r", exc)
-                batch_info["jobs_error"] = repr(exc)
         if gleif and want("gleif"):
             try:
                 batch_info["gleif"] = await gleif.prepare_gleif(f, orgs)
@@ -183,6 +176,16 @@ async def run_batch(orgs: list[str], opt: Options) -> tuple[list[dict], dict]:
                 log.warning("wikidata prepare failed: %r", exc)
 
     await guarded(asyncio.gather(prepare(), *(phase_a(c) for c in ctxs.values())), phase_a_deadline)
+
+    # The job index catch-up matches new ads by legal name before checking the org number, so it
+    # runs once the registry phase has the names.
+    if nav and want("jobs"):
+        try:
+            names = {o: (c.registry or {}).get("navn", "") for o, c in ctxs.items()}
+            batch_info["jobs"] = await asyncio.wait_for(nav.prepare(f, orgs, names), timeout=max(30.0, opt.seconds * 0.15))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("jobs prepare failed: %r", exc)
+            batch_info["jobs_error"] = repr(exc)
 
     # Phase B: external sources, in priority order, sharing what is left of the budget.
     deadline_b = budget.started + opt.seconds * 0.92
