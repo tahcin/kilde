@@ -1897,6 +1897,36 @@ LEGAL_PAGE = re.compile(r"(?i)personvern|privacy|cookie|informasjonskapsl|vilk[a
                         r"salgsbetingelser|kj[oø]psbetingelser|angrerett|apenhetsloven|åpenhetsloven|disclaimer|impressum")
 
 
+SERVICE_LINE = re.compile(r"(?i)meld skade|skademelding|skadetelefon|skade|claims?|vakttelefon|døgnvakt|vakt|"
+                          r"nødnummer|nødtelefon|legevakt|bestilling|booking|support for|kundeservice for|"
+                          r"emergency|on-?call|hotline")
+
+
+def _service_line(page: Page, el, written: str) -> bool:
+    """True when the label right before a number names a service or partner line (Meld skade, vakt, ...)."""
+    texts = []
+    if el is not None:
+        node = el if getattr(el, "name", None) else el.parent
+        par = node.parent if node is not None else None
+        if par is not None:
+            t = par.get_text(" ", strip=True)
+            i = t.find(written.strip()) if written.strip() in t else t.find(node.get_text(" ", strip=True))
+            texts.append(t[max(0, i - 40):i] if i >= 0 else "")
+        sib = node.find_previous_sibling() if node is not None else None
+        if sib is not None:
+            texts.append(sib.get_text(" ", strip=True)[-40:])
+    i = page.text.find(written.strip())
+    if i >= 0:
+        texts.append(page.text[max(0, i - 40):i])
+    for t in texts:
+        labels = list(re.finditer(r"(?i)(meld skade|skademelding|skadetelefon|skade|claims?|vakttelefon|døgnvakt|vakt|"
+                                  r"nødnummer|nødtelefon|legevakt|bestilling|booking|emergency|on-?call|hotline|"
+                                  r"kontortelefon|sentralbord|telefon|tlf|kontakt|kundeservice|mobil|phone)", t))
+        if labels and SERVICE_LINE.fullmatch(labels[-1].group(0)):
+            return True
+    return False
+
+
 def extract_contacts(pages: list[Page], domain: str, registry_phones: set[str] = frozenset(),
                      scope: Scope | None = None, email_domains: set[str] = frozenset()
                      ) -> tuple[list, list, int]:
@@ -1918,6 +1948,8 @@ def extract_contacts(pages: list[Page], domain: str, registry_phones: set[str] =
         ok = scope.accept(el, page)
         if ok and store is phones and scope.org and key[-8:] not in registry_phones:
             ok = el is not None and scope.owner(el) == "ours"  # a block that names us (legal name or org number)
+            if ok and _service_line(page, el, span):
+                ok = False  # a claims, on-call or partner line is not the company's contact phone
         if ok:
             store[key] = (page, span)
         else:
@@ -2442,7 +2474,10 @@ def emit_site(ctx: CompanyContext, v: Verdict, scope: Scope | None = None) -> li
                 desc = _clean(d["description"])
                 span = desc
                 break
-    if desc and not GENERIC_DESC.search(desc) and not PLACEHOLDER.search(desc) and len(desc) >= 15:
+    words_in = len(re.findall(r"[\wæøåÆØÅ]+", desc or ""))
+    names_us = bool(desc) and _names_in(desc, [scope.words]) if scope.words else False
+    if desc and not GENERIC_DESC.search(desc) and not PLACEHOLDER.search(desc) and len(desc) >= 15 and (
+            words_in >= 5 or names_us):  # a project or page name is not a self-description
         if scope.shared and not scope.page_ours_only(home) and not (
                 scope.names_ours(desc) and not scope.names_sister(desc)):
             ctx.mark("website_description", SECTION, "ambiguous", note=unsure)

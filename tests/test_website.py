@@ -1463,3 +1463,25 @@ def test_spans_are_exact_bytes_on_a_latin1_page():
         snap = ctx.snapshots.get(e.id)
         if snap is not None and e.claim_span:
             assert e.claim_span.encode("utf-8") in snap.content, e.claim_span
+
+
+# ---------------------------------------------------------------- round 11 audit fixes
+def test_claims_line_is_not_a_contact_phone():
+    """Mjøsa Forsikring shape: 'Meld skade' is the insurance partner's claims line."""
+    body = (f'<footer><p>Fjellbekk Trevare AS · Org.nr {OURS} · Hunnsvegen 5, Kontortelefon: '
+            '<a href="tel:61100202">61 10 02 02</a>, Meld skade: <a href="tel:22000800">22 00 08 00</a></p></footer>')
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(_site(body=body), ctx)
+    assert [c.value for c in ctx.claims if c.field == "site_contact_phone"] == ["+4761100202"]
+
+
+def test_project_name_is_not_a_description():
+    """HUS arkitekter shape: the homepage meta description is the name of a featured project."""
+    head = '<meta name="description" content="Cissi Klein videregående skole">'
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(_site(body=f"<footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>", head=head), ctx)
+    assert not ctx.claims_for("website_description")
+    head2 = '<meta name="description" content="Fjellbekk Trevare lager kjøkken og bad på mål i Testby.">'
+    ctx2 = ctx_for(hjemmeside="fjellbekk.no")
+    run(_site(body=f"<footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>", head=head2), ctx2)
+    assert ctx2.claims_for("website_description")

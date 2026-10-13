@@ -22,8 +22,13 @@ Stop rule: two consecutive rounds with zero wrong-company facts and clearly abov
 | 4 | 43.9 | 30.0 | 12 | 8 | 2 | A registry website shared by four group companies; the parent's social profiles published. Fix: shared-registry-website check, privacy-page operator check. |
 | 5 | 37.4 | 30.0 | 12 | 8 | **0** | Clean. Total 79.4 (four families), 86.7 (broad). Three wrong values fixed: a phone parsed from a date, a personal page taken as a careers page, a placeholder Facebook link. |
 | 6 | 32.9 (45.7 broad) | 30.0 | 12 | 8 | **0** | Clean. Total 74.8 (four families), 87.6 (broad). Second clean round in a row. One wrong value fixed: a headhunter's client-assignment page taken as its careers page. |
+| 7 | (final smoke) | 29.9 | 12 | 8 | 4 | A site built with the Surftown site builder carried Surftown's own social links in its footer. Fix: a site social handle must carry the company's name or domain (or be a numeric ID); profiles shared across companies in a batch withheld; site-builder and agency brands blocked. |
+| 8 | (final smoke, 3 parallel auditors) | 30.0 | 12 | 8 | **0** | Clean. 2,212 audited items; the Surftown links confirmed gone. |
+| 9 | (3 parallel auditors) | 30.0 | 12 | 8 | 4 | A Wikidata item conflating a pension foundation with its operating company; a foreign sister's YouTube channel on a branch's site. Fix: Wikidata websites and socials only when they match the site Kilde verified; handles naming another legal entity (GmbH, AB, Ltd...) withheld; no site news for foreign branches (NUF). |
+| 10 | (3 parallel auditors) | 30.0 | 12 | 8 | **0** | Clean. 2,336 audited items. |
+| 11 | (3 parallel auditors) | 30.0 | 12 | 8 | **0** | Clean. 3,028 audited items. Second clean round in a row after the last fix. |
 
-Across all rounds every registry, accounts and update-feed claim checked against the live APIs was correct (about 9,000 claims), and no financial value was ever invented.
+Across all rounds every registry, accounts and update-feed claim checked against the live APIs was correct (more than 15,000 claims), and no financial value was ever invented. Rounds 8 to 11 split each 30-company audit across three independent auditors running in parallel.
 
 ## Determinism
 
@@ -31,14 +36,22 @@ Builderr runs each entry twice and compares the facts. The same 100 companies we
 
 ## Benchmark against Builderr's own sample
 
-On the 100 companies of Builderr's public sample (https://builderr.ai/signalpost), compared with Builderr's own crawler:
+On the 100 companies of Builderr's public sample (https://builderr.ai/signalpost), compared with Builderr's own crawler (final code, Oct 13):
 
 | Family | Builderr's crawler | Kilde |
 |---|---|---|
-| Verified websites | 84 | measured at the final commit |
-| Social profiles | 87 across 43 companies | measured at the final commit |
+| Verified websites | 84 | 73 (70 the same site; the rest withheld by the stricter proof and group-site rules) |
+| Social profiles | 87 across 43 companies | 64 across 29 companies (profiles on shared and group sites withheld) |
 | Leadership roles | 714 | 707 |
 | Workplaces | 180 | 180 |
 | Companies with filed financials | 97 | 97 |
-| Dated news posts | not in sample | measured at the final commit |
+| Dated news posts | not in sample | 175 across 12 companies |
+| Hiring signals | not in sample | 10 companies |
 | LinkedIn data | collected by Builderr as "experimental" | not collected (unofficial access is not permitted) |
+
+## Final runs (commit 85a432b, fresh clone)
+
+- Smoke test, 100 new companies: valid, 931 requests, about 3 minutes; run twice with identical facts (see `smoke/`).
+- 1,000 new companies: valid, 8,913 requests, 12.6 minutes, 0.8 GB peak memory (see `profiles-1000/`).
+
+All scores above are from our own scorer and auditors, not Builderr's. Builderr's reference pool includes every entrant's verified finds and its own crawlers, so recall against it will be lower.
