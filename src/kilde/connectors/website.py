@@ -773,11 +773,20 @@ _DNS_SEM: asyncio.Semaphore | None = None
 DNS_PARALLEL = 24
 
 
+def proxy_mode() -> bool:
+    """With an HTTP(S) proxy configured, direct DNS and TCP may be blocked: rely on HTTP through the proxy."""
+    import os
+    return any(os.environ.get(k) for k in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY",
+                                            "https_proxy", "http_proxy", "all_proxy"))
+
+
 async def resolves(f: Fetcher, host: str) -> bool | None:
     """True when the host has an A or AAAA record; False only on a genuine NXDOMAIN or an empty answer for both
     record types; None when the lookup itself failed (timeout after one retry, SERVFAIL, no reachable name
     server, network error), which is never read as absence."""
     global _DNS_SEM
+    if proxy_mode():
+        return True  # the HTTP request through the proxy decides
     if _DNS_SEM is None:
         _DNS_SEM = asyncio.Semaphore(DNS_PARALLEL)
     async with _DNS_SEM:
@@ -808,7 +817,9 @@ async def resolves(f: Fetcher, host: str) -> bool | None:
 async def reachable(host: str, port: int = 443) -> bool:
     """A TCP connect before any HTTP, so dead hosts do not burn HTTP retries and timeouts. A timeout is
     retried once with a longer wait, so a slow moment does not change the result between two runs; a refused
-    connection is final."""
+    connection is final. Skipped (True) when a proxy is configured."""
+    if proxy_mode():
+        return port == 443
     for wait in (CONNECT_PROBE, CONNECT_PROBE * 2):
         try:
             _, w = await asyncio.wait_for(asyncio.open_connection(host, port, happy_eyeballs_delay=0.25), wait)
@@ -1220,6 +1231,12 @@ def candidates(ctx: CompanyContext) -> list[tuple[str, str, str | None]]:
 # ---------------------------------------------------------------- extraction
 def _ev(ctx: CompanyContext, page: Page, span: str | None, method: str = EXTRACT,
         effective: str | None = None, note: str | None = None) -> Evidence:
+    if span:
+        raw = page.snap.content.decode("utf-8", "replace")
+        if span not in raw:
+            import html as _html
+            span = (verbatim(raw, span) or verbatim(raw, _html.unescape(span))
+                    or _verbatim_core(raw, span) or span)
     return ctx.add_evidence(page.snap, source_class=COMPANY_OWNED, span=span, method=method, licence=LICENCE,
                             effective_date=effective, note=note)
 
@@ -1724,7 +1741,8 @@ def collect_socials(pages: list[Page], words: list[str], domains: set[str], scop
                 fr["data-href"] = q["href"]
                 links.append(fr)
         for a in links:
-            raw = unwrap_redirect((a.get("href") if a.name == "a" else a.get("data-href")) or "")
+            written = (a.get("href") if a.name == "a" else a.get("data-href")) or ""
+            raw = unwrap_redirect(written)
             c = clean_social(raw)
             if not c:
                 continue
@@ -1734,7 +1752,7 @@ def collect_socials(pages: list[Page], words: list[str], domains: set[str], scop
             label = a.get_text(" ", strip=True)
             iconic = not label or bool(re.fullmatch(r"(?i)(f[øo]lg oss( på)?|follow us( on)?)?\s*(facebook|instagram|"
                                                     r"linkedin|youtube|twitter|x|tiktok)?", label))
-            rec = found.setdefault(c[0], {}).setdefault(c[1], [p, (raw or "")[:300], False, False])
+            rec = found.setdefault(c[0], {}).setdefault(c[1], [p, written[:300], False, False])
             rec[2] = rec[2] or _in_chrome(a) or a.name != "a"
             rec[3] = rec[3] or iconic or a.name != "a"
         for d in p.jsonld:
@@ -1747,7 +1765,7 @@ def collect_socials(pages: list[Page], words: list[str], domains: set[str], scop
                 if isinstance(s, str):
                     c = clean_social(s)
                     if c and not (scope.sisters and scope.names_sister(s)):
-                        found.setdefault(c[0], {}).setdefault(c[1], [p, json.dumps({"sameAs": s})[:300], True, True])
+                        found.setdefault(c[0], {}).setdefault(c[1], [p, s[:300], True, True])
     keys = {re.sub(r"[^a-z0-9]", "", _translit(w)) for w in words if len(w) >= 4 and _translit(w) not in REGIONS
             and w not in GENERIC_WORDS and w not in FORM_NAME_WORDS}
     keys.add(re.sub(r"[^a-z0-9]", "", _translit("".join(words))))
@@ -2191,8 +2209,9 @@ async def prepare_scope(sp: _Spend, ctx: CompanyContext, v: Verdict) -> Scope:
             others.setdefault(num, s)
     others = {k: (x[1] if isinstance(x, tuple) else x) for k, x in others.items()}
     sisters = await confirm_sisters(sp, ctx, sister_labels(v.pages, words))
-    dominant = await confirm_dominant(sp, ctx, [n for n in other_company_names(v.pages, words)
-                                                if n[0] not in sisters][:6], limit=3, site_host=home.host)
+    named = [n for n in other_company_names(v.pages, words) if n[0] not in sisters][:6]
+    dominant = await confirm_dominant(sp, ctx, named, limit=3, site_host=home.host)
+    positional_names = {f"{lab} {suffix}" for lab, suffix, pos in named if pos}
     if v.namesake:
         dominant[v.namesake[0].lower()] = v.namesake[1]
     reg_mail = ((ctx.registry or {}).get("epostadresse") or "@").rsplit("@", 1)[1].lower()
@@ -2212,6 +2231,14 @@ async def prepare_scope(sp: _Spend, ctx: CompanyContext, v: Verdict) -> Scope:
             if label == site_label or any(t in label for t in own_tokens):
                 continue  # the company's own alternate domain
             other_mail.add(dom)
+    group = await _group_members(sp, ctx) if (others or dominant or sisters) else set()
+    if group and _orgnr_in_operator_position(v, ctx.org):
+        # We are the group's parent and our org number is in an operator position: our own subsidiaries on
+        # the site do not take it away from us (they do lose it). Foreign or outside numbers still count.
+        others = {k: x for k, x in others.items() if k not in group}
+        dominant = {k: x for k, x in dominant.items() if x not in group and k in positional_names}
+        sisters = {k: x for k, x in sisters.items() if x not in group}
+        ctx.facts["website_group_parent"] = sorted(group)[:20]
     codeclared = await _codeclared(sp, ctx, home)
     if codeclared and v.method == "orgnr_on_page" and not others and _orgnr_in_operator_position(v, ctx.org):
         alltext = " ".join(p.text for p in v.pages)
@@ -2236,6 +2263,35 @@ def _orgnr_in_operator_position(v: Verdict, org: str) -> bool:
         if re.search(g, _operator_text(p)):
             return True
     return False
+
+
+_GROUP_CACHE: dict[str, set[str]] = {}
+
+
+async def _group_members(sp: "_Spend", ctx: CompanyContext) -> set[str]:
+    """Org numbers below us in the registry group structure, when we are the group's top parent (one Brreg
+    request, cached). Empty when we are not the root."""
+    if ctx.org in _GROUP_CACHE:
+        return _GROUP_CACHE[ctx.org]
+    members: set[str] = set()
+    if sp.can(1):
+        try:
+            snap = await sp.get(f"https://data.brreg.no/enhetsregisteret/api/konsernstruktur/{ctx.org}", robots=False,
+                                headers={"Accept": "application/json"})
+            tree = snap.json() if snap.status == 200 else {}
+        except (BudgetExhausted, _OutOfRequests):
+            raise
+        except Exception:
+            tree = {}
+        if tree.get("organisasjonsnummer") == ctx.org:
+            stack = list(tree.get("children") or [])
+            while stack:
+                n = stack.pop()
+                if n.get("organisasjonsnummer"):
+                    members.add(n["organisasjonsnummer"])
+                stack.extend(n.get("children") or [])
+    _GROUP_CACHE[ctx.org] = members
+    return members
 
 
 _HJEM_CACHE: dict[str, list[dict]] = {}
@@ -2477,18 +2533,52 @@ def parse_feed(raw: str) -> list[dict]:
     return out
 
 
+def _offset(local: str, gmt: str) -> str | None:
+    """The site's UTC offset from WordPress's local `date` and `date_gmt`, as +HH:MM."""
+    try:
+        diff = datetime.fromisoformat(local) - datetime.fromisoformat(gmt)
+    except ValueError:
+        return None
+    mins = int(diff.total_seconds() // 60)
+    if abs(mins) > 14 * 60:
+        return None
+    sign = "+" if mins >= 0 else "-"
+    return f"{sign}{abs(mins) // 60:02d}:{abs(mins) % 60:02d}"
+
+
+def _raw_field(raw: str, key: str, value: str, start: int = 0) -> tuple[str | None, int]:
+    """The exact bytes of a JSON field as served (e.g. '"date":"2026-01-02T10:00:00"'), and its position."""
+    for ascii_only in (True, False):
+        enc = json.dumps(value, ensure_ascii=ascii_only)[1:-1]
+        m = re.compile('"' + re.escape(key) + r'"\s*:\s*"' + re.escape(enc) + '"').search(raw, start)
+        if m:
+            return m.group(0), m.start()
+    return None, start
+
+
 def _wp_posts(raw: str) -> list[dict]:
+    """WordPress REST posts. The datetime is the post's own local time with the site's offset (from `date`
+    and `date_gmt`); spans are the raw JSON fields exactly as served."""
     try:
         rows = json.loads(raw)
     except ValueError:
         return []
     out = []
+    pos = 0
     for r in rows if isinstance(rows, list) else []:
-        title = _xml_text(((r.get("title") or {}).get("rendered")) or "")
-        gmt = r.get("date_gmt")
-        if title and r.get("link") and gmt:
-            out.append({"title": title, "url": r["link"], "datetime": f"{gmt}+00:00",
-                        "title_span": json.dumps({"date_gmt": gmt})[1:-1], "date_span": None})
+        rendered = ((r.get("title") or {}).get("rendered")) or ""
+        title = _xml_text(rendered)
+        local, gmt = r.get("date"), r.get("date_gmt")
+        if not (title and r.get("link") and (local or gmt)):
+            continue
+        off = _offset(local, gmt) if local and gmt else None
+        when = f"{local}{off}" if local and off else (f"{gmt}+00:00" if gmt else None)
+        if not when:
+            continue
+        tspan, tpos = _raw_field(raw, "rendered", rendered, pos)
+        dspan, dpos = _raw_field(raw, "date" if local and off else "date_gmt", local if local and off else gmt, pos)
+        pos = max(pos, tpos, dpos)
+        out.append({"title": title, "url": r["link"], "datetime": when, "title_span": tspan, "date_span": dspan})
     return out
 
 
@@ -2538,6 +2628,80 @@ def inline_news(page: Page) -> list[dict]:
     return out
 
 
+def _verbatim_core(raw: str, text: str) -> str | None:
+    """The longest phone-number or email-like core of a text window that occurs verbatim."""
+    for m in sorted(re.findall(r"[\w.+\-]+@[\w.\-]+\.[a-z]{2,}|\+?[\d][\d \u00a0.\-]{6,}\d", text), key=len, reverse=True):
+        v = verbatim(raw, m.strip())
+        if v:
+            return v
+    return None
+
+
+def verbatim(raw: str, text: str | None) -> str | None:
+    """`text` as it occurs in the raw response: itself, its HTML-escaped forms, or the raw <title> element of a
+    feed. None when no exact substring exists (the span must be copied from the saved bytes)."""
+    if not text:
+        return None
+    if text in raw:
+        return text
+    import html as _html
+    cands = {_html.escape(text, quote=False), _html.escape(text, quote=True),
+             text.replace("–", "&#8211;").replace("—", "&#8212;").replace("’", "&#8217;").replace("&", "&amp;"),
+             _html.escape(text, quote=False).replace("–", "&#8211;").replace("’", "&#8217;").replace("“", "&#8220;")
+             .replace("”", "&#8221;").replace("…", "&#8230;")}
+    named = text.replace("&", "&amp;").replace("–", "&ndash;").replace("—", "&mdash;").replace("’", "&rsquo;") \
+        .replace("‘", "&lsquo;").replace("“", "&ldquo;").replace("”", "&rdquo;").replace("«", "&laquo;") \
+        .replace("»", "&raquo;").replace("…", "&hellip;").replace("\u00a0", "&nbsp;")
+    cands |= {named, text.replace("/", "\\/"), json.dumps(text)[1:-1], json.dumps(text, ensure_ascii=False)[1:-1]}
+    for c in sorted(cands):
+        if c and c in raw:
+            return c
+    # a whitespace-tolerant match of the plain text, allowing HTML entities for punctuation
+    alts = {"–": "(?:–|&ndash;|&#8211;|&#x2013;)", "—": "(?:—|&mdash;|&#8212;|&#x2014;)",
+            "’": "(?:’|&rsquo;|&#8217;|&#x2019;)", "&": "(?:&|&amp;|&#038;|&#38;)", "…": "(?:…|&hellip;|&#8230;)",
+            "“": "(?:“|&ldquo;|&#8220;)", "”": "(?:”|&rdquo;|&#8221;)", "«": "(?:«|&laquo;)", "»": "(?:»|&raquo;)"}
+    parts = ["".join(alts.get(ch, re.escape(ch)) for ch in w) for w in text.split()]
+    if parts:
+        m = re.search(r"\s+".join(parts), raw)
+        if m:
+            return m.group(0)
+    return None
+
+
+DEMO_TITLES = re.compile(r"(?i)^(hello,? world!?|hei,? verden!?|build dream home|construction company|powerful modern idea|"
+                         r"sample post|sample page|blog post title|my first blog post|test post|testinnlegg|"
+                         r"eksempelinnlegg|post format.*|markup: .*|template: .*|lorem ipsum.*|"
+                         r"(the )?(best|top) \d+ .*(theme|template)s?|welcome to (my|our) (new )?(blog|website)|"
+                         r"just another .*|minimalist design|modern architecture|interior design ideas|"
+                         r"creative (agency|design)|business (consulting|growth|strategy)|digital marketing tips|"
+                         r"new project launch|our new office|project management|how to start a business|"
+                         r"tips for (a|your) .*|blog post \d+|news \d+|nyhet \d+|post \d+)$")
+
+
+def drop_demo(items: list[dict]) -> list[dict]:
+    """Theme demo content is not company news: drop known demo titles; if two or more demo titles appear the
+    whole list is a theme import and nothing is kept; a cluster of three or more of the site's oldest posts
+    published within ten minutes is an import too."""
+    demo = [it for it in items if DEMO_TITLES.match(it["title"].strip())]
+    if len(demo) >= 2:
+        return []
+    items = [it for it in items if it not in demo]
+    asc = sorted(items, key=lambda it: it["datetime"][:19])
+    if len(asc) >= 3:
+        def t(it):
+            try:
+                return datetime.fromisoformat(it["datetime"][:19])
+            except ValueError:
+                return None
+        first = t(asc[0])
+        cluster = [it for it in asc if first and t(it) and (t(it) - first).total_seconds() <= 600]
+        if len(cluster) >= 3 and len(cluster) == len(asc):
+            return []  # every post was created within minutes: a demo import
+        if len(cluster) >= 3:
+            items = [it for it in items if it not in cluster]
+    return items
+
+
 def _news_ok(item: dict, floor: str, domain: str) -> bool:
     day = item["datetime"][:10]
     today = datetime.now(timezone.utc).date().isoformat()
@@ -2582,7 +2746,7 @@ async def collect_dated_news(sp: "_Spend", ctx: CompanyContext, pages: list[Page
 
     if _is_wordpress(home) and sp.can(1):
         try:  # WordPress: the REST list gives the newest 20 posts in one request
-            snap = await sp.get(origin + "/wp-json/wp/v2/posts?per_page=20&_fields=title,link,date_gmt")
+            snap = await sp.get(origin + "/wp-json/wp/v2/posts?per_page=20&_fields=title,link,date,date_gmt")
             if snap.status == 200:
                 keep(clean_feed(_wp_posts(snap.content.decode("utf-8", "replace"))), snap)
         except (BudgetExhausted, _OutOfRequests):
@@ -2685,13 +2849,22 @@ async def collect_dated_news(sp: "_Spend", ctx: CompanyContext, pages: list[Page
         return
     if _activity_blocked(ctx, "dated_news"):
         return
-    ranked = sorted(found.values(), key=lambda x: (x[0]["datetime"][:19], x[0]["title"]), reverse=True)[:limit]
+    items = drop_demo([x[0] for x in found.values()])
+    if not items:
+        ctx.facts["website_news_demo"] = True
+        return
+    keep_urls = {it["url"] for it in items}
+    ranked = sorted((v for v in found.values() if v[0]["url"] in keep_urls),
+                    key=lambda x: (x[0]["datetime"][:19], x[0]["title"]), reverse=True)[:limit]
     for it, snap, _lp in ranked:
-        evs = [ctx.add_evidence(snap, source_class=COMPANY_OWNED, span=it["title_span"] or it["title"],
-                                effective_date=it["datetime"][:10], method="website_news_v2", licence=LICENCE)]
-        if it.get("date_span"):
-            evs.append(ctx.add_evidence(snap, source_class=COMPANY_OWNED, span=it["date_span"],
-                                        effective_date=it["datetime"][:10], method="website_news_v2", licence=LICENCE))
+        raw = snap.content.decode("utf-8", "replace")
+        spans = [verbatim(raw, it.get("title_span")) or verbatim(raw, it["title"]),
+                 verbatim(raw, it.get("date_span"))]
+        spans = [x for x in spans if x]
+        if not spans:
+            continue  # nothing quotable exactly from the saved response: do not publish
+        evs = [ctx.add_evidence(snap, source_class=COMPANY_OWNED, span=x, effective_date=it["datetime"][:10],
+                                method="website_news_v2", licence=LICENCE) for x in spans]
         ctx.add_claim("dated_news", "activity", f"{it['title']} ({it['datetime']})", evs, as_of=it["datetime"][:10],
                       match={"method": "verified_site_news", "detail": f"{it['url']} on the verified site"})
 
@@ -2714,8 +2887,8 @@ COMPANY_RECRUITING = re.compile(r"(?i)ledige stillinger|ledig stilling|vi søker
 
 
 RECRUITER_MARKS = re.compile(r"(?i)registrer (din )?cv|cv submission|executive search|headhunt|rekrutteringsbyrå|"
-                             r"for vår kunde|for våre kunder|på vegne av (vår|våre) kunde|vår oppdragsgiver|"
-                             r"our client|on behalf of (our|a) client|bemanning|vikarbyrå|utvalgte kunder|kandidater")
+                             r"søker (vi )?(etter )?(\w+ )?for (vår|våre) kunder?|på vegne av (vår|våre) kunde|vår oppdragsgiver|"
+                             r"our client|on behalf of (our|a) client|vikarbyrå|bemanningsbyrå|utvalgte kunder")
 OWN_HIRING = re.compile(r"(?i)jobb(e)? hos oss|jobbe i |bli en av oss|bli med på laget|ny kollega|nye kollegaer|"
                         r"join (our|the) team|work (with|at) us|vi ansetter|vi har ledig")
 FILLED = re.compile(r"(?i)besatt|besatte|avsluttet|filled|closed|utløpt|expired")
@@ -2888,8 +3061,12 @@ async def fetch_website(f: Fetcher, ctx: CompanyContext) -> None:
     if proven:
         ctx.module_states["website"] = "available"
         return
-    if budget_note == "budget_exhausted":
-        ctx.mark("official_website", SECTION, "failed", note="budget_exhausted")
+    unchecked = cands[len(verdicts):] + [(v.domain, v.source, None) for v in verdicts if v.status == "skipped_budget"]
+    run_short = f.budget.remaining_requests() <= RESERVE + 2 or f.budget.remaining_seconds() < 10
+    declared_left = [d for d, src, _ in unchecked if src in ("registry", "email") or src.startswith("seed:")]
+    if budget_note == "budget_exhausted" or (budget_note and (run_short or declared_left)):
+        ctx.mark("official_website", SECTION, "failed",
+                 note="budget_exhausted: not checked " + ", ".join(d for d, _s, _u in unchecked[:5]))
         ctx.module_states["website"] = "failed"
         return
 

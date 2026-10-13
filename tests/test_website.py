@@ -64,6 +64,7 @@ def offline_dns(monkeypatch):
     W._NAME_SEARCH.clear()
     W._ROW_CACHE.clear()
     W._HJEM_CACHE.clear()
+    W._GROUP_CACHE.clear()
 
 
 def ctx_for(**rec) -> CompanyContext:
@@ -1220,13 +1221,19 @@ def test_shared_registry_website_with_orgnr_on_privacy_page_and_other_never_name
 
 def test_wordpress_rest_posts_first_and_feed_page_two():
     wp = json.dumps([{"title": {"rendered": f"Sak nummer {i}"}, "link": f"https://fjellbekk.no/sak-{i}/",
+                      "date": f"2026-0{1 + i % 8}-1{i % 9}T12:00:00",
                       "date_gmt": f"2026-0{1 + i % 8}-1{i % 9}T10:00:00"} for i in range(12)])
     body = f'<link href="/wp-content/a.css"><footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>'
-    f = _site({"https://fjellbekk.no/wp-json/wp/v2/posts?per_page=20&_fields=title,link,date_gmt": (200, wp, "application/json")},
-              body=body)
+    f = _site({"https://fjellbekk.no/wp-json/wp/v2/posts?per_page=20&_fields=title,link,date,date_gmt":
+               (200, wp, "application/json")}, body=body)
     ctx = ctx_for(hjemmeside="fjellbekk.no")
     run(f, ctx)
-    assert len([c for c in ctx.claims if c.field == "dated_news"]) == 12
+    news = [c for c in ctx.claims if c.field == "dated_news"]
+    assert len(news) == 12
+    assert all(c.value.endswith("T12:00:00+02:00)") for c in news)  # the site's own local time and offset
+    for c in news:  # every span is an exact substring of the saved response
+        for e in (e for e in ctx.evidence if e.id in c.evidence_ids):
+            assert e.claim_span in ctx.snapshots[e.id].content.decode()
 
 
 def test_squarespace_blog_collection_feed():
@@ -1339,3 +1346,77 @@ def test_email_span_is_verbatim_in_the_snapshot():
     ev = next(e for e in ctx.evidence if e.id in claims["site_contact_email"].evidence_ids)
     raw = ctx.snapshots[ev.id].content.decode()
     assert ev.claim_span in raw
+
+
+# ---------------------------------------------------------------- red-team review fixes
+def test_theme_demo_posts_are_not_news():
+    head = '<link rel="alternate" type="application/rss+xml" href="/feed/">'
+    rss = ('<rss><channel>'
+           + "".join(f'<item><title>{t}</title><link>https://fjellbekk.no/{i}/</link><pubDate>Thu, 16 Dec 2021 06:1{i}:24 +0000'
+                     f'</pubDate></item>' for i, t in enumerate(["Build Dream Home", "Construction Company", "Powerful Modern Idea"]))
+           + '</channel></rss>')
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(_site({"https://fjellbekk.no/feed/": (200, rss, "application/rss+xml")}, head=head), ctx)
+    assert not ctx.claims_for("dated_news")
+    items = [{"title": f"Sak {i}", "datetime": f"2021-12-16T06:1{i}:00+00:00", "url": f"u{i}"} for i in range(3)]
+    assert W.drop_demo(items) == []  # every post created within minutes: an import
+    later = items + [{"title": "Ny avdeling", "datetime": "2023-05-01T10:00:00+02:00", "url": "u9"}]
+    assert [x["title"] for x in W.drop_demo(later)] == ["Ny avdeling"]
+
+
+def test_feed_spans_are_exact_raw_text_with_entities():
+    head = '<link rel="alternate" type="application/rss+xml" href="/feed/">'
+    rss = ('<rss><channel><item><title><![CDATA[Gran &#038; Ekran bygger demning]]></title>'
+           '<link>https://fjellbekk.no/demning/</link><pubDate>Wed, 30 Oct 2019 09:48:15 +0100</pubDate></item></channel></rss>')
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(_site({"https://fjellbekk.no/feed/": (200, rss, "application/rss+xml")}, head=head), ctx)
+    c = ctx.claims_for("dated_news")[0]
+    assert c.value == "Gran & Ekran bygger demning (2019-10-30T09:48:15+01:00)"
+    for e in (e for e in ctx.evidence if e.id in c.evidence_ids):
+        assert e.claim_span in ctx.snapshots[e.id].content.decode()
+
+
+def test_group_parent_keeps_its_site_when_others_are_its_subsidiaries():
+    """Equinor shape: the parent's site prints a subsidiary's org number; the parent keeps its derived facts."""
+    body = (f'<footer>Fjellbekk Trevare ASA · Org.nr {OURS} · Fjellbekk Energi AS org.nr {OTHER}'
+            '<a href="mailto:post@fjellbekk.no">x</a></footer>')
+    tree = json.dumps({"organisasjonsnummer": OURS, "navn": "FJELLBEKK TREVARE ASA",
+                       "children": [{"organisasjonsnummer": OTHER, "navn": "FJELLBEKK ENERGI AS", "children": []}]})
+    pages = {"https://fjellbekk.no/": (200, html(body)),
+             f"https://data.brreg.no/enhetsregisteret/api/konsernstruktur/{OURS}": (200, tree, "application/json")}
+    claims = run(FakeFetcher(pages), ctx_for(navn="FJELLBEKK TREVARE ASA", hjemmeside="fjellbekk.no"))
+    assert claims["site_contact_email"].value == "post@fjellbekk.no"
+    # a company that is not in our group still makes the site non-exclusive
+    W._GROUP_CACHE.clear()
+    tree2 = json.dumps({"organisasjonsnummer": OURS, "children": [{"organisasjonsnummer": THIRD, "children": []}]})
+    pages[f"https://data.brreg.no/enhetsregisteret/api/konsernstruktur/{OURS}"] = (200, tree2, "application/json")
+    claims2 = run(FakeFetcher(pages), ctx_for(navn="FJELLBEKK TREVARE ASA", hjemmeside="fjellbekk.no"))
+    assert claims2["site_contact_email"].availability == "ambiguous"
+
+
+def test_proxy_mode_skips_dns_and_tcp_prechecks(monkeypatch):
+    monkeypatch.setenv("HTTPS_PROXY", "http://proxy.example:3128")
+    monkeypatch.setattr(W, "resolves", _real_resolves)
+
+    async def boom(*a, **k):
+        raise AssertionError("direct DNS must not be used behind a proxy")
+    monkeypatch.setattr(W.dns.asyncresolver, "resolve", boom)
+    assert asyncio.run(W.resolves(FakeFetcher({}), "fjellbekk.no")) is True
+    assert asyncio.run(W.reachable("fjellbekk.no")) is True
+
+
+def test_budget_exhaustion_is_failed_not_absence():
+    f = FakeFetcher({})
+    f.budget.max_requests = 2  # the run budget is nearly spent before the registry website is checked
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    claims = run(f, ctx)
+    assert claims["official_website"].availability == "failed"
+    assert claims["official_website"].note.startswith("budget_exhausted")
+
+
+def test_ordinary_company_text_about_customers_is_not_a_recruiter_mark():
+    body = f'<a href="/ledige-stillinger/">Ledige stillinger</a><footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>'
+    jobs = html("<h1>Ledige stillinger</h1><p>Vi lager dører for våre kunder. Vi søker en snekker.</p>")
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(_site({"https://fjellbekk.no/ledige-stillinger/": (200, jobs)}, body=body), ctx)
+    assert ctx.claims_for("hiring_signal")
