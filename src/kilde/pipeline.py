@@ -268,12 +268,21 @@ async def run_batch(orgs: list[str], opt: Options) -> tuple[list[dict], dict]:
     # results stable between runs (Builderr runs each entry twice and compares the facts).
     async def retry_website(ctx: CompanyContext) -> None:
         async with retry_sem:
-            ctx.claims[:] = [c for c in ctx.claims if not (c.field == "official_website" and c.availability == "failed")]
+            ctx.claims[:] = [c for c in ctx.claims if not (c.section == "web_presence" and c.availability == "failed")]
             ctx.module_states.pop("website", None)
             await _step(ctx, "website", lambda: website.fetch_website(f, ctx), "official_website", "web_presence", timeout=120)
 
     retry_sem = asyncio.Semaphore(8)
-    retry = [c for c in ctxs.values() if c.module_states.get("website") == "timeout"]
+    def needs_retry(c: CompanyContext) -> bool:
+        if c.module_states.get("website") == "timeout":
+            return True
+        # Slow or flaky sites can use up the per-site request cap before the declared candidates are
+        # checked; give those one more attempt while the run budget still has room.
+        return c.module_states.get("website") == "failed" and any(
+            x.field == "official_website" and x.availability == "failed" and (x.note or "").startswith("budget_exhausted")
+            for x in c.claims) and budget.remaining_requests() > 200
+
+    retry = [c for c in ctxs.values() if needs_retry(c)]
     if website and retry and time.monotonic() < deadline_b - 60:
         await guarded(asyncio.gather(*(retry_website(c) for c in retry)), budget.started + opt.seconds * 0.97)
     batch_info["website_retries"] = len(retry)

@@ -1441,3 +1441,25 @@ def test_phone_span_contains_the_phone_not_a_neighbouring_email():
     c = claims["site_contact_phone"]
     span = next(e.claim_span for e in ctx.evidence if e.id in c.evidence_ids)
     assert "977 50 160" in span and "@" not in span
+
+
+def test_spans_are_exact_bytes_on_a_latin1_page():
+    """Fenconor shape: a page served as ISO-8859-1; every span's UTF-8 bytes must occur in the saved bytes."""
+    page = ('<html><head><meta charset="iso-8859-1"><title>: : Fjellbekk Trevare : :</title>'
+            '<meta name="keywords" content="fendere, pullert, kjøkken, bøyer"></head><body>'
+            f'<h1>Fjellbekk Trevare</h1><p>Kjøkken og bad i Testby</p><footer>Fjellbekk Trevare AS · Org.nr {OURS} · '
+            'Tlf 41 00 00 01 · <a href="mailto:post@fjellbekk.no">post@fjellbekk.no</a></footer></body></html>')
+
+    class Latin1Fetcher(FakeFetcher):
+        async def get(self, url, **kw):
+            snap = await super().get(url, **kw)
+            snap.content = page.encode("latin-1") if url.startswith("https://fjellbekk.no/") else snap.content
+            return snap
+    f = Latin1Fetcher({"https://fjellbekk.no/": (200, page, "text/html; charset=iso-8859-1")})
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(f, ctx)
+    assert ctx.claims_for("official_website")
+    for e in ctx.evidence:
+        snap = ctx.snapshots.get(e.id)
+        if snap is not None and e.claim_span:
+            assert e.claim_span.encode("utf-8") in snap.content, e.claim_span

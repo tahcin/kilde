@@ -1243,6 +1243,44 @@ def _span_with_value(page: Page, span: str, phone: str) -> str:
     return m.group(0) if m and digits in re.sub(r"\D", "", m.group(0)) else span
 
 
+def bytes_exact(snap: Snapshot | None, span: str | None, prefer: str = "") -> str | None:
+    """A span whose UTF-8 bytes occur in the saved response. Pages in another charset (Latin-1) store bytes
+    that differ for non-ASCII text, so fall back to the longest ASCII run of the span that is in the bytes,
+    preferring one that holds `prefer` (e.g. the number a phone claim is about)."""
+    if not span or snap is None:
+        return span
+    raw = snap.content
+    if span.encode("utf-8") in raw:
+        return span
+    try:
+        raw.decode("utf-8")
+        return span  # a UTF-8 page: the pipeline maps text spans onto the saved bytes
+    except UnicodeDecodeError:
+        pass
+    runs = [r.strip() for r in re.split(r"[^\x20-\x7e\n\t]+", span) if len(r.strip()) >= 4]
+    found = [r for r in runs if r.encode("utf-8") in raw]
+    if not found:
+        # text windows cross tags: take the longest run of consecutive words that occurs in the bytes
+        for r in runs:
+            words = r.split()
+            for size in range(len(words), 0, -1):
+                for i in range(len(words) - size + 1):
+                    cand = " ".join(words[i:i + size])
+                    if len(cand) >= 4 and cand.encode("utf-8") in raw:
+                        found.append(cand)
+                        break
+                if found and len(found[-1].split()) == size:
+                    break
+    runs = found
+    if not runs:
+        return span
+    if prefer:
+        hit = [r for r in runs if prefer in re.sub(r"\D", "", r) or prefer in r]
+        if hit:
+            return max(hit, key=len)
+    return max(runs, key=len)
+
+
 def _ev(ctx: CompanyContext, page: Page, span: str | None, method: str = EXTRACT,
         effective: str | None = None, note: str | None = None) -> Evidence:
     if span:
@@ -1251,6 +1289,7 @@ def _ev(ctx: CompanyContext, page: Page, span: str | None, method: str = EXTRACT
             import html as _html
             span = (verbatim(raw, span) or verbatim(raw, _html.unescape(span))
                     or _verbatim_core(raw, span) or span)
+    span = bytes_exact(page.snap, span)
     return ctx.add_evidence(page.snap, source_class=COMPANY_OWNED, span=span, method=method, licence=LICENCE,
                             effective_date=effective, note=note)
 
@@ -2356,7 +2395,8 @@ def emit_site(ctx: CompanyContext, v: Verdict, scope: Scope | None = None) -> li
     domain = bare(home.host)
     scope = scope or Scope(ctx.org, name_words((ctx.registry or {}).get("navn") or ""))
     url = canonical_url(home)
-    proof_evs = [ctx.add_evidence(p.snap, source_class=COMPANY_OWNED, span=s, method=METHOD, licence=LICENCE)
+    proof_evs = [ctx.add_evidence(p.snap, source_class=COMPANY_OWNED, span=bytes_exact(p.snap, s, ctx.org),
+                                  method=METHOD, licence=LICENCE)
                  for p, s in v.proof]
     conf = 0.99 if v.method == "orgnr_on_page" else 0.9
     m = {"method": v.method, "detail": v.detail or ""}
@@ -2411,7 +2451,7 @@ def emit_site(ctx: CompanyContext, v: Verdict, scope: Scope | None = None) -> li
     lang = home.soup.find("html")
     if lang and lang.get("lang"):
         ctx.add_claim("site_language", SECTION, lang["lang"].strip()[:12],
-                      _ev(ctx, home, f'<html lang="{lang["lang"].strip()[:12]}">'), match=site_match)
+                      _ev(ctx, home, f'lang="{lang["lang"].strip()[:12]}"'), match=site_match)
 
     reg_mail = ((ctx.registry or {}).get("epostadresse") or "@").rsplit("@", 1)[1].lower()
     emails, phones, skipped = extract_contacts(v.pages, domain, _digits_phones(ctx.registry or {}), scope,
@@ -2887,7 +2927,7 @@ async def collect_dated_news(sp: "_Spend", ctx: CompanyContext, pages: list[Page
         spans = [x for x in spans if x]
         if not spans:
             continue  # nothing quotable exactly from the saved response: do not publish
-        evs = [ctx.add_evidence(snap, source_class=COMPANY_OWNED, span=x, effective_date=it["datetime"][:10],
+        evs = [ctx.add_evidence(snap, source_class=COMPANY_OWNED, span=bytes_exact(snap, x), effective_date=it["datetime"][:10],
                                 method="website_news_v2", licence=LICENCE) for x in spans]
         ctx.add_claim("dated_news", "activity", f"{it['title']} ({it['datetime']})", evs, as_of=it["datetime"][:10],
                       match={"method": "verified_site_news", "detail": f"{it['url']} on the verified site"})
@@ -3120,7 +3160,8 @@ async def fetch_website(f: Fetcher, ctx: CompanyContext) -> None:
     for v in verdicts:
         if v.status == "related" and v.pages and v.source in ("registry", "email"):
             num, (p, s) = next(iter(v.others.items()))
-            ev = ctx.add_evidence(p.snap, source_class=COMPANY_OWNED, span=s, method=METHOD, licence=LICENCE)
+            ev = ctx.add_evidence(p.snap, source_class=COMPANY_OWNED, span=bytes_exact(p.snap, s), method=METHOD,
+                                  licence=LICENCE)
             ctx.add_claim("related_website", SECTION, {"url": canonical_url(v.pages[0]), "other_organisation_number": num},
                           ev, availability="ambiguous", confidence=0.0,
                           note=f"the registry {'website' if v.source == 'registry' else 'email'} points to this "
