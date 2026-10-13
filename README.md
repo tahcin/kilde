@@ -47,7 +47,7 @@ Options: `--previous <envelopes.jsonl>` (refresh against an earlier run), `--sta
   "legal_name": "...",
   "sections": {"identity": {"state": "available", "claim_ids": ["c1"]}, "financials": {}, "leadership": {},
                "locations": {}, "web_presence": {}, "hiring": {}, "activity": {}},
-  "claims": [{"id": "c1", "field": "official_website", "section": "web_presence", "value": "https://...",
+  "claims": [{"id": "c1", "field": "official_website", "section": "web_presence", "value": "example.no",
               "availability": "available", "confidence": 0.99, "as_of": "2026-10-13",
               "match": {"method": "orgnr_on_page", "detail": "..."}, "evidence_ids": ["e4"]}],
   "evidence": [{"id": "e4", "source_url": "https://...", "source_class": "company_owned", "retrieved_at": "...",
@@ -62,6 +62,8 @@ Options: `--previous <envelopes.jsonl>` (refresh against an earlier run), `--sta
 
 Availability states: `available`, `not_available` (checked, nothing there), `blocked` (robots.txt or the source refused), `not_applicable`, `ambiguous` (could not prove it is this company), `failed` (source error, timeout or budget). The seven sections follow the brief: identity and public brand, latest accounts and history, leadership and workplaces, verified website and company-owned profiles, hiring, dated public activity, and refresh changes.
 
+Values in the four external families use Builderr's published shapes: `official_website` is the registered domain (`example.no`, full address in `official_website_url`), `social_profile` is `platform.com/handle` in lower case without scheme or `www`, `hiring_signal` is a careers page or job posting URL, and `dated_news` is `title (datetime)` with the source's own datetime and offset. NAV ads are `job_ad` claims.
+
 `claim_span` is always copied verbatim from the saved snapshot (`span_exact: true`), so it can be found with a plain text search. JSON evidence quotes the exact `"key":value` pair, scoped to the right record; extra supporting quotes are in `span_context`.
 
 ## Sources
@@ -70,27 +72,33 @@ Availability states: `available`, `not_available` (checked, nothing there), `blo
 |---|---|---|---|
 | Brønnøysund Enhetsregisteret API | identity, legal form, addresses, industry, sector, registered employees, share capital, register memberships, status flags, registry website, email and phone, group parent and subsidiaries, sub-units (workplaces), roles (general manager, board, auditor, accountant), signature rules | org number in the endpoint | NLOD 2.0, open API, no key |
 | Brønnøysund update feed | dated registry changes in the last 12 months, with the fields that changed | org number filter | NLOD 2.0 |
-| Regnskapsregisteret API | filed accounts for the last three years: revenue, operating result, salary costs, profit before tax, annual result, total assets, cash, equity, debt, audit status; annual-report PDF list | org number in the endpoint | NLOD 2.0 |
-| The company's own website | official website, description, contact email and phone, social profiles it links to, structured data, sitemap dates, careers page | the site prints the org number, or shows the registry phone, or the full registered address with the company name, or is the registry-listed website and shows the name | company-owned pages; robots.txt obeyed (RFC 9309), at most about 8 requests per company |
-| NAV job ads (pam-stilling-feed) | active job ads with title, location, published and expiry dates | employer org number in the ad | NAV terms of use, public token |
+| Regnskapsregisteret API | filed accounts for the last three years: revenue, operating result, salary costs, profit before tax, annual result, total assets, cash, equity, debt, audit status; list of filed annual-report PDFs | org number in the endpoint | NLOD 2.0 |
+| The company's own website | official website, contact email and phone, social profiles it links to, dated news posts, careers page or job postings, description | the site prints the org number, or shows the registry phone or the full registered address with the company name, or is the registry-listed website and shows the name; then exclusivity and name-collision checks (below) | company-owned pages; robots.txt obeyed (RFC 9309), at most 16 requests per company |
+| NAV job ads (pam-stilling-feed) | active job ads with title, location, published and expiry dates | employer org number in the ad (workplace numbers mapped to the parent through Enhetsregisteret) | NAV API terms; public token fetched at run time |
+| TED (EU procurement journal) | public contracts won, procurement notices published as a buyer | winner or buyer national ID equals the org number | free reuse of TED notices |
+| Research Council of Norway, SkatteFUNN | funded research and innovation projects and approved SkatteFUNN projects | project owner org number | NLOD 2.0 (Research Council open data); SkatteFUNN lists published by the Research Council |
+| Støtteregisteret (Brønnøysund) | state aid awards with date, amount, authority and scheme | recipient org number | NLOD 2.0 |
+| Mattilsynet Smilefjes | food safety inspections with date and result | org number of the inspected premises (workplace numbers mapped to the parent) | CC BY 4.0; downloaded fresh each run |
+| DiBK sentral godkjenning | central approval for construction work, validity and areas | org number in the register page URL | public register page (robots.txt allows `/enterprises/`) |
 | GLEIF | LEI, status, renewal date, direct and ultimate parents | `registeredAs` equals the org number | CC0 |
-| Finanstilsynet registry API | financial-sector licences | org number field in the record | open API |
+| Finanstilsynet registry API | financial-sector licences and agent registrations | org number field in the record | open API |
 | Wikidata (via QLever, then EntityData JSON) | ticker, ISIN, website, socials, employees for larger firms | P2333 equals the org number | CC0; robots-compliant route |
 | SSB Klass (bundled) | readable names for industry, sector and legal-form codes | code lookup | CC BY 4.0 |
 
-Not used: aggregators whose terms forbid automated copying (Proff, Forvalt, 1881, Gule Sider, regnskapstall, OpenCorporates), search-engine result pages, Brønnøysund announcement pages (robots.txt disallows them), and LinkedIn, Meta, Glassdoor or Indeed scraping. Social profiles are reported only when the verified company site links to them; Kilde never crawls the platforms.
+Not used: aggregators whose terms forbid automated copying (Proff, Forvalt, 1881, Gule Sider, regnskapstall, OpenCorporates), search-engine result pages, Brønnøysund announcement pages (robots.txt disallows them), NAV's internal search, DiBK's `/api/` path (robots.txt disallows it), and LinkedIn, Meta, Glassdoor or Indeed scraping. Social profiles are reported only when the verified company site links to them; Kilde never crawls the platforms.
 
-Contains data under the Norwegian licence for Open Government data (NLOD) distributed by Brønnøysundregistrene. Code names come from Statistics Norway (SSB), Klass, licensed CC BY 4.0. Personal names are shown only as registered roles of the company looked up; birth dates are dropped.
+Contains data under the Norwegian licence for Open Government data (NLOD) distributed by Brønnøysundregistrene. Code names come from Statistics Norway (SSB), Klass, licensed CC BY 4.0. Website candidate seeds contain information from OpenStreetMap (© OpenStreetMap contributors, ODbL 1.0) and Overture Maps (CDLA-Permissive 2.0). Personal names are shown only as registered roles of the company looked up; birth dates are dropped.
 
 ## How a company match is proven
 
-1. Registry, accounts and update-feed facts come from endpoints keyed by the org number.
-2. A website is published only with proof on the site itself: our org number, the registry phone number, or the full registered street address and postcode together with the company name, or it is the registry-listed website and shows the name. Error, parked and for-sale pages never count.
-3. A site that prints another company's org number and not ours (a housing-co-op manager, parent or accountant) is reported as a related site with that number, never as the official site.
-4. Social profiles come only from links on a verified site, and only when the handle carries the company's name or domain or sits in the site's header, footer or structured data.
-5. Job ads, LEI records, licences and Wikidata items match on an org-number field.
-6. Financial figures are copied exactly as filed, with currency, period and account type (company or group). Kilde never computes, converts or estimates a figure.
-7. When proof is missing the field is `ambiguous` or `not_available`. Abstaining is preferred to guessing.
+1. Registry, accounts, update-feed, state-aid, procurement, research, inspection, approval, LEI and licence facts come from records keyed by the org number.
+2. A website is published only with proof on the site itself: our org number, or the registry phone in a block naming the company, or the full registered address with the company name, or it is the registry-listed website and shows the name. Error, parked, for-sale and placeholder pages never count.
+3. Any proof other than our org number triggers a Brønnøysund name-collision search: if another active company shares the distinctive name, address or phone, the site is `ambiguous`. Housing co-ops and owners' associations get a website only from their org number on the page or their own registry entry.
+4. Facts taken from a website (contacts, social profiles, news, careers pages) are published only when the site is exclusive to the company: no other org number of any country on fetched pages, no other registered company in an operator position (header, footer, contact, privacy controller, copyright), no redirect into another company's domain, and no other company declaring the same site in the registry unless our org number sits in an operator position. Otherwise only the website itself is published and the rest is `ambiguous` with the reason.
+5. An independent publication gate re-checks every derived fact against the registry before output (domain carries the company's name or is its registry website or email domain, foreign country-code domains, contact emails on the site's or registry's domain, foreign phones only when they equal the registry phone).
+6. Social profiles come only from links on an exclusive verified site; placeholder handles and profiles naming another registered company are rejected.
+7. Financial figures are copied exactly as filed, with currency, period and account type (company or group). Kilde never computes, converts or estimates a figure. A summary sentence uses one account type only.
+8. When proof is missing the field is `ambiguous` or `not_available`. Abstaining is preferred to guessing.
 
 ## Refresh
 
@@ -98,7 +106,9 @@ Every run can diff against the previous envelopes (`--previous`, or automaticall
 
 ## Budget and cost
 
-Every request goes through one budgeted client. Defaults: 20 outbound HTTP requests per company and 45 minutes per batch, both configurable. Identity, roles, accounts and workplaces for every company run first; external sources share what is left, and every step has a timeout, so a slow website cannot stall the batch. When time or requests run out, the remaining facts are marked `failed` with the reason and every envelope is still written.
+Every request goes through one budgeted client. Defaults: 20 outbound HTTP requests per company and 45 minutes per batch, both configurable. Identity, roles, accounts and workplaces for every company run first; external sources share what is left. Each step has a timeout; a step that times out rolls back anything it published half-way, and timed-out website steps get one unhurried second pass. DNS or network failures are reported as `failed`, never as absence. When time or requests run out, the remaining facts are marked `failed` with the reason and every envelope is still written.
+
+Measured: 1,000 random universe companies in about 16 minutes and about 10 requests per company. Two runs of the same batch produce identical facts (Builderr runs each entry twice and compares).
 
 | Item | Cost |
 |---|---|
@@ -108,7 +118,19 @@ Every request goes through one budgeted client. Defaults: 20 outbound HTTP reque
 
 ## Caches
 
-No precomputed profiles are shipped. `KILDE_CACHE_DIR` turns on a local HTTP cache for development only; it is off by default and cached responses keep their original retrieval time.
+Kilde ships declared caches of public data, each with a script that rebuilds it. Every cached fact keeps its source, original retrieval time and hash; facts that can change are re-checked live during the run where the source allows it.
+
+| File | What it holds | Rebuild | Live refresh during the run |
+|---|---|---|---|
+| `src/kilde/data/nav_jobs_index.json.gz` | active NAV job ads by company org number | `scripts/build_nav_index.py` | new feed pages since the index date, and each matched ad re-fetched (stopped ads are never shown) |
+| `src/kilde/data/ted.json.gz` | TED notices with Norwegian org numbers as winner or buyer | `scripts/build_ted.py` | recent notices fetched |
+| `src/kilde/data/smilefjes.json.gz` | place-to-company mapping for Smilefjes | `scripts/build_smilefjes.py` | the inspection file is downloaded fresh every run |
+| `src/kilde/data/forskningsradet.json.gz` | Research Council projects and SkatteFUNN approvals | `scripts/build_forskningsradet.py` | newer lists fetched when published |
+| `src/kilde/data/stotteregisteret.json.gz` | state aid awards since 2021 for universe companies | `scripts/build_stotteregisteret.py` | none (the full export is 306 MB) |
+| `src/kilde/data/website_seeds.json.gz` | candidate website domains (OSM, Overture, sub-units, NAV, Wikidata); candidates only, never published without live proof | `scripts/build_website_seeds.py` | every candidate is fetched and proven live |
+| `src/kilde/data/codes.json` | SSB code names | `scripts/build_codes.py` | none needed |
+
+`KILDE_CACHE_DIR` turns on a local HTTP cache for development only; it is off by default.
 
 ## Tests and evaluation
 
@@ -121,8 +143,10 @@ uv run python scorer/score.py --envelopes out/envelopes.jsonl --expected-count 1
 
 ## Limitations
 
-- Small companies often have no website, and many sites do not print the org number, so the website family is the main gap. Kilde chooses to miss a site rather than publish one it cannot prove.
+- Small companies often have no website, and many sites do not print the org number, so the website family is the main gap. Kilde chooses to miss a site rather than publish one it cannot prove, and withholds facts from shared or group sites.
+- No search engine is used (official runs cannot use entrant keys), so websites are found only from the registry, the registry email domain, name-derived domains and open-data candidates.
 - Regnskapsregisteret's open API returns the last three filed years and is labelled temporary by Brønnøysund; banks and insurers are not covered by it.
+- NAV, TED, Støtteregisteret and the Research Council cover only companies that appear in them, so most small companies have none of these facts.
 - Wikidata and GLEIF cover mainly larger companies.
 
 ## Licence
