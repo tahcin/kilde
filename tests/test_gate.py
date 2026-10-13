@@ -102,3 +102,14 @@ def test_tidy_dedupes_and_strips_markup():
     gate.tidy(ctx)
     assert len([c for c in ctx.claims if c.field == "social_profile"]) == 1
     assert [c.value for c in ctx.claims if c.field == "website_description"] == ["Vi lager gode rør."]
+
+
+def test_template_posts_are_withheld_as_news_and_page_updates():
+    ctx = ctx_with("https://www.fjelltopp.no/", {"navn": "FJELLTOPP AS"},
+                   [("dated_news", "Hello world! (2026-01-02T10:00:00+00:00)"),
+                    ("site_page_updated", {"url": "https://www.fjelltopp.no/post/this-is-your-first-post", "lastmod": "2026-01-02"}),
+                    ("dated_news", "Velkommen til bloggen (2026-01-02)"),
+                    ("dated_news", "Ny hall åpnet (2026-01-03)")])
+    gate.check(ctx)
+    got = [(c.value, c.availability) for c in ctx.claims if c.field != "official_website"]
+    assert got == [(None, "ambiguous"), (None, "ambiguous"), (None, "ambiguous"), ("Ny hall åpnet (2026-01-03)", "available")]

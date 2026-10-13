@@ -1685,3 +1685,178 @@ def test_rate_limited_candidate_is_a_transient_failure():
     claims = run(FakeFetcher(pages), ctx)
     assert claims["official_website"].availability == "failed"
     assert ctx.module_states["website"] == "timeout"
+
+
+# ---------------------------------------------------------------- v2: more dated news and hiring signals
+def _news(ctx):
+    return [c.value for c in ctx.claims if c.field == "dated_news" and c.availability == "available"]
+
+
+def test_template_posts_are_never_news_or_page_updates():
+    from kilde import gate
+    for t in ("Hello world!", "This is your first post", "This Is the Title of Your First Post", "Welcome to your blog",
+              "Velkommen til bloggen", "Design a Stunning Blog", "Lorem ipsum dolor sit amet", "Sample Page"):
+        assert gate.template_post(t, None), t
+    for u in ("https://x.no/post/this-is-your-first-post", "https://x.no/hello-world/", "https://x.no/sample-page/",
+              "https://x.no/blog/welcome-to-your-blog-2", "https://x.no/velkommen-til-bloggen/"):
+        assert gate.template_post(None, u), u
+    for t, u in (("Velkommen til vår nye butikk i Testby", "https://x.no/nyheter/ny-butikk"),
+                 ("Our first post-pandemic fair", "https://x.no/blog/first-fair")):
+        assert not gate.template_post(t, u)
+    head = '<link rel="alternate" type="application/rss+xml" href="/blog-feed.xml">'
+    rss = ('<rss><channel>'
+           '<item><title>This Is Your First Post</title><link>https://fjellbekk.no/post/this-is-your-first-post</link>'
+           '<pubDate>Mon, 02 Mar 2026 10:00:00 +0000</pubDate></item>'
+           '<item><title>Velkommen til bloggen</title><link>https://fjellbekk.no/post/velkommen</link>'
+           '<pubDate>Mon, 02 Feb 2026 10:00:00 +0000</pubDate></item>'
+           '<item><title>Nytt verksted i Testby</title><link>https://fjellbekk.no/post/nytt-verksted</link>'
+           '<pubDate>Tue, 03 Mar 2026 10:00:00 +0000</pubDate></item></channel></rss>')
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(_site({"https://fjellbekk.no/blog-feed.xml": (200, rss, "application/rss+xml")}, head=head), ctx)
+    assert _news(ctx) == ["Nytt verksted i Testby (2026-03-03T10:00:00+00:00)"]
+
+
+def test_wordpress_plain_permalink_posts_are_news():
+    head = '<link rel="alternate" type="application/rss+xml" href="/?feed=rss2">'
+    rss = ('<rss><channel><item><title>Har skapt mange nye arbeidsplasser</title><link>https://fjellbekk.no/?p=1042</link>'
+           '<pubDate>Mon, 06 May 2024 08:08:04 +0000</pubDate></item>'
+           '<item><title>Om oss</title><link>https://fjellbekk.no/?page_id=2</link>'
+           '<pubDate>Mon, 06 May 2024 08:08:04 +0000</pubDate></item></channel></rss>')
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(_site({"https://fjellbekk.no/?feed=rss2": (200, rss, "application/rss+xml")}, head=head), ctx)
+    assert _news(ctx) == ["Har skapt mange nye arbeidsplasser (2024-05-06T08:08:04+00:00)"]
+
+
+def test_slash_dates_read_only_in_the_order_the_page_uses():
+    def page(body, lang="nb"):
+        return W.parse_page(Snapshot("https://x.no/", "https://x.no/", 200, utc_now(),
+                                     f'<html lang="{lang}"><body>{body}</body></html>'.encode(), "text/html"))
+    assert W.slash_order(page("<p>20/04/2026</p><p>3/4/2026</p>", "en")) == "dmy"
+    assert W.slash_order(page("<p>7/30/2026</p><p>3/4/2026</p>")) == "mdy"
+    assert W.slash_order(page("<p>3/4/2026</p>")) == "dmy"           # Norwegian page, nothing decisive
+    assert W.slash_order(page("<p>3/4/2026</p>", "en")) is None      # English page, nothing decisive: unread
+    assert W.slash_order(page("<p>20/04/2026</p><p>7/30/2026</p>")) is None  # mixed: unread
+    listing = html('<h1>Aktuelle saker</h1>'
+                   '<div class="item"><span>20/04/2026 - mra</span><h3><a href="/b/protokoll-2026">Protokoll årsmøte 2026</a></h3></div>'
+                   '<div class="item"><span>3/2/2026 - mra</span><h3><a href="/b/innkalling-2026">Innkalling til årsmøte 2026</a></h3></div>')
+    body = f'<nav><a href="/aktuelt">Aktuelt</a></nav><footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>'
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(_site({"https://fjellbekk.no/aktuelt": (200, listing)}, body=body), ctx)
+    assert _news(ctx) == ["Protokoll årsmøte 2026 (2026-04-20)", "Innkalling til årsmøte 2026 (2026-02-03)"]
+    first = ctx.claims_for("dated_news")[0]
+    assert "20/04/2026" in {e.claim_span for e in ctx.evidence if e.id in first.evidence_ids}  # the listing's date cited
+
+
+def test_news_listing_found_by_link_text_on_deeper_paths_files_and_subdomains():
+    def pages(body):
+        return [W.parse_page(Snapshot("https://fjellbekk.no/", "https://fjellbekk.no/", 200, utc_now(),
+                                      html(body).encode(), "text/html"))]
+    assert W.news_listings(pages('<a href="/our-news">Our News</a>'), "fjellbekk.no") == ["https://fjellbekk.no/our-news"]
+    assert W.news_listings(pages('<a href="/no/kunnskap/nyheter">Nyheter</a>'), "fjellbekk.no") == [
+        "https://fjellbekk.no/no/kunnskap/nyheter"]
+    assert W.news_listings(pages('<a href="/nyheter.html">Siste</a>'), "fjellbekk.no") == ["https://fjellbekk.no/nyheter.html"]
+    assert W.news_listings(pages('<a href="https://blog.fjellbekk.no/?lang=nb">Blogg</a>'), "fjellbekk.no") == [
+        "https://blog.fjellbekk.no/"]
+    # never the front page, another site, a category, or a file
+    assert W.news_listings(pages('<a href="/">Nyheter</a><a href="https://avis.no/nyheter">Nyheter</a>'
+                                 '<a href="/category/nyheter/">Nyheter</a><a href="/nyheter.pdf">Nyheter</a>'),
+                           "fjellbekk.no") == []
+
+
+def test_news_listing_with_dates_beside_headings_only():
+    listing = html('<h1>Nyheter</h1>'
+                   '<div><p>1. oktober 2026 · Lansering</p><h3>Ny lås uten batteri til Norge</h3><p>Tekst</p></div>'
+                   '<div><p>12. juni 2024 · Agentur</p><h3>Fjellbekk inngår agenturavtale</h3><p>Tekst</p></div>')
+    body = f'<a href="/nyheter.html">Nyheter</a><footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>'
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(_site({"https://fjellbekk.no/nyheter.html": (200, listing)}, body=body), ctx)
+    assert _news(ctx) == ["Ny lås uten batteri til Norge (2026-10-01)", "Fjellbekk inngår agenturavtale (2024-06-12)"]
+
+
+def test_undated_news_listing_reads_article_pages_that_declare_a_date():
+    listing = html('<h1>Aktuelt</h1><main>'
+                   '<article><a href="/frokostseminar-om-kjokkendesign/">Frokostseminar om kjøkkendesign i Testby</a>'
+                   '<a href="/category/event/">Event</a></article>'
+                   '<article><a href="/vi-tilbyr-ogsa-baderom/">Vi tilbyr også nye baderom til private</a></article>'
+                   '<article><a href="/aktuelt/ny-daglig-leder">Ny daglig leder fra 1. mars i år</a></article>'
+                   '<article><a href="/aktuelt/apent-hus-i-verkstedet">Åpent hus i verkstedet vårt</a></article>'
+                   '</main>')
+    post = html('<h1>Frokostseminar om kjøkkendesign</h1>',
+                head='<meta property="article:published_time" content="2026-09-10T08:00:00+02:00">')
+    service = html('<h1>Baderom</h1>', head='<script type="application/ld+json">{"@type":"WebPage",'
+                                            '"datePublished":"2020-01-01T10:00:00+00:00"}</script>')
+    under = html('<h1>Ny daglig leder</h1>', head='<script type="application/ld+json">{"@type":"WebPage",'
+                                                  '"datePublished":"2026-02-20T09:00:00+01:00"}</script>')
+    byline = html('<h1>Åpent hus i verkstedet</h1><div><p>18/8/2025</p><p>Skrevet av Kari</p></div><p>Velkommen!</p>')
+    body = f'<a href="/aktuelt/">Aktuelt</a><footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>'
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(_site({"https://fjellbekk.no/aktuelt/": (200, listing),
+               "https://fjellbekk.no/frokostseminar-om-kjokkendesign/": (200, post),
+               "https://fjellbekk.no/vi-tilbyr-ogsa-baderom/": (200, service),
+               "https://fjellbekk.no/aktuelt/ny-daglig-leder": (200, under),
+               "https://fjellbekk.no/aktuelt/apent-hus-i-verkstedet": (200, byline)}, body=body), ctx)
+    # the service page outside the listing's path has only a WebPage date: not taken
+    assert _news(ctx) == ["Frokostseminar om kjøkkendesign (2026-09-10T08:00:00+02:00)",
+                          "Ny daglig leder (2026-02-20T09:00:00+01:00)", "Åpent hus i verkstedet (2025-08-18)"]
+    for c in ctx.claims_for("dated_news"):
+        for e in (e for e in ctx.evidence if e.id in c.evidence_ids):
+            assert e.claim_span in ctx.snapshots[e.id].content.decode()
+
+
+def test_article_page_with_several_dates_or_no_label_gives_no_date():
+    def page(body):
+        return W.parse_page(Snapshot("https://x.no/aktuelt/a", "https://x.no/aktuelt/a", 200, utc_now(),
+                                     html(body).encode(), "text/html"))
+    assert W.article_published(page('<h1>Kurs</h1><p>Publisert 3. mars 2026</p><p>Kursdato: 12. mars 2026</p>'
+                                     '<p>Påmelding innen 10. mars 2026</p>'), True) is None
+    assert W.article_published(page('<h1>Kurs</h1><div><p>12. mars 2026</p><p>Sted: Testby</p></div>'), True) is None
+    assert W.article_published(page('<h1>Kurs</h1><div><span>Publisert</span> <span>3. mars 2026</span></div>'), True) == (
+        "2026-03-03", "3. mars 2026")
+    assert W.article_published(page('<h1>Kurs</h1><div><span>Publisert</span> <span>3. mars 2026</span></div>'), False) is None
+
+
+def test_job_ad_linked_as_stillingsannonse_is_a_careers_page():
+    assert W.jobs_url("/nettside/stillingsannonse") and W.jobs_url("/join-us") and W.jobs_url("/om/bli-en-av-oss/")
+    assert not W.jobs_url("/ledig-kapasitet") and not W.jobs_url("/utstillingsareal")
+
+
+def test_hiring_signal_from_a_recruitment_platform_board_linked_from_the_site():
+    body = (f'<nav><a href="https://fjellbekk.teamtailor.com/jobs">Ledige stillinger</a>'
+            f'<a href="https://www.teamtailor.com/">Teamtailor</a></nav>'
+            f'<footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>')
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(_site(body=body), ctx)
+    hs = ctx.claims_for("hiring_signal")
+    assert [c.value for c in hs] == ["https://fjellbekk.teamtailor.com/jobs"]
+    assert hs[0].match["method"] == "ats_link_on_verified_site"
+    assert not any("teamtailor" in u for u in f_calls(ctx))
+
+
+def f_calls(ctx):
+    return [e.source_url for e in ctx.evidence]
+
+
+def test_recruitment_platform_links_that_are_not_our_board_are_ignored():
+    assert not W.ats_board("https://www.teamtailor.com/")
+    assert not W.ats_board("https://fjellbekk.recman.no/customer/login")
+    assert W.ats_board("https://jobs.lever.co/fjellbekk") and W.ats_board("https://fjellbekk.teamtailor.com/")
+    assert W.ats_board("https://candidate.hr-manager.net/vacancies/list.aspx?customer=fjellbekk")
+    assert not W.ats_board("https://kjedenas.teamtailor.com/jobs", ["fjellbekk", "trevare"])
+    # a chain's board, and a staffing firm's board (its clients' jobs), are not this company hiring
+    body = (f'<a href="https://kjeden.teamtailor.com/jobs">Ledige stillinger</a>'
+            f'<footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>')
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(_site(body=body), ctx)
+    assert not ctx.claims_for("hiring_signal")
+    body2 = (f'<a href="https://fjellbekk.recman.page/jobs">Ledige stillinger</a>'
+             f'<footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>')
+    ctx2 = ctx_for(hjemmeside="fjellbekk.no", naeringskode1={"kode": "78.200"})
+    run(_site(body=body2), ctx2)
+    assert not ctx2.claims_for("hiring_signal")
+
+
+def test_spans_match_titles_written_with_numeric_entities():
+    raw = '<h3 class="t">Moi R&#xF8;r banet vei for prosjekter med b&#xE6;rekraft &amp; &#248;kt fart</h3>'
+    assert W.verbatim(raw, "Moi Rør banet vei for prosjekter med bærekraft & økt fart") == \
+        "Moi R&#xF8;r banet vei for prosjekter med b&#xE6;rekraft &amp; &#248;kt fart"
+    assert W.verbatim(raw, "Moi Rør banet vei mot noe annet") is None

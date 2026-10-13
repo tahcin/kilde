@@ -12,6 +12,7 @@ import unicodedata
 from urllib.parse import urlsplit
 
 from .model import CompanyContext
+from .templates import template_post
 
 DERIVED = {"site_contact_email", "site_contact_phone", "social_profile", "site_page_updated", "site_news",
            "careers_page", "hiring_signal", "dated_news", "website_description", "website_title", "structured_data_organization"}
@@ -153,6 +154,17 @@ def check(ctx: CompanyContext) -> list[str]:
         for c in derived:
             if c.availability == "available" and c.field in ("dated_news", "site_page_updated", "site_news"):
                 withhold(c, "branch of a foreign company: site news usually belongs to the wider group")
+
+    # 5b. Site builders' default posts (hello world, "this is your first post", lorem ipsum) are never news.
+    for c in derived:
+        if c.availability != "available" or c.field not in ("dated_news", "site_page_updated", "site_news"):
+            continue
+        v = c.value
+        title = re.sub(r"\s*\([^()]*\)\s*$", "", v) if isinstance(v, str) else (v or {}).get("title")
+        url = (v or {}).get("url") if isinstance(v, dict) else None
+        detail = str((c.match or {}).get("detail") or "").split(" ")[0]
+        if template_post(title, url) or template_post(None, detail if detail.startswith("http") else None):
+            withhold(c, "a site builder's default post or page, not company news")
 
     # 6. Contacts must match the site domain or the registry.
     reg_phones = {_digits(reg.get(k))[-8:] for k in ("telefon", "mobil") if reg.get(k)}
