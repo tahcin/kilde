@@ -359,3 +359,59 @@ def test_dibk_robots_block(tmp_path):
 def test_likely_construction():
     assert dibk.likely_construction({"naeringskode1": {"kode": "43.210"}})
     assert not dibk.likely_construction({"naeringskode1": {"kode": "56.101"}})
+
+
+# ---------------------------------------------------------------- Støtteregisteret
+from kilde.connectors import stotteregisteret as st  # noqa: E402
+
+ST_HEADER = ('"Støttetiltaksnummer";"Mottatt dato";"Endret dato";"Status";"Støttetiltakstype";'
+             '"Organisasjonsnummer støttemottaker";"Fødselsdato støttemottaker";"Navn støttemottaker";'
+             '"Organisasjonsnummer spesifisert støttemottaker";"Navn spesifisert støttemottaker";'
+             '"Organisasjonsnummer støttegiver";"Navn støttegiver";"Tildelingsdato";"Tildelt beløp";"Tildelt beløp valuta";'
+             '"Beløpsintervall fra beløp";"Beløpsintervall til beløp";"Beløpsintervall valuta";"Statsstøttekategori";'
+             '"Primærrettslig grunnlag";"Artikkel";"Retningslinje ESA";"Formål";"Støtteinstrument";"Næring";"Region";'
+             '"Størrelse støttemottaker";"Spesifisert støtte";"Tilknyttet støtteordning"')
+
+
+def st_line(nr, org, d, amount):
+    cells = [nr, "12.10.2026", "12.10.2026 10:46:01", "Registrert", "Støttetildeling med statsstøtte", org, "",
+             "TESTFIRMA AS", "", "", "974761076", "SKATTEETATEN", d, amount, "NOK", "", "", "", "Notifisert støtte",
+             "x", "", "", "Regionalstøtte", "Skatte- eller avgiftsfritak", "49.2", "18 - Nordland", "Lite foretak", "",
+             "Ordning 1000000420"]
+    return ";".join(f'"{c}"' for c in cells)
+
+
+def st_cache(tmp_path):
+    unit = R.line(smilefjes.unit_record({"organisasjonsnummer": SUB, "navn": "TESTFIRMA AVD", "overordnetEnhet": ORG,
+                                         "organisasjonsform": {"kode": "BEDR"}}, "underenhet"))
+    records = {"1": st_line("1", ORG, "31.12.2025", "5525360,56"), "2": st_line("2", SUB, "15.03.2026", "100000"),
+               "3": st_line("3", OTHER, "01.01.2026", "7")}
+    return write_cache(tmp_path / "st.json.gz", {
+        "built_at": "2026-10-13T00:00:00Z", "retrieved_at": "2026-10-13T00:00:00Z", "since": "2021-10-13",
+        "header": ST_HEADER, "records": records, "by_org": {ORG: [["1", None], ["2", SUB]], OTHER: [["3", None]]},
+        "units": {SUB: unit}, "units_at": "2026-10-13T00:00:00Z", "file_sha256": "ab" * 32})
+
+
+def test_stotteregisteret_direct_and_workplace(tmp_path):
+    batch = run(st.prepare_stotteregisteret(None, [ORG], cache_path=st_cache(tmp_path)))
+    assert set(batch["records"]) == {"1", "2"}  # other companies' awards are not even loaded
+    ctx = CompanyContext(ORG)
+    run(st.fetch_stotteregisteret(None, ctx, batch))
+    got = {c.value["award_number"]: c for c in available(ctx, st.FIELD)}
+    assert list(got) == ["2", "1"]
+    v = got["1"].value
+    assert (v["date"], v["amount"], v["currency"], v["granting_authority"], v["scheme"]) == \
+        ("31.12.2025", "5525360,56", "NOK", "SKATTEETATEN", "Ordning 1000000420")
+    assert v["url"] == "https://stotte.brreg.no/nb/oppslag/stoettetildeling/1" and got["1"].as_of == "2025-12-31"
+    assert got["1"].match["method"] == "organisasjonsnummer_stottemottaker_equals_orgnr"
+    assert got["2"].match["method"].endswith("underenhet_of_orgnr") and len(got["2"].evidence_ids) == 2
+    assert_evidence_exact(ctx)
+
+
+def test_stotteregisteret_absent_and_no_cache(tmp_path):
+    batch = run(st.prepare_stotteregisteret(None, ["923456783"], cache_path=st_cache(tmp_path)))
+    ctx = CompanyContext("923456783")
+    run(st.fetch_stotteregisteret(None, ctx, batch))
+    assert [c.availability for c in ctx.claims] == ["not_available"]
+    with pytest.raises(RuntimeError):
+        run(st.prepare_stotteregisteret(None, [ORG], cache_path=str(tmp_path / "missing.json.gz")))
