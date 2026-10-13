@@ -660,6 +660,8 @@ var FIELD={legal_name:'Legal name',former_names:'Former names',legal_form:'Legal
  registered_workplace:'Registered workplace',official_website:'Verified website',related_website:'Related website',website_description:'Description',website_title:'Page title',
  site_language:'Site language',structured_data_organization:'Structured data',social_profile:'Social profile',
  site_email:'Email on website',site_phone:'Phone on website',site_contact_email:'Email on website',site_contact_phone:'Phone on website',contact_email:'Email on website',contact_phone:'Phone on website',
+ public_contract_award:'Public contract won',procurement_notice:'Tender notice (as buyer)',research_project:'Research project',food_inspection:'Food safety inspection',
+ approval_sentral_godkjenning:'Approved for building work (DiBK)',state_aid_award:'State aid award',
  job_ad:'Job ads',careers_page:'Careers page',hiring_signal:'Careers page or job posting',dated_news:'Dated news post',official_website_url:'Website address',registry_change:'Registry update',site_page_updated:'Website page updated',news:'News',news_item:'News'};
 var PLAT={linkedin:'LinkedIn',facebook:'Facebook',instagram:'Instagram',youtube:'YouTube',x:'X',twitter:'X',tiktok:'TikTok',github:'GitHub',pinterest:'Pinterest',vimeo:'Vimeo'};
 var FIN=['revenue','operating_result','salary_costs','profit_before_tax','annual_result','total_assets','cash_and_bank','equity','debt'];
@@ -700,7 +702,8 @@ function phone(p){var s=String(p||'').replace(/\s/g,''),cc='';if(/^\+47\d{8}$/.t
   if(!/^\d{8}$/.test(s))return esc(p);return cc+(/^[49]/.test(s)?s.replace(/(\d{3})(\d{2})(\d{3})/,'$1 $2 $3'):s.replace(/(\d{2})(\d{2})(\d{2})(\d{2})/,'$1 $2 $3 $4'));}
 function plural(n,w,ws){return n+' '+(n===1?w:(ws||w+'s'));}
 function bare(u){return String(u||'').replace(/^https?:\/\/(www\.)?/,'').replace(/\/$/,'');}
-function link(u,text){var s=safeUrl(u);return s?'<a href="'+esc(s)+'" target="_blank" rel="noopener noreferrer">'+esc(text||bare(u))+'</a>':esc(text||u);}
+function isDomain(u){return /^[a-z0-9][a-z0-9.-]*\.[a-z]{2,}(\/\S*)?$/i.test(String(u||''));}
+function link(u,text){var s=safeUrl(u)||(isDomain(u)?'https://'+u:null);return s?'<a href="'+esc(s)+'" target="_blank" rel="noopener noreferrer">'+esc(text||bare(u))+'</a>':esc(text||u);}
 function money(v,withCur){if(!v||v.amount==null)return '';return '<span class="num">'+(withCur&&v.currency?esc(v.currency)+'\u00a0':'')+nfmt(v.amount)+'</span>';}
 var LANG={nb:'Norwegian Bokm\u00e5l',nn:'Norwegian Nynorsk',no:'Norwegian',en:'English',sv:'Swedish',da:'Danish',de:'German',fi:'Finnish'};
 var CHG={updated:'Updated',ukjent:'Update',endring:'Updated',ny:'New entry',new:'New entry',sletting:'Deleted',deleted:'Deleted'};
@@ -736,7 +739,7 @@ function latestFig(co,f){var xs=accounts(co).filter(function(c){return c.f===f;}
 function render(f,v){
   if(v==null)return '';
   if(typeof v==='string'){
-    if(safeUrl(v))return link(v);
+    if(safeUrl(v)||(/website|careers|hiring_signal/.test(f)&&isDomain(v)))return link(v);
     if(/date/.test(f)||/^\d{4}-\d{2}-\d{2}$/.test(v))return dfmt(v);
     if(/phone|mobile/.test(f))return '<span class="num">'+phone(v)+'</span>';
     if(/email/.test(f))return '<a href="mailto:'+esc(v)+'">'+esc(v)+'</a>';
@@ -757,6 +760,17 @@ function render(f,v){
   if(f==='register_memberships'){var yes=[],no=[];Object.keys(v).forEach(function(k){(v[k]?yes:no).push(REGS[k]||k);});
     var s=yes.length?esc(yes.join(', ')):'None';if(v.registrertIMvaregisteret===false)s+=' <span class="sub2">Not VAT registered</span>';return s;}
   if(f==='social_profile'||(v.platform&&v.url))return esc(PLAT[String(v.platform||'').toLowerCase()]||cap(v.platform||'Profile'))+' '+link(v.url,bare(v.url).replace(/^[^/]+\//,''));
+  if(f==='public_contract_award'||f==='procurement_notice'){var bits=[v.buyer&&f==='public_contract_award'?'Buyer: '+esc(v.buyer):'',v.notice_type?esc(cap(v.notice_type)):'',
+      v.notice_total_value?'notice value '+esc(v.currency||'')+' '+words(v.notice_total_value):''].filter(Boolean);
+    return '<span class="t">'+link(v.url,v.title||('TED notice '+(v.notice||'')))+'</span>'+(bits.length?'<span class="note">'+bits.join(', ')+'</span>':'');}
+  if(f==='research_project')return '<span class="t">'+esc(v.title||'Untitled project')+'</span><span class="note">'+[esc(v.scheme||''),v.period?esc(v.period):'',
+      v.awarded_nok!=null?'NOK '+words(v.awarded_nok)+' awarded':'',v.project_number?'project '+esc(v.project_number):''].filter(Boolean).join(', ')+'</span>';
+  if(f==='food_inspection')return '<span class="t">'+esc(cap(v.result||('Grade '+v.grade)))+'</span>'+(v.url?' '+link(v.url,'Mattilsynet'):'')+'<span class="note">'+
+      [esc(v.place||''),esc(v.address||''),v.inspections_on_file?plural(v.inspections_on_file,'inspection')+' on file':''].filter(Boolean).join(', ')+'</span>';
+  if(f==='approval_sentral_godkjenning')return '<span class="t">'+(v.status==='approved'?'Approved':esc(cap(v.status||'')))+(v.valid_to?' until '+dfmt(v.valid_to):'')+'</span>'+
+      (v.areas&&v.areas.length?'<span class="note">'+v.areas.map(function(x){return esc(x.area||'')+(x.class?' (class '+esc(x.class)+')':'');}).join('; ')+'</span>':'');
+  if(f==='state_aid_award'){var am=v.amount!=null?v.amount:v.amount_nok;return '<span class="t">'+(am!=null?esc(v.currency||'NOK')+' '+words(am):'State aid')+'</span><span class="note">'+
+      [esc(v.authority||v.granting_authority||''),esc(v.purpose||v.title||v.instrument||''),v.date?dfmt(v.date):''].filter(Boolean).join(', ')+'</span>';}
   if(f==='job_ad')return '<span class="t">'+(v.url?link(v.url,v.title||'Job ad'):esc(v.title||'Job ad'))+'</span><span class="note">'+
      [v.location,v.published?'published '+dfmt(v.published):'',v.expires?'closes '+dfmt(v.expires):''].filter(Boolean).map(esc).join(', ')+'</span>';
   if(f==='registered_workplace')return '<span class="t">'+esc(v.name||'')+'</span>'+
@@ -826,7 +840,7 @@ var SIG={'styrets leder alene':'the board chair alone','daglig leder alene':'the
 var KEEPU={AS:1,ASA:1,ANS:1,DA:1,SA:1,BA:1,NUF:1,ENK:1,KS:1,IKS:1,STI:1,LTD:1,AB:1,BRL:1,ESEK:1,II:1,III:1,IT:1,TV:1};
 function dn(n){n=String(n||'');if(!n||n!==n.toUpperCase())return n;var first=true;
   return n.split(/([\s.\-\/&]+)/).map(function(w){if(!w||/^[\s.\-\/&]+$/.test(w))return w;var u=w.toUpperCase(),out;
-    if(KEEPU[u]||/\d/.test(w)||(first&&w.length<=3))out=u;else out=u.charAt(0)+u.slice(1).toLowerCase();first=false;return out;}).join('');}
+    if(KEEPU[u]||/\d/.test(w)||(first&&w.length<=3)||(w.length<=2&&!/^(OG|AV|I|PÅ|DE|EN|ET|TIL)$/.test(u)))out=u;else out=u.charAt(0)+u.slice(1).toLowerCase();first=false;return out;}).join('');}
 function what(co){var c=one(co,'industry');if(!c||!c.v)return '';var code=String(c.v.code||'');
   if(Object.prototype.hasOwnProperty.call(IND,code))return IND[code];return DIV[code.slice(0,2)]||cap(String(c.v.name||'').toLowerCase());}
 function signText(v){var parts=String(v||'').split(/\.\s*/).filter(Boolean),out=[],ok=true;
@@ -844,7 +858,8 @@ function recent(co){var r=regChanges(co)[0];return co.ch.length>0||!!(r&&r.d&&da
 function statusWarn(co){var s=one(co,'legal_status');if(!s||!s.v||typeof s.v!=='object')return '';var v=s.v;
   return v.konkurs?'Bankrupt':v.underTvangsavviklingEllerTvangsopplosning?'Being forcibly dissolved':v.underAvvikling?'Being wound up':'';}
 function tags(co){var t=[],w=statusWarn(co);if(w)t.push('<span class="tag warn">'+w+'</span>');if(co.fl.web)t.push('<span class="tag">Website</span>');
-  if(av(co,'job_ad').length)t.push('<span class="tag">Hiring</span>');if(recent(co))t.push('<span class="tag">Changed recently</span>');return t.join('');}
+  if(av(co,'job_ad').length)t.push('<span class="tag">Hiring</span>');if(recent(co))t.push('<span class="tag">Changed recently</span>');
+  if(av(co,'dated_news').length)t.push('<span class="tag">News</span>');if(av(co,'public_contract_award').length)t.push('<span class="tag">Public contracts</span>');return t.join('');}
 function empText(v){if(typeof v==='number')return nfmt(v);var s=String(v||'');return /fewer than 5/i.test(s)?'Fewer than 5':cap(s.replace(/\s*\(.*\)$/,''));}
 function srcLink(co,cls){cls=(cls||[]).filter(function(c){return c&&c.e&&c.e.length;});if(!cls.length)return '';
   return '<button type="button" class="srcl" data-o="'+co.o+'" data-c="'+cls.map(function(c){return esc(c.i);}).join(',')+'" aria-haspopup="dialog">Source</button>';}
@@ -1250,8 +1265,8 @@ function cardHiring(co){
   else if(jn&&jn.a==='failed'){a.push('Unknown. Job ads could not be checked in this run.'+why(jn.n));cls.push(jn);}
   else if(jn){a.push('No open job ads on NAV, Norway’s public job board.');cls.push(jn);}
   else a.push('Job ads were not checked for this company.');
-  if(car){a.push('Its website has a careers page.');cls.push(car);}
-  var det=ads.map(function(c){return drow(co,'Job ad',render('job_ad',c.v),[c]);}).join('')+(car?crow(co,car,'Careers page'):'');
+  if(car){a.push('Its website links to a '+(car.f==='hiring_signal'?'careers page or job posting':'careers page')+': '+link(car.v,bare(car.v))+'.');cls.push(car);}
+  var det=ads.map(function(c){return drow(co,'Job ad on NAV',render('job_ad',c.v),[c]);}).join('')+(car?crow(co,car,car.f==='hiring_signal'?'Careers page or job posting':'Careers page'):'');
   return card('hiring','Is it hiring?',P(a.join(' ')),cls,co,det);
 }
 function cardChanged(co){
@@ -1271,6 +1286,23 @@ function cardChanged(co){
   var extra=(regs.length>6?'<p class="fine">'+(regs.length-6===1?'One older update is':(regs.length-6)+' older updates are')+' listed under all facts.</p>':'')+
     (!co.ch.length&&META.previous===0?'<p class="fine">This is the first Kilde run for these companies, so there is no earlier profile to compare with yet.</p>':'');
   return card('changed','What changed recently?',P(a.join(' ')),cls,co,det,extra);
+}
+var REC=['public_contract_award','procurement_notice','research_project','state_aid_award','food_inspection','approval_sentral_godkjenning'];
+function cardRecords(co){
+  var by={};REC.forEach(function(f){by[f]=av(co,f).slice().sort(function(x,y){return String(y.d||(y.v&&y.v.date)||'').localeCompare(String(x.d||(x.v&&x.v.date)||''));});});
+  if(!REC.some(function(f){return by[f].length;}))return '';
+  var a=[],cls=[],det='',more=0;
+  function dt(c){var d=c.d||(c.v&&(c.v.date||c.v.decision_date));return d?dfmt(d):'';}
+  function rows(f,lab,max){var xs=by[f];xs.slice(0,max).forEach(function(c){var d=dt(c);det+=drow(co,lab+(d?', '+d:''),render(f,c.v),[c]);});more+=Math.max(0,xs.length-max);}
+  var k=by.public_contract_award;if(k.length){a.push((k.length===1?'Won one public contract':'Won '+k.length+' public contracts')+' listed in the EU\u2019s TED journal'+(dt(k[0])?'; latest '+dt(k[0]):'')+'.');cls.push(k[0]);}
+  k=by.procurement_notice;if(k.length){a.push('Published '+(k.length===1?'one tender notice':k.length+' tender notices')+' as a buyer in TED.');cls.push(k[0]);}
+  k=by.research_project;if(k.length){a.push('Has '+(k.length===1?'one publicly backed research project':k.length+' publicly backed research projects')+' (Research Council of Norway or SkatteFUNN).');cls.push(k[0]);}
+  k=by.state_aid_award;if(k.length){a.push('Received '+(k.length===1?'one state aid award':k.length+' state aid awards')+' listed in the State Aid Register'+(dt(k[0])?'; latest '+dt(k[0]):'')+'.');cls.push(k[0]);}
+  k=by.food_inspection;if(k.length){var fv=k[0].v;a.push('Latest food safety inspection by Mattilsynet'+(fv.date?' on '+dfmt(fv.date):'')+': '+esc(String(fv.result||('grade '+fv.grade)).toLowerCase())+(fv.place?', at '+esc(fv.place):'')+'.');cls.push(k[0]);}
+  k=by.approval_sentral_godkjenning;if(k.length){var av_=k[0].v;a.push('Approved by DiBK (sentral godkjenning) to take on building work'+(av_.valid_to?', valid until '+dfmt(av_.valid_to):'')+'.');cls.push(k[0]);}
+  rows('public_contract_award','Contract won',5);rows('procurement_notice','Tender notice',3);rows('research_project','Research project',5);rows('state_aid_award','State aid',5);
+  rows('food_inspection','Food inspection',3);by.approval_sentral_godkjenning.forEach(function(c){det+=drow(co,'Building approval',render('approval_sentral_godkjenning',c.v),[c]);});
+  return card('records','In public records',P(a.join(' ')),cls,co,det,more?'<p class="fine">'+plural(more,'more record')+' listed under all facts.</p>':'');
 }
 function cardOwner(co){
   var par=one(co,'group_parent'),ult=one(co,'group_ultimate_parent'),subs=av(co,'group_subsidiary'),pog=one(co,'part_of_group'),
@@ -1305,7 +1337,7 @@ function company(o){
     '<header class="cohead"><div><h1 id="h-name">'+esc(dn(co.n||co.o))+'</h1><p class="cosub">'+sub.map(esc).join(' · ')+'</p></div>'+cmpToggle(co)+'</header>'+
     (warn?'<p class="alert">'+IC.alert+'<span><strong>'+warn+'.</strong> This status is registered with Brønnøysundregistrene. '+srcLink(co,[one(co,'legal_status')])+'</span></p>':'')+
     intro(co)+askPanel(co)+
-    '<div class="cards">'+cardWhat(co)+cardWho(co)+cardMoney(co)+cardWhere(co)+cardOnline(co)+cardHiring(co)+cardChanged(co)+cardOwner(co)+'</div>'+
+    '<div class="cards">'+cardWhat(co)+cardWho(co)+cardMoney(co)+cardWhere(co)+cardOnline(co)+cardHiring(co)+cardChanged(co)+cardRecords(co)+cardOwner(co)+'</div>'+
     allFacts(co)+'</article>';
 }
 
