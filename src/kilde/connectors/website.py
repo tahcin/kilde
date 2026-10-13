@@ -33,6 +33,7 @@ import dns.resolver
 from bs4 import BeautifulSoup
 
 from ..http import Blocked, BudgetExhausted, Fetcher
+from ..templates import is_template_url
 from ..model import COMPANY_OWNED, CompanyContext, Evidence, Snapshot
 
 METHOD = "website_identity_v1"
@@ -2397,7 +2398,7 @@ async def sitemap_activity(f: Fetcher, sp: _Spend, ctx: CompanyContext, home: Pa
             early = [x for x in dated if x[1] < floor]
             if early:
                 ctx.facts["website_activity_before_founding"] = len(early)
-            dated = [x for x in dated if x[1] >= floor and not PLACEHOLDER_SLUG.search(x[0])]
+            dated = [x for x in dated if x[1] >= floor and not PLACEHOLDER_SLUG.search(x[0]) and not is_template_url(x[0])]
             if not dated:
                 return
             if _activity_blocked(ctx, "site_page_updated"):
