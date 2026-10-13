@@ -109,7 +109,8 @@ def test_stopped_expired_and_wrong_orgnr_never_published(tmp_path):
     assert not ctx.claims_for("job_ad") and not ctx.claims_for("active_job_count")
     assert not any("/feedentry/gone" in c for c in f.calls)  # feed said inactive: not even fetched
     mark = [c for c in ctx.claims if c.field == "job_ad"][0]
-    assert mark.availability == "not_available" and "as of" in mark.note and mark.evidence_ids
+    assert mark.availability == "not_available" and "index built 2026-10-13" in mark.note and mark.evidence_ids
+    assert "T" not in mark.note  # no run timestamps in notes
 
 
 def test_new_ad_found_by_name_hint_but_matched_only_by_orgnr(tmp_path):
@@ -223,3 +224,38 @@ def test_partial_index_never_claims_absence(tmp_path):
     ctx = CompanyContext(ORG)
     run(nav_jobs.fetch_jobs(f, ctx, idx))
     assert [(c.field, c.availability) for c in ctx.claims] == [("job_ad", "failed")]
+
+
+def test_catch_up_cap_hit_means_absence_not_verified(tmp_path):
+    idx_path = write_index(tmp_path, {}, {})
+    f = FakeFetcher(base_routes(feed_page([], next_url="/api/v1/feed/page-last")))  # never reaches the end
+    idx = run(nav_jobs.prepare(f, [ORG], NAMES, index_path=idx_path, max_pages=3))
+    assert not idx.feed_complete and sum("/api/v1/feed/" in c for c in f.calls) == 3
+    ctx = CompanyContext(ORG)
+    run(nav_jobs.fetch_jobs(f, ctx, idx))
+    c = ctx.claims[0]
+    assert (c.field, c.availability, c.note) == ("job_ad", "failed", "absence not verified")
+
+
+def test_same_output_on_two_runs(tmp_path):
+    idx_path = write_index(tmp_path, {"ad-1": {"uuid": "ad-1", "employer_orgnr": ORG, "sistEndret": "x"}},
+                           {ORG: ["ad-1"]})
+    outs = []
+    for _ in range(2):
+        f = FakeFetcher(base_routes(feed_page([])) + [("/feedentry/ad-1", 200, detail("ad-1", ORG))])
+        idx = run(nav_jobs.prepare(f, [ORG, OTHER], NAMES, index_path=idx_path))
+        out = []
+        for org in (ORG, OTHER):
+            ctx = CompanyContext(org)
+            run(nav_jobs.fetch_jobs(f, ctx, idx))
+            out += [(c.field, c.availability, json.dumps(c.value), c.note, c.as_of) for c in ctx.claims]
+        outs.append(out)
+    assert outs[0] == outs[1]
+
+
+def test_shipped_index_is_slim():
+    raw = nav_jobs.load_index()
+    if raw is None:
+        return
+    allowed = {"uuid", "employer_orgnr", "parent_orgnr", "sistEndret", "published", "expires"}
+    assert all(set(a) <= allowed for a in raw["ads"].values())

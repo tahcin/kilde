@@ -46,7 +46,7 @@ BRREG_LICENCE = "NLOD 2.0, Brønnøysundregistrene"
 METHOD = "nav_feedentry_v1"
 JWT = re.compile(r"eyJ[\w-]+\.[\w-]+\.[\w-]+")
 
-MAX_FEED_PAGES = int(os.environ.get("KILDE_NAV_MAX_PAGES", "40"))
+MAX_FEED_PAGES = int(os.environ.get("KILDE_NAV_MAX_PAGES", "100"))
 MAX_VERIFY_PER_COMPANY = int(os.environ.get("KILDE_NAV_MAX_ADS", "10"))
 MAX_NEW_DETAILS_PER_COMPANY = 3
 
@@ -109,9 +109,8 @@ class JobIndex:
 
     @property
     def as_of(self) -> str:
-        if self.feed_snaps and self.feed_complete:
-            return self.feed_snaps[-1].retrieved_at
-        return self.built_at or "unknown"
+        # The index build date, never a run timestamp: two runs must produce identical notes.
+        return (self.built_at or "unknown")[:10]
 
     def headers(self) -> dict[str, str]:
         return {"Accept": "application/json", "Authorization": f"Bearer {self.token}"}
@@ -283,14 +282,15 @@ async def prepare(f: Fetcher, orgs: list[str], names: dict[str, str], *, index_p
 # ---------------------------------------------------------------- per company
 def _not_available(ctx: CompanyContext, idx: JobIndex, extra: str = "") -> None:
     snap = idx.feed_snaps[-1] if idx.feed_snaps else None
-    span = _dump({"index_built_at": idx.built_at, "feed_pages_read_this_run": len(idx.feed_snaps),
-                  "feed_walk_complete": idx.feed_complete, "employer_orgnr": ctx.org, "active_ads": 0})
+    span = _dump({"index_built_at": idx.built_at, "feed_walk_complete": idx.feed_complete,
+                  "employer_orgnr": ctx.org, "active_ads": 0})
     ev = ctx.add_evidence(snap, source_url=snap.url if snap else f"{BASE}/api/v1/feed", source_class=PUBLIC_JOB_FEED,
                           span=span, method="nav_index_lookup_v1", licence=LICENCE,
                           note=("Prebuilt index of every ACTIVE ad in NAV's feed (scripts/build_nav_index.py), "
                                 "updated with the feed pages read in this run" + extra))
     ctx.mark("job_ad", "hiring", "not_available", ev,
-             note=f"No active NAV job ads with this employer org number as of {idx.as_of}")
+             note=f"No active NAV job ads with this employer org number (index built {idx.as_of}, "
+                  "updated from the feed in this run)")
 
 
 async def fetch_jobs(f: Fetcher, ctx: CompanyContext, index: JobIndex) -> None:
@@ -362,7 +362,7 @@ async def fetch_jobs(f: Fetcher, ctx: CompanyContext, index: JobIndex) -> None:
         published.append(ev)
     if published:
         more = len(uuids) - min(len(uuids), MAX_VERIFY_PER_COMPANY)
-        ctx.add_claim("active_job_count", "hiring", len(published), published, as_of=now.strftime("%Y-%m-%d"),
+        ctx.add_claim("active_job_count", "hiring", len(published), published, as_of=index.as_of,
                       match={"method": "employer_orgnr",
                              "detail": f"Active NAV ads re-checked in this run with employer org number {ctx.org}"
                                        " or one of its registered sub-units"},
@@ -376,9 +376,9 @@ async def fetch_jobs(f: Fetcher, ctx: CompanyContext, index: JobIndex) -> None:
         ctx.mark("job_ad", "hiring", "failed", note=reason)
         ctx.module_states["hiring"] = "failed"
         return
-    if not index.complete:
-        # A partial index cannot prove absence, so say so instead of "not available".
-        ctx.mark("job_ad", "hiring", "failed", note="NAV job index incomplete: absence not verified")
+    if not index.complete or not index.feed_complete:
+        # A partial index, or a catch-up walk that hit its cap or failed, cannot prove absence.
+        ctx.mark("job_ad", "hiring", "failed", note="absence not verified")
         ctx.module_states["hiring"] = "failed"
         return
     _not_available(ctx, index, "; indexed ads for this org number are no longer active" if uuids else "")

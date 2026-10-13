@@ -40,6 +40,7 @@ BASE = "https://pam-stilling-feed.nav.no"
 BRREG = "https://data.brreg.no/enhetsregisteret/api"
 UA = f"KildeSignalpost/{__version__} (+https://github.com/tahcin/kilde)"
 OUT = ROOT / "src" / "kilde" / "data" / "nav_jobs_index.json.gz"
+SLIM_FIELDS = ("uuid", "employer_orgnr", "sistEndret", "published", "expires")
 JWT = re.compile(r"eyJ[\w-]+\.[\w-]+\.[\w-]+")
 
 
@@ -297,10 +298,10 @@ class Builder:
                     continue
             except ValueError:
                 pass
-            ad = {k: v for k, v in d.items() if not k.startswith("_")}
-            ad["detail_fetched_at"] = d.get("_fetched")
+            # Slim on purpose: no titles, names, locations or links in the shipped file (NAV terms:
+            # republished ads must disappear when inactive). Those are re-fetched live for matched ads.
+            ad = {k: d.get(k) for k in SLIM_FIELDS}
             p = st["parents"].get(d["employer_orgnr"]) or {}
-            ad["employer_kind"] = p.get("kind")
             if p.get("parent"):
                 ad["parent_orgnr"] = p["parent"]
             ads[uuid] = ad
