@@ -283,14 +283,15 @@ async def prepare(f: Fetcher, orgs: list[str], names: dict[str, str], *, index_p
 def _not_available(ctx: CompanyContext, idx: JobIndex, extra: str = "") -> None:
     snap = idx.feed_snaps[-1] if idx.feed_snaps else None
     span = _dump({"index_built_at": idx.built_at, "feed_walk_complete": idx.feed_complete,
-                  "employer_orgnr": ctx.org, "active_ads": 0})
+                  "employer_orgnr": ctx.org, "active_ads": 0, "excludes_source": "FINN"})
     ev = ctx.add_evidence(snap, source_url=snap.url if snap else f"{BASE}/api/v1/feed", source_class=PUBLIC_JOB_FEED,
                           span=span, method="nav_index_lookup_v1", licence=LICENCE,
                           note=("Prebuilt index of every ACTIVE ad in NAV's feed (scripts/build_nav_index.py), "
                                 "updated with the feed pages read in this run" + extra))
     ctx.mark("job_ad", "hiring", "not_available", ev,
              note=f"No active NAV job ads with this employer org number (index built {idx.as_of}, "
-                  "updated from the feed in this run)")
+                  "updated from the feed in this run). NAV's feed excludes ads sourced from Finn.no, which "
+                  "arbeidsplassen.nav.no still lists, so Finn-only ads are not checked here")
 
 
 async def fetch_jobs(f: Fetcher, ctx: CompanyContext, index: JobIndex) -> None:
