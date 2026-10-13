@@ -155,3 +155,12 @@ def test_legal_name_site_withheld_when_it_does_not_fit_the_registry():
         gate.check(ctx)
         assert not ctx.claims_for("official_website"), (site, span)
         assert all(c.availability != "available" for c in ctx.claims), (site, span)
+
+
+def test_legal_name_site_checks_the_proof_core_before_the_span_is_made_exact():
+    reg = {"navn": "FJELLTOPP RØR AS", "organisasjonsform": {"kode": "AS"}}
+    ctx = _legal_ctx("https://fjelltopproer.no/", "", reg)
+    ev = ctx.claims_for("official_website")[0].evidence_ids[0]
+    ctx.cores[ev] = "Fjelltopp Rør\n  AS"  # the page split the name and form over two lines
+    gate.check(ctx)
+    assert ctx.claims_for("official_website")

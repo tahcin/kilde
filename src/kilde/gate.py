@@ -83,7 +83,9 @@ def legal_name_site_problem(ctx: CompanyContext, site) -> str | None:
     label = _alnum(registered_domain(str(site.value)).split(".")[0])
     if label not in names:
         return f"domain {registered_domain(str(site.value))} is not the legal name"
-    spans = [e.claim_span or "" for e in ctx.evidence if e.id in site.evidence_ids]
+    # the proof's span as stored now, and the matched value it must contain (the span is made exact later)
+    spans = [x for e in ctx.evidence if e.id in site.evidence_ids
+             for x in (e.claim_span, (getattr(ctx, "cores", None) or {}).get(e.id)) if x]
     quoted = {_alnum(" ".join(ws)) + form.lower() for ws in variants}
     if not any(re.search(r"(?<![A-Za-z])" + form + r"(?![A-Za-z/])", s) and any(q in _alnum(s) for q in quoted)
                for s in spans):
