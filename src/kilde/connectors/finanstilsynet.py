@@ -23,7 +23,7 @@ MAX_LICENCES = 40
 
 
 def _dump(obj: Any) -> str:
-    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))[:400]
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))  # trimmed after exact-span repair
 
 
 def _text(obj: dict | None, *keys: str) -> str | None:

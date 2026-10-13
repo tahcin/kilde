@@ -33,7 +33,7 @@ def search_url(org: str) -> str:
 
 
 def _dump(obj: Any) -> str:
-    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))[:400]
+    return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))  # trimmed after exact-span repair
 
 
 def _record_span(rec: dict) -> str:
