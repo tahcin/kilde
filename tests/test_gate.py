@@ -113,3 +113,14 @@ def test_template_posts_are_withheld_as_news_and_page_updates():
     gate.check(ctx)
     got = [(c.value, c.availability) for c in ctx.claims if c.field != "official_website"]
     assert got == [(None, "ambiguous"), (None, "ambiguous"), (None, "ambiguous"), ("Ny hall åpnet (2026-01-03)", "available")]
+
+
+def test_bare_numeric_facebook_page_id_passes_and_glued_own_form_is_ours():
+    reg = {"navn": "FJELLTOPP ASA", "forretningsadresse": {"landkode": "NO"}}
+    ctx = ctx_with("https://www.fjelltopp.no/", reg, [("social_profile", "facebook.com/100087098506924"),
+                                                       ("social_profile", "facebook.com/fjelltoppasa"),
+                                                       ("social_profile", "facebook.com/fjelltoppgmbh"),
+                                                       ("social_profile", "facebook.com/kjedetest")])
+    gate.check(ctx)
+    got = {str(c.value): c.availability for c in ctx.claims if c.field == "social_profile" and c.value}
+    assert got == {"facebook.com/100087098506924": "available", "facebook.com/fjelltoppasa": "available"}

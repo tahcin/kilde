@@ -96,7 +96,8 @@ PARKED_HOSTS = ("sedo.com", "dan.com", "afternic.com", "hugedomains.com", "godad
                 "bodis.com", "uniregistry.com", "undeveloped.com", "domainmarket.com", "sav.com", "domeneshop.no",
                 "one.com", "webhuset.no", "porkbun.com", "namecheap.com")
 INTERNAL_KEY = re.compile(r"kontakt|contact|om-oss|om_oss|omoss|om oss|about|personvern|privacy|vilkår|vilkar|"
-                          r"impressum|firmainfo|selskapet", re.I)
+                          r"impressum|firmainfo|selskapet|"
+                          r"find.?us|finn.?oss|finn.?frem|besøk.?oss|besok.?oss|visit.?us|veibeskrivelse", re.I)
 INTERNAL_PRIORITY = (re.compile(r"kontakt|contact", re.I), re.compile(r"om.?oss|about|firmainfo|selskapet", re.I),
                      re.compile(r"personvern|privacy", re.I), re.compile(r"vilk|impressum", re.I))
 CAREERS_TEXT = re.compile(r"\b(karriere|jobb hos oss|jobbe hos oss|ledige stillinger|stillinger|careers?|jobs|"
@@ -340,7 +341,12 @@ def name_domains(name: str, e: dict | None = None) -> list[str]:
     good = [lab for lab in good if lab not in short]
     # a four-letter single name (ADMA AS) is tried on .no only; a few names use the .as domain
     as_labels = good[:2] + ([first_alone] if first_alone and first_alone in good[2:] else [])
-    out = [f"{lab}.no" for lab in short + good] + [f"{lab}.com" for lab in good] + [f"{lab}.as" for lab in as_labels]
+    # the whole name on .no and .com before any shortened form, so a cap is not spent on weaker guesses first
+    whole = {x for v in _ascii_variants(words) for x in ("".join(v), "-".join(v))}
+    head = [lab for lab in good if lab in whole]
+    rest = [lab for lab in good if lab not in whole]
+    out = ([f"{lab}.no" for lab in short + head] + [f"{lab}.com" for lab in head] + [f"{lab}.no" for lab in rest]
+           + [f"{lab}.com" for lab in rest] + [f"{lab}.as" for lab in as_labels])
     if (((e or {}).get("naeringskode1") or {}).get("kode") or "").startswith(("88.91", "85.1")):
         kids = [lab for lab in good if "barnehage" not in lab and not any(f in lab for f in FORM_NAME_WORDS)]
         out = [f"{lab}.barnehage.no" for lab in kids[:2]] + out
@@ -621,6 +627,13 @@ def is_parked(page: Page) -> bool:
     return False
 
 
+def _page_key(url: str) -> str:
+    """One key per page: scheme, www and a trailing slash do not make a different page (kontakt-oss/ and
+    kontakt-oss are fetched once)."""
+    p = urlsplit(url)
+    return bare((p.hostname or "").lower()) + (p.path.rstrip("/") or "/") + ("?" + p.query if p.query else "")
+
+
 def internal_links(page: Page) -> list[str]:
     found: list[tuple[int, str]] = []
     seen = set()
@@ -636,9 +649,10 @@ def internal_links(page: Page) -> list[str]:
             continue
         label = a.get_text(" ", strip=True)[:60]
         probe = p.path + " " + label
-        if not INTERNAL_KEY.search(probe) or u.rstrip("/") == page.url.rstrip("/") or u in seen:
+        key = _page_key(u)
+        if not INTERNAL_KEY.search(probe) or key == _page_key(page.url) or key in seen:
             continue
-        seen.add(u)
+        seen.add(key)
         rank = next((i for i, rx in enumerate(INTERNAL_PRIORITY) if rx.search(probe)), 9)
         found.append((rank, u))
     found.sort(key=lambda x: x[0])
@@ -981,6 +995,10 @@ async def check_candidate(f: Fetcher, sp: _Spend, ctx: CompanyContext, v: Verdic
     v.pages = [home]
     v.cross = not same_site(final, bare(v.domain))
     e = ctx.registry or {}
+    if v.cross and _declared_host(e, final) and urlsplit(home.url).path in ("", "/"):
+        # a redirect to the front page of the registry's own website or email domain stays within the company
+        # (a locale or section page of a bigger host, such as a group's /no page, is still judged as cross)
+        v.cross = False
     v.path_scoped = _is_section(home.url)
     if v.path_scoped and not v.cross:
         lab = re.sub(r"[^a-z0-9]", "", bare(home.host).split(".")[0])
@@ -994,12 +1012,7 @@ async def check_candidate(f: Fetcher, sp: _Spend, ctx: CompanyContext, v: Verdic
                     home = front
                     v.path_scoped = False
     judge(v, ctx.org, e, registry_host)
-    if v.status == "related" and v.source in ("registry", "email") and not v.cross:
-        # the registry's own site printing only our subsidiaries' org numbers is the group parent's site
-        group = await _group_members(sp, ctx)
-        if group and all(k in group for k in v.others):
-            v.ignore_orgs = set(group)
-            judge(v, ctx.org, e, registry_host)
+    await _group_parent_site(sp, ctx, v, registry_host)
     if v.cross and v.status == "name_only" and _is_front_or_about(home.url) and sp.can(1):
         # the redirect target names us on its front page: its linked privacy page may print our org number
         priv = [urljoin(home.url, a["href"]).split("#")[0] for a in home.soup.find_all("a", href=True)
@@ -1045,12 +1058,13 @@ async def check_candidate(f: Fetcher, sp: _Spend, ctx: CompanyContext, v: Verdic
             if v.status == "proven" and v.method == "orgnr_on_page":
                 return
     judge(v, ctx.org, e, registry_host)
+    await _group_parent_site(sp, ctx, v, registry_host)  # a subsidiary's number may first appear on a subpage
     if v.status == "name_only" and sp.can(1) and not any(re.search(r"(?i)personvern|privacy", p.url) for p in v.pages):
         # a privacy, terms or imprint page often prints the operator's org number (ludenso.com/privacy-policy)
-        fetched = {p.url.rstrip("/") for p in v.pages}
+        fetched = {_page_key(p.url) for p in v.pages} | {_page_key(p.snap.url) for p in v.pages}
         links = [urljoin(home.url, a["href"]).split("#")[0] for a in home.soup.find_all("a", href=True)
                  if re.search(r"(?i)personvern|privacy|cookie|vilk|terms|impressum|imprint", a["href"] + " " + a.get_text())]
-        links = [u for u in links if same_site(host_of(u), home.host) and u.rstrip("/") not in fetched]
+        links = [u for u in links if same_site(host_of(u), home.host) and _page_key(u) not in fetched]
         origin = f"{urlsplit(home.url).scheme}://{urlsplit(home.url).netloc}"
         for u in links[:1]:
             if not sp.can(1):
@@ -1063,6 +1077,27 @@ async def check_candidate(f: Fetcher, sp: _Spend, ctx: CompanyContext, v: Verdic
                     break
     await _check_variant(sp, ctx, v)
     await _check_collision(sp, ctx, v)
+
+
+def _declared_host(e: dict, host: str) -> bool:
+    """The host is the registry website's or the registry email address's own domain (not a free-mail or
+    invoicing provider)."""
+    hj = host_of((e.get("hjemmeside") or "").strip()) if (e.get("hjemmeside") or "").strip() else ""
+    mail = (e.get("epostadresse") or "").strip().lower()
+    dom = mail.rsplit("@", 1)[1] if "@" in mail else ""
+    if dom in FREE_MAIL or any(dom.endswith("." + x) for x in FREE_MAIL) or INVOICE_MAIL.search(dom or "-"):
+        dom = ""
+    return any(d and same_site(bare(host), bare(d)) for d in (hj, dom))
+
+
+async def _group_parent_site(sp: "_Spend", ctx: CompanyContext, v: Verdict, registry_host: str | None) -> None:
+    """The registry's own site (or email domain) printing only our subsidiaries' org numbers is the group
+    parent's site: those numbers are set aside and the candidate is judged again."""
+    if v.status == "related" and v.source in ("registry", "email") and not v.cross:
+        group = await _group_members(sp, ctx)
+        if group and all(k in group for k in v.others):
+            v.ignore_orgs = set(group)
+            judge(v, ctx.org, ctx.registry or {}, registry_host)
 
 
 COMMON_NOUNS = {"forsikring", "bank", "sparebank", "kraft", "energi", "entreprenor", "tak", "maling", "frisor", "klinikk",
@@ -1188,7 +1223,7 @@ async def _check_collision(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> Non
         if org == ctx.org or r.get("overordnetEnhet") == ctx.org or not _active(r):
             continue
         theirs = _core_tokens(r.get("navn") or "")
-        if not theirs or theirs == ours or not _near(ours, theirs):
+        if not theirs or theirs == ours or not _near(ours, theirs) or _staff_body(r):
             continue
         shares = (our_addr and _addr_key(r) == our_addr) or bool(our_phones & _digits_phones(r))
         if not shares:
@@ -1205,16 +1240,21 @@ async def _check_collision(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> Non
     text = " ".join(p.text for p in v.pages)
     our_rx = _full_name_rx(e.get("navn") or "")
     names_us = bool(our_rx and our_rx.search(text))
+    # another entity's full name seen only inside ours ('Well AS' inside 'The Well AS') does not name it
+    masked = our_rx.sub(" ", text) if our_rx else text
     our_core_rx = name_regex([w for w in name_words(e.get("navn") or "") if w not in FORM_NAME_WORDS])
     for r in rows:
         org = r.get("organisasjonsnummer")
         if org == ctx.org or r.get("overordnetEnhet") == ctx.org or not _active(r):
             continue
         theirs = _core_tokens(r.get("navn") or "")
-        if not theirs or not (theirs <= ours or ours <= theirs):
+        if not theirs or not (theirs <= ours or ours <= theirs) or _staff_body(r):
             continue
         other_rx = _full_name_rx(r.get("navn") or "")
-        names_them = bool(other_rx and other_rx.search(text))
+        # a foreign company's Norwegian branch (NUF) under our name is the parent: never masked away
+        nuf = ((r.get("organisasjonsform") or {}).get("kode") or "").upper() == "NUF" or \
+            bool(re.search(r"(?i)\bNUF\b", r.get("navn") or ""))
+        names_them = bool(other_rx and other_rx.search(text if nuf else masked))
         if theirs != ours:
             # A longer or shorter namesake (a subsidiary 'Kitron Eiendom AS', a parent 'Viken AS') collides only
             # when the site shows that other name as a phrase.
@@ -1551,6 +1591,7 @@ class Scope:
     codeclared: dict[str, str] = field(default_factory=dict)  # other org -> name, declaring the same website
     dominant_kind: dict[str, str] = field(default_factory=dict)  # dominant name -> operator, namesake or mention
     ours_printed: bool = False  # our org number in an operator position, no other operator: the site is ours
+    group_root: bool = False  # we are the top parent of a registry group, on our own proven domain
     addr: tuple | None = None  # (street regex, postcode) of our registered address
 
     def __post_init__(self) -> None:
@@ -1723,6 +1764,22 @@ OWNER_CONTEXT = re.compile(r"(?i)(behandlingsansvarlig|data controller|controlle
                            r"operated by|owned by|run by|nettstedet eies|nettsiden eies|siden drives|"
                            r"er en del av|en avdeling|sin avdeling|avdeling av|datterselskap|subsidiary of|part of|©|copyright|"
                            r"ta kontakt med)")
+SUPPLIER_CONTEXT = re.compile(r"(?i)leverandør|leverandor|supplier|vendor|databehandler|data processor|processor|"
+                              r"tredjepart|third[ -]part|betalingsløsning|payment provider")
+
+
+def _owner_statement(before: str, at: str) -> bool:
+    """An ownership or controller phrase names this company as the site's operator, unless a supplier or data
+    processor word stands between that phrase and the name ('servers operated by the supplier for our
+    e-commerce: Visbook AS' names a supplier, not the operator)."""
+    if OWNER_CONTEXT.search(at):
+        return True
+    hits = list(OWNER_CONTEXT.finditer(before))
+    if not hits:
+        return False
+    return not SUPPLIER_CONTEXT.search(before[hits[-1].end():])
+
+
 FOREIGN_SUFFIX = {"ab", "aps", "oy", "oyj", "gmbh", "ltd", "limited", "inc", "llc", "bv", "srl", "sarl", "ou", "uab"}
 ENTITY_ANY = re.compile(r"((?:[0-9A-Za-zÆØÅæøåÄÖäöüé&\-]+[ \u00a0]+){1,5}?)"
                         r"(AS|ASA|A/S|ANS|DA|SA|AB|ApS|Oy|OY|Oyj|GmbH|Ltd|Limited|Inc|LLC|BV|OÜ|UAB|STI)\b\.?")
@@ -1797,7 +1854,7 @@ def other_company_names(pages: list[Page], words: list[str]) -> list[tuple[str, 
                 if CREDIT.search(before) or (not is_title and " ".join(run) and " ".join(run) in offsite):
                     continue  # a web agency or partner credit
                 key = (" ".join(ws), m.group(2).lower())
-                ctx_hit = bool(OWNER_CONTEXT.search(txt[max(0, m.start() - 60):m.end() + 10]))
+                ctx_hit = _owner_statement(txt[max(0, m.start() - 60):m.start()], txt[m.start():m.end() + 10])
                 mention = m.group(0).strip()
                 positional = is_title or ctx_hit or op_page or (mention in optext)
                 operator = is_title or ctx_hit or (mention in ownertext)
@@ -1805,6 +1862,21 @@ def other_company_names(pages: list[Page], words: list[str]) -> list[tuple[str, 
         for k, v in score.items():
             best[k] = max(best.get(k, 0), v)
     return [(k[0], k[1], best[k] >= 2, best[k] >= 3, best[k] >= 4) for k in sorted(best, key=lambda k: -best[k])]
+
+
+STAFF_ONLY = re.compile(r"(?i)bedriftsidrettslag|bedriftsklubb|personalforening|velferdsforening|fagforening|"
+                        r"pensjonskasse|ansattes|personalklubb")
+
+
+def _staff_body(row: dict) -> bool:
+    """A registered association of the company's own staff (a union club such as 'Tekna Leirvik', a company
+    sports club, a staff welfare fund): an association (FLI) named as a staff body or registered as a trade
+    union (NACE 94.2). It never runs the company's website, so it is no namesake for it. An ordinary sports
+    club sharing a name (a club and its elite-team company) is not a staff body."""
+    if ((row.get("organisasjonsform") or {}).get("kode") or "").upper() != "FLI":
+        return False
+    nace = ((row.get("naeringskode1") or {}).get("kode") or "")
+    return bool(STAFF_ONLY.search(row.get("navn") or "")) or nace.startswith("94.2")
 
 
 STAFF_BODIES = re.compile(r"(?i)bedriftsklubb|bedriftsidrettslag|bil(klubb)?\b|velferd|personalforening|fagforening|"
@@ -1858,6 +1930,8 @@ async def confirm_dominant(sp: "_Spend", ctx: CompanyContext, names: list[tuple]
             out[key] = got[lab]
             if stated:
                 kinds[key] = "stated"  # named as the site's operator, owner or controller, or in the page title
+            elif _staff_body(row):
+                kinds[key] = "mention"  # our staff's union club or sports club
             elif operator:
                 kinds[key] = "operator"
             elif tie and tie != "shares our distinctive name words":
@@ -1907,18 +1981,51 @@ BUILDER_BRANDS = ("surftown", "wix", "squarespace", "webnode", "onecom", "one.co
                   "24so", "sitebuilder", "strikingly", "ukit", "zyro", "ionos", "hostpoint", "loopia", "simply")
 
 
-def _names_other_company(handle: str, words: list[str], other_names: list[str]) -> bool:
+def _names_other_company(handle: str, words: list[str], other_names: list[str], group_root: bool = False) -> bool:
     """A handle that names a different company: our distinctive word plus a group or holding word our own name
-    lacks ('elprogroupas' for Elpro Electro AS), or the name of another registered company we know of."""
+    lacks ('elprogroupas' for Elpro Electro AS), or the name of another registered company we know of. When we
+    are ourselves the top parent of a registry group, '<our name>group' is our own handle."""
     ours = re.sub(r"[^a-z0-9]", "", _translit("".join(words)))
     lead = next((_translit(w) for w in words if len(w) >= 3 and w not in GENERIC_WORDS), "")
-    if lead and lead in handle:
+    if lead and lead in handle and not group_root:
         for gw in GROUP_WORDS:
             if gw in handle and gw not in ours:
                 return True
     for name in other_names:
         sq = re.sub(r"[^a-z0-9]", "", _translit(name))
         if len(sq) >= 5 and sq in handle and sq not in ours and not ours.startswith(sq):
+            return True
+    return False
+
+
+def _bare_page_id(handle: str) -> bool:
+    """A Facebook page addressed by its numeric id alone ('100087098506924') or by an old vanity path ending in
+    the id ('Rørlegger-100656395325438'). Placeholder runs such as 123456789 do not count."""
+    h = unquote(handle)
+    m = re.fullmatch(r"(?:[^/]+-)?(\d{9,20})", h)
+    if not m:
+        return False
+    d = m.group(1)
+    return not (len(set(d)) <= 2 or d in "1234567890123456789012" or d in "9876543210987654321098")
+
+
+def _mixed_block(page: Page, keys: set[str]) -> bool:
+    """The page links a named social profile that carries neither our name nor our domain: its social links
+    mix in another brand's (a chain's, group's or web agency's), so an unnamed id beside them is not provably
+    ours."""
+    for a in page.soup.find_all("a", href=True):
+        c = clean_social(unwrap_redirect(a["href"]))
+        if not c:
+            continue
+        segs = [x for x in urlsplit(c[1]).path.split("/") if x]
+        raw = segs[1] if len(segs) >= 2 and segs[0] in ("people", "p", "company", "school", "showcase", "channel",
+                                                         "user", "c") else (segs[-1] if segs else "")
+        if c[0] == "facebook" and (_bare_page_id(raw) or "profile.php" in c[1]):
+            continue
+        if re.match(r"(?i)UC[\w-]{10,}$", raw):
+            continue
+        h = re.sub(r"[^a-z0-9]", "", _translit(unquote(raw)))
+        if h and not any(k in h for k in keys):
             return True
     return False
 
@@ -1987,17 +2094,26 @@ def collect_socials(pages: list[Page], words: list[str], domains: set[str], scop
             segs = [x for x in path.split("/") if x]
             raw_handle = segs[1] if len(segs) >= 2 and segs[0] in ("people", "p") else (segs[-1] if segs else "")
             handle = re.sub(r"[^a-z0-9]", "", _translit(unquote(raw_handle)))
-            if _names_other_company(handle, words, other_names) or any(
+            if _names_other_company(handle, words, other_names, scope.group_root) or any(
                     re.sub(r"[^a-z0-9]", "", b) in handle for b in BUILDER_BRANDS if not any(
                         re.sub(r"[^a-z0-9]", "", b) in k for k in keys)):
                 dropped.append(u)  # another company's, or the site builder's or web agency's own profile
                 continue
+            bare_id = plat == "facebook" and bool(segs) and segs[0] not in ("p", "people", "pages", "profile.php") \
+                and bool(re.fullmatch(r"(?:[^/]+-)?\d{6,20}", unquote(segs[0])))
             id_only = handle.isdigit() or bool(re.match(r"/channel/UC", path)) or "profile.php" in u or \
-                (len(segs) >= 2 and segs[0] in ("people", "p"))
+                (len(segs) >= 2 and segs[0] in ("people", "p")) or bare_id
             named = any(k in handle for k in keys)
             # like the publication gate: the handle carries our name or domain, or it is a numeric profile id
             # linked from the site's header, footer or structured data as the only one for its platform
-            if named or (id_only and chrome and len(urls) == 1):
+            ok = named or (id_only and chrome and len(urls) == 1)
+            if not named and bare_id:
+                # a bare Facebook page id (facebook.com/1000..., facebook.com/Name-1000...) names nobody: keep it
+                # only as the site's single Facebook link, as an icon or in the page chrome, on a page that prints
+                # our org number, beside no profile of another name (a group's or agency's link block)
+                ok = (_bare_page_id(segs[0]) and len(urls) == 1 and (chrome or iconic) and bool(scope.org)
+                      and bool(find_orgnr(p, scope.org)) and not _mixed_block(p, keys))
+            if ok:
                 kept.append((not named, u, (plat, u, p, s)))
             else:
                 dropped.append(u)
@@ -2602,14 +2718,14 @@ async def prepare_scope(sp: _Spend, ctx: CompanyContext, v: Verdict) -> Scope:
     if not (v.cross or v.path_scoped) and not any(INTERNAL_PRIORITY[0].search(urlsplit(p.url).path) for p in v.pages):
         for link in internal_links(home):
             if INTERNAL_PRIORITY[0].search(link) or INTERNAL_PRIORITY[1].search(link):
-                if sp.can(1) and link not in {p.url for p in v.pages}:
+                if sp.can(1) and _page_key(link) not in {_page_key(p.url) for p in v.pages}:
                     p, _st = await _fetch_page(sp, link)
                     if p and same_site(p.host, home.host):
                         v.pages.append(p)
                 break
     if not (v.cross or v.path_scoped):
         priv = next((u for u in internal_links(home) if re.search(r"(?i)personvern|privacy", u)), None)
-        if priv and sp.can(1) and priv not in {p.url for p in v.pages}:
+        if priv and sp.can(1) and _page_key(priv) not in {_page_key(p.url) for p in v.pages}:
             p, _st = await _fetch_page(sp, priv)
             if p and same_site(p.host, home.host):
                 v.pages.append(p)  # read for operator and controller names; never a contact source
@@ -2706,7 +2822,23 @@ async def prepare_scope(sp: _Spend, ctx: CompanyContext, v: Verdict) -> Scope:
     sc = Scope(ctx.org, words, others, sisters, dominant, v.cross, v.path_scoped, other_mail, codeclared, addr)
     sc.dominant_kind = kinds
     sc.ours_printed = ours_printed
+    if own_proof and _group_handle_linked(v.pages, words):
+        sc.group_root = bool(await _group_members(sp, ctx))  # one cached registry lookup, only when needed
     return sc
+
+
+def _group_handle_linked(pages: list[Page], words: list[str]) -> bool:
+    """A social link whose handle joins our distinctive word with a group or holding word ('kvistgroup')."""
+    lead = next((_translit(w) for w in words if len(w) >= 3 and w not in GENERIC_WORDS), "")
+    if not lead:
+        return False
+    for p in pages:
+        for a in p.soup.find_all("a", href=True):
+            c = clean_social(unwrap_redirect(a["href"]))
+            h = re.sub(r"[^a-z0-9]", "", _translit(unquote(urlsplit(c[1]).path))) if c else ""
+            if lead in h and any(g in h for g in GROUP_WORDS):
+                return True
+    return False
 
 
 def _num_in_operator_position(v: Verdict, num: str) -> bool:
@@ -2953,7 +3085,7 @@ class CanonicalSocial(str):
 
 def canonical_social(platform: str, url: str) -> CanonicalSocial:
     p = urlsplit(url)
-    value = (SOCIAL_HOSTS[platform] + unquote(p.path).rstrip("/")).lower()
+    value = (SOCIAL_HOSTS[platform] + unquote(p.path).rstrip("/")).lower()  # 'Rørlegger', not 'R%C3%B8rlegger'
     ids = [v for k, v in parse_qsl(p.query) if k == "id" and v.isdigit()]
     if p.path.endswith("profile.php") and ids:
         value = f"facebook.com/profile.php?id={ids[0]}"

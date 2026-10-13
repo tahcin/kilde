@@ -1860,3 +1860,174 @@ def test_spans_match_titles_written_with_numeric_entities():
     assert W.verbatim(raw, "Moi Rør banet vei for prosjekter med bærekraft & økt fart") == \
         "Moi R&#xF8;r banet vei for prosjekter med b&#xE6;rekraft &amp; &#248;kt fart"
     assert W.verbatim(raw, "Moi Rør banet vei mot noe annet") is None
+
+
+# ---------------------------------------------------------------- v2 website and social recall rules
+def test_find_us_page_is_read_for_the_registered_address():
+    """A 'Find us' page is a contact page: our registered address there proves the site with the legal name."""
+    home = html('<nav><a href="/om">Om</a><a href="/findus">Find us</a></nav><h1>Fjellbekk Trevare AS</h1>')
+    findus = html("<p>Fjellbekk Trevare AS, Lyngveien 12B, 9999 Testby</p>")
+    f = FakeFetcher({"https://fjellbekktrevare.no/": (200, home), "https://fjellbekktrevare.no/findus": (200, findus),
+                     "https://fjellbekktrevare.no/om": (200, html("<p>Om oss</p>"))})
+    claims = run(f, ctx_for())
+    assert claims["official_website"].value == "fjellbekktrevare.no"
+    assert claims["official_website"].match["method"] == "address_and_name"
+
+
+def test_trailing_slash_variants_are_one_page():
+    home = html('<a href="/kontakt-oss/">Kontakt</a><a href="/kontakt-oss">Kontakt oss</a><a href="/om-oss">Om</a>')
+    page = W.parse_page(Snapshot(url="https://fjellbekk.no/", final_url="https://fjellbekk.no/", status=200,
+                                 retrieved_at=utc_now(), content=home.encode(), content_type="text/html"))
+    assert W.internal_links(page) == ["https://fjellbekk.no/kontakt-oss/", "https://fjellbekk.no/om-oss"]
+
+
+def test_whole_name_on_com_is_tried_before_shortened_names():
+    doms = W.name_domains("TESTBY MOUNTAIN GUIDES AS", {"forretningsadresse": {"poststed": "TESTBY"}})
+    assert doms.index("testbymountainguides.com") < doms.index("mountainguides.no")
+    assert doms[:2] == ["testbymountainguides.no", "testby-mountain-guides.no"]
+
+
+def test_group_parent_site_whose_subsidiary_number_is_only_on_the_contact_page():
+    """AF Gruppen shape: the front page names us, the contact page prints a subsidiary's org number."""
+    home = html('<nav><a href="/kontakt-oss/">Kontakt</a></nav><h1>Fjellbekk Trevare ASA</h1>'
+                '<footer><a href="mailto:post@fjellbekk.no">post@fjellbekk.no</a></footer>')
+    contact = html(f"<p>Fjellbekk Energi AS, org.nr {OTHER}</p>")
+    tree = json.dumps({"organisasjonsnummer": OURS, "children": [{"organisasjonsnummer": OTHER, "children": []}]})
+    pages = {"https://fjellbekk.no/": (200, home), "https://fjellbekk.no/kontakt-oss/": (200, contact),
+             f"https://data.brreg.no/enhetsregisteret/api/konsernstruktur/{OURS}": (200, tree, "application/json")}
+    claims = run(FakeFetcher(pages), ctx_for(navn="FJELLBEKK TREVARE ASA", hjemmeside="fjellbekk.no"))
+    assert claims["official_website"].value == "fjellbekk.no"
+    # without the group tie the same site stays a related site
+    W._GROUP_CACHE.clear()
+    pages[f"https://data.brreg.no/enhetsregisteret/api/konsernstruktur/{OURS}"] = (404, "{}", "application/json")
+    claims = run(FakeFetcher(pages), ctx_for(navn="FJELLBEKK TREVARE ASA", hjemmeside="fjellbekk.no"))
+    assert claims["official_website"].availability != "available"
+
+
+def _near_row(name, form, nace):
+    return {"organisasjonsnummer": SISTER, "navn": name, "organisasjonsform": {"kode": form},
+            "naeringskode1": {"kode": nace}, "forretningsadresse": {"adresse": ["Lyngveien 12B"], "postnummer": "9999"}}
+
+
+def test_staff_union_club_sharing_our_address_is_no_namesake():
+    """Leirvik and Consto shapes: 'Tekna Fjellbekk' or a company sports club at our address."""
+    body = "<h1>Fjellbekk</h1><footer>Fjellbekk AS · Lyngveien 12B, 9999 Testby</footer>"
+    q = "https://data.brreg.no/enhetsregisteret/api/enheter?navn=fjellbekk&forretningsadresse.postnummer=9999&size=50"
+    for row, published in ((_near_row("TEKNA FJELLBEKK", "FLI", "94.200"), True),
+                           (_near_row("FJELLBEKK BEDRIFTSIDRETTSLAG", "FLI", "93.120"), True),
+                           (_near_row("FJELLBEKK IDRETTSLAG", "FLI", "93.120"), False),  # a club, not staff
+                           (_near_row("FJELLBEKKS AS", "AS", "41.000"), False)):
+        W._NAME_SEARCH.clear()
+        pages = {"https://fjellbekk.com/": (200, html(body)),
+                 q: (200, json.dumps({"_embedded": {"enheter": [row]}}), "application/json")}
+        ctx = ctx_for(navn="FJELLBEKK AS")
+        run(FakeFetcher(pages), ctx)
+        assert bool(ctx.claims_for("official_website")) is published, row["navn"]
+
+
+def test_namesake_seen_only_inside_our_own_name_does_not_collide():
+    """The Well shape: 'WELL AS' is registered too, but the site only ever writes 'The Well AS'."""
+    body = '<h1>The Well</h1><footer>The Well AS · <a href="mailto:post@thewell.no">post@thewell.no</a></footer>'
+    pages = {"https://thewell.no/": (200, html(body, title="The Well"))}
+    pages.update(_brreg("enheter", "well", [{"organisasjonsnummer": SISTER, "navn": "WELL AS"}]))
+    ctx = ctx_for(navn="THE WELL AS", hjemmeside="thewell.no")
+    claims = run(FakeFetcher(pages), ctx)
+    assert claims["official_website"].value == "thewell.no"
+    assert claims["site_contact_email"].value == "post@thewell.no"
+    # the namesake written on its own still collides
+    W._NAME_SEARCH.clear()
+    body2 = body.replace("</footer>", " Samarbeid med Well AS</footer>")
+    pages["https://thewell.no/"] = (200, html(body2, title="The Well"))
+    claims = run(FakeFetcher(pages), ctx_for(navn="THE WELL AS", hjemmeside="thewell.no"))
+    assert claims.get("site_contact_email") is None or claims["site_contact_email"].availability != "available"
+
+
+def test_redirect_into_the_registry_email_domain_is_the_company_site():
+    """Hjelpemiddelspesialisten shape: the registry website redirects to the registry email domain."""
+    body = '<h1>Fjellbekk Trevare AS</h1><footer><a href="mailto:post@fjb.no">post@fjb.no</a></footer>'
+    f = FakeFetcher({"https://fjb.no/": (200, html(body))}, redirects={"https://fjellbekk.no/": "https://fjb.no/"})
+    claims = run(f, ctx_for(hjemmeside="fjellbekk.no", epostadresse="post@fjb.no"))
+    assert claims["official_website"].value == "fjb.no"
+    assert claims["site_contact_email"].value == "post@fjb.no"
+    # a redirect into an undeclared domain is still a related page
+    W._HJEM_CACHE.clear()
+    f2 = FakeFetcher({"https://fjb.no/": (200, html(body))}, redirects={"https://fjellbekk.no/": "https://fjb.no/"})
+    claims2 = run(f2, ctx_for(hjemmeside="fjellbekk.no", epostadresse="post@fjellbekk.no"))
+    assert claims2["official_website"].availability != "available"
+
+
+def test_supplier_named_after_an_operated_by_phrase_is_not_the_operator():
+    """Norway Active shape: 'servers operated by the supplier for our e-commerce: Kvist Booking AS'."""
+    words = W.name_words("FJELLBEKK TREVARE AS")
+    priv = W.parse_page(Snapshot(url="https://fjellbekk.no/privacy-policy/", final_url="https://fjellbekk.no/privacy-policy/",
+                                 status=200, retrieved_at=utc_now(), content=html(
+        "<p>Data is stored on servers which are operated by the supplier for our e-commerce: Kvist Booking AS.</p>"
+        "<p>The site is operated by Lyng Drift AS.</p>").encode(), content_type="text/html"))
+    names = {n[0]: n for n in W.other_company_names([priv], words)}
+    assert names["kvist booking"][4] is False
+    assert names["lyng drift"][4] is True
+
+
+def _fb_site(fb, footer_org=True, extra=""):
+    org = f"Org.nr {OURS}" if footer_org else ""
+    body = (f'<h1>Fjellbekk Trevare AS</h1><footer>Fjellbekk Trevare AS {org} · Lyngveien 12B, 9999 Testby '
+            f'<a href="{fb}"></a>{extra}</footer>')
+    return FakeFetcher({"https://fjellbekk.no/": (200, html(body))})
+
+
+def test_bare_facebook_page_id_on_an_orgnr_page_is_kept():
+    for fb, value in (("https://facebook.com/100087098506924", "facebook.com/100087098506924"),
+                      ("https://www.facebook.com/R%C3%B8rlegger-100656395325438", None)):
+        ctx = ctx_for(hjemmeside="fjellbekk.no")
+        run(_fb_site(fb), ctx)
+        got = [str(c.value) for c in ctx.claims if c.field == "social_profile"]
+        assert len(got) == 1 and (value is None or got == [value])
+
+
+def test_bare_facebook_page_id_needs_our_orgnr_and_an_unmixed_block():
+    # proven by address and name only: the page does not print our org number
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(_fb_site("https://facebook.com/100087098506924", footer_org=False), ctx)
+    assert not ctx.claims_for("social_profile")
+    # beside another brand's profile (a chain's or agency's link block)
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(_fb_site("https://facebook.com/100087098506924", extra='<a href="https://www.instagram.com/kvistgruppen/"></a>'), ctx)
+    assert not ctx.claims_for("social_profile")
+    # placeholder ids
+    for fb in ("https://facebook.com/123456789", "https://facebook.com/111111111"):
+        ctx = ctx_for(hjemmeside="fjellbekk.no")
+        run(_fb_site(fb), ctx)
+        assert not ctx.claims_for("social_profile")
+
+
+def test_group_handle_is_ours_when_we_are_the_registry_group_parent():
+    """Kitron shape: the listed parent links facebook.com/<name>group from its own org-number-proven site."""
+    body = (f'<footer>Fjellbekk Trevare ASA · Org.nr {OURS}'
+            '<a href="https://www.facebook.com/fjellbekkgroup/"></a></footer>')
+    tree = json.dumps({"organisasjonsnummer": OURS, "children": [{"organisasjonsnummer": OTHER, "children": []}]})
+    pages = {f"https://data.brreg.no/enhetsregisteret/api/konsernstruktur/{OURS}": (200, tree, "application/json")}
+    ctx = ctx_for(navn="FJELLBEKK TREVARE ASA", hjemmeside="fjellbekk.no")
+    run(_site(pages, body=body), ctx)
+    assert [str(c.value) for c in ctx.claims if c.field == "social_profile"] == ["facebook.com/fjellbekkgroup"]
+    # not a group parent: the same handle is another company's
+    W._GROUP_CACHE.clear()
+    ctx = ctx_for(navn="FJELLBEKK TREVARE ASA", hjemmeside="fjellbekk.no")
+    run(_site(body=body), ctx)
+    assert not [c for c in ctx.claims if c.field == "social_profile" and c.availability == "available"]
+
+
+def test_foreign_branch_under_our_name_still_collides_inside_our_name():
+    """Lundbeck shape: 'FJELLBEKK' is also the NUF of a foreign parent; the site writing 'Fjellbekk AS' is no proof."""
+    body = '<h1>Fjellbekk</h1><footer>Fjellbekk AS · <a href="mailto:post@fjellbekk.no">post@fjellbekk.no</a></footer>'
+    pages = {"https://fjellbekk.no/": (200, html(body, title="Fjellbekk"))}
+    pages.update(_brreg("enheter", "fjellbekk", [{"organisasjonsnummer": SISTER, "navn": "FJELLBEKK",
+                                                   "organisasjonsform": {"kode": "NUF"}}]))
+    claims = run(FakeFetcher(pages), ctx_for(navn="FJELLBEKK AS", hjemmeside="fjellbekk.no"))
+    assert claims.get("site_contact_email") is None or claims["site_contact_email"].availability != "available"
+
+
+def test_redirect_to_a_locale_page_of_the_registry_email_domain_stays_cross():
+    body = '<h1>Fjellbekk Trevare AS</h1><footer><a href="mailto:post@fjb.no">post@fjb.no</a></footer>'
+    f = FakeFetcher({"https://fjb.no/no": (200, html(body))}, redirects={"https://fjellbekk.no/": "https://fjb.no/no"})
+    claims = run(f, ctx_for(hjemmeside="fjellbekk.no", epostadresse="post@fjb.no"))
+    assert claims["official_website"].availability != "available"

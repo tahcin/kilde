@@ -116,7 +116,7 @@ def check(ctx: CompanyContext) -> list[str]:
             continue
         handle = fold(str(c.value).split("/", 1)[1] if "/" in str(c.value) else str(c.value))
         handle_alnum = re.sub(r"[^a-z0-9]", "", handle)
-        numeric_id = bool(re.search(r"(profile\.php\?id=\d+|channel/uc[\w-]{10,}|/\d{6,}$|-\d{9,}$)", handle))
+        numeric_id = bool(re.search(r"(profile\.php\?id=\d+|channel/uc[\w-]{10,}|/\d{6,}$|-\d{9,}$|^\d{9,}$)", handle))
         named = any(re.sub(r"[^a-z0-9]", "", t) in handle_alnum for t in tokens if len(t) >= 4) or \
             (len(label_alnum) >= 3 and label_alnum in handle_alnum) or \
             (tokens and re.sub(r"[^a-z0-9]", "", "".join(tokens)) in handle_alnum)
@@ -124,8 +124,11 @@ def check(ctx: CompanyContext) -> list[str]:
             withhold(c, f"social handle '{handle}' does not carry the company's name or its site's domain (possible template or agency link)")
             continue
         # A handle naming another legal entity (a foreign sister such as "hobartgmbh") is not ours.
+        # a form glued to the end of the handle counts once, as its longest match ('entraasa' ends in asa, not sa)
+        glued = max((f for f in FOREIGN_FORMS if handle_alnum.endswith(f) and len(handle_alnum) > len(f) + 3),
+                    key=len, default=None)
         forms = set(re.findall(r"(?<![a-z])(" + "|".join(FOREIGN_FORMS) + r")(?![a-z])", re.sub(r"[^a-z]+", " ", handle))) | \
-            {f for f in FOREIGN_FORMS if handle_alnum.endswith(f) and len(handle_alnum) > len(f) + 3}
+            ({glued} if glued else set())
         if forms - own_forms:
             withhold(c, f"social handle '{handle}' names another legal entity ({', '.join(sorted(forms - own_forms))})")
 
