@@ -63,6 +63,7 @@ def invalid_envelope(raw: str, run_id: str, at: str) -> dict:
     sections = {s: {"state": "failed", "claim_ids": []} for s in
                 ("identity", "financials", "leadership", "locations", "web_presence", "hiring", "activity")}
     return {"organisation_number": raw, "agent": {"name": "Kilde", "version": __version__},
+            "state": "submission_error",
             "run": {"run_id": run_id, "started_at": at, "completed_at": at, "terminal_status": "failed"},
             "legal_name": None, "sections": sections, "claims": [], "evidence": [],
             "summary": {"text": "", "sentences": [], "unknowns": ["The input is not a valid nine-digit Norwegian organisation number."]},
@@ -117,7 +118,7 @@ def main(argv: list[str] | None = None) -> None:
     r.add_argument("--run-id", default=None)
     r.add_argument("--expected-count", type=int, default=None)
     r.add_argument("--previous", default=None, help="previous envelopes JSONL for refresh diffs")
-    r.add_argument("--state-dir", default="state", help="keeps the latest envelopes so the next run diffs against them")
+    r.add_argument("--state-dir", default="", help="optional folder that keeps the latest envelopes so the next run diffs against them (off by default)")
     r.add_argument("--bulk", default=None, help="frozen Brreg snapshot (CSV or JSON, optionally .gz); used for identity when the live API fails")
     r.add_argument("--max-requests", type=int, default=None, help="outbound HTTP request budget (default 20 per company)")
     r.add_argument("--time-budget", type=float, default=None, help="seconds (default 1800)")
@@ -184,7 +185,7 @@ def validate(envelopes: list[dict], orgs: list[str]) -> dict:
     checks = {
         "one_envelope_per_input": sorted(got) == sorted(orgs),
         "unique": len(got) == len(set(got)),
-        "all_terminal": all(e["run"]["terminal_status"] in ("completed", "not_available", "failed") for e in envelopes),
+        "all_terminal": all(e["run"]["terminal_status"] in ("completed", "failed") for e in envelopes),
         "all_sections_present": all(len(e["sections"]) == 7 for e in envelopes),
         "available_claims_have_evidence": all(c["evidence_ids"] for e in envelopes for c in e["claims"]
                                               if c["availability"] == "available"),

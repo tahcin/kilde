@@ -304,6 +304,8 @@ async def run_batch(orgs: list[str], opt: Options) -> tuple[list[dict], dict]:
                 ctx.error("activity", repr(exc))
         elif ctx.registry and want("activity") and "change_feed" in batch_info:
             ctx.mark("registry_change", "activity", "not_available", note="No registry updates in the last 12 months")
+        if ctx.facts.get("deleted") and not any(c.field == "job_ad" for c in ctx.claims):
+            ctx.mark("job_ad", "hiring", "not_applicable", note="the company is deleted from the register")
         if not ctx.claims_for("job_ad") and not any(c.field == "job_ad" for c in ctx.claims) and ctx.registry:
             ctx.mark("job_ad", "hiring", "not_available" if nav and "jobs" in batch_info else "failed",
                      note="No job ads checked" if not nav else None)
@@ -320,11 +322,20 @@ async def run_batch(orgs: list[str], opt: Options) -> tuple[list[dict], dict]:
         "emitted_envelopes": len(envelopes), "runtime_ms": int((time.monotonic() - t0) * 1000),
         "publication_gate": {"withheld": len(gate_notes), "notes": gate_notes[:200]},
         "website_retries": batch_info.get("website_retries", 0),
+        "company_runtime_ms": _percentiles([e["operations"]["runtime_ms"] for e in envelopes]),
         "operations": {"requests": budget.used, "max_requests": opt.max_requests, "dns_lookups": budget.dns_lookups,
                        "cache_hits": budget.cache_hits, "by_host": dict(sorted(budget.by_host.items(), key=lambda x: -x[1])[:25]),
                        "third_party_cost_usd": 0.0, "llm_calls": 0, "time_budget_seconds": opt.seconds},
     }
     return envelopes, report
+
+
+def _percentiles(xs: list[int]) -> dict:
+    xs = sorted(xs)
+    if not xs:
+        return {}
+    pick = lambda q: xs[min(len(xs) - 1, int(q * len(xs)))]  # noqa: E731
+    return {"p50": pick(0.5), "p95": pick(0.95), "max": xs[-1]}
 
 
 def bulk_identity(ctx: CompanyContext, path: str) -> None:
@@ -420,9 +431,13 @@ def assemble(ctx: CompanyContext, opt: Options, started_at: str, completed_at: s
         if ev.id not in ctx.snapshots and ev.claim_span:
             ev.claim_span = ev.claim_span[:MAX_SPAN]
     summary = summarise(ctx, changes)
-    terminal = "completed" if ctx.registry else ("not_available" if any(c.availability == "not_available" for c in ctx.claims) else "failed")
+    # The run completed for this input unless the registry itself could not be reached; an unknown
+    # organisation number is a completed lookup with identity "not_available".
+    terminal = "failed" if not ctx.registry and ctx.module_states.get("registry") in ("failed", "timeout") else "completed"
+    t = ctx.facts.get("timings_ms", {})
     return {
         "organisation_number": ctx.org,
+        "state": "complete" if terminal == "completed" else "submission_error",
         "agent": {"name": "Kilde", "version": __version__, "commit": commit},
         "run": {"run_id": opt.run_id, "started_at": started_at, "completed_at": completed_at, "terminal_status": terminal,
                 **({"provisional": True} if provisional else {})},
@@ -435,7 +450,7 @@ def assemble(ctx: CompanyContext, opt: Options, started_at: str, completed_at: s
         "changes": changes,
         "errors": ctx.errors,
         "module_states": ctx.module_states,
-        "operations": {"requests": ctx.requests, "third_party_cost_usd": 0.0, "llm_calls": 0,
-                       "timings_ms": ctx.facts.get("timings_ms", {})},
+        "operations": {"requests": ctx.requests, "runtime_ms": sum(t.values()), "third_party_cost_usd": 0.0,
+                       "llm_calls": 0, "timings_ms": t},
         "human_url": f"https://virksomhet.brreg.no/oppslag/enheter/{ctx.org}",
     }
