@@ -357,7 +357,8 @@ def emit_entity(ctx: CompanyContext, batch: WikidataBatch, qsnap: Snapshot, snap
     # Inception (P571)
     for s in statements(claims, "P571")[:1]:
         d = wd_date(_value(s))
-        if d:
+        reg = [c.value for c in ctx.claims_for("incorporation_date")]
+        if d and (not reg or d in reg):  # never contradict the registry's incorporation date
             ctx.add_claim("inception_date", "identity", d, ev("P571", s), as_of=d, match=m)
 
     # Headquarters (P159), label bundled in the batch query

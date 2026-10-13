@@ -61,13 +61,19 @@ FIELD_FAMILY: dict[str, str] = {
     "official_website": "official_website",
     "social_profile": "social_profiles",
     "site_email": "contact", "site_phone": "contact", "contact_email": "contact", "contact_phone": "contact",
+    "site_contact_email": "contact", "site_contact_phone": "contact", "registry_email": "contact",
+    "registry_phone": "contact", "registry_mobile": "contact", "registry_website": "official_website",
+    "website_title": "official_website", "website_description": "official_website",
+    "structured_data_organization": "official_website", "related_website": "official_website",
     # hiring
     "job_ad": "hiring", "careers_page": "hiring",
     # activity
     "registry_change": "activity", "site_page_updated": "activity", "news": "activity", "news_item": "activity",
+    "site_news": "activity",
     # external registers
     "lei": "external_registers", "financial_licence": "external_registers", "ticker": "external_registers",
-    "isin": "external_registers",
+    "isin": "external_registers", "stock_ticker": "external_registers", "inception_date": "identity_extras",
+    "headquarters": "identity_extras", "employees_reported": "identity_extras", "reported_ceo": "leadership",
 }
 FIELD_PREFIX_FAMILY = [("social_", "social_profiles"), ("wikidata_", "external_registers"), ("lei_", "external_registers")]
 

@@ -92,8 +92,10 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
 
     emp = first(ctx, "employees_registered")
     if emp:
-        count = f"{emp.value:,}" if isinstance(emp.value, int) else str(emp.value)
-        say(f"It has {count} registered employee{'' if emp.value == 1 else 's'}" + (f" (as of {emp.as_of})." if emp.as_of else "."), emp)
+        if isinstance(emp.value, int):
+            say(f"It has {emp.value:,} registered employee{'' if emp.value == 1 else 's'}" + (f" (as of {emp.as_of})." if emp.as_of else "."), emp)
+        else:
+            say("It has registered employees, but fewer than five, so Brreg does not publish the exact number.", emp)
 
     # Latest company accounts, else group accounts.
     fin = [c for c in ctx.claims_for("revenue") + ctx.claims_for("annual_result")]
@@ -152,12 +154,22 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
                "address_and_name": "the site shows the registered address and the company name"}.get((site.match or {}).get("method"), "identity checks")
         say(f"Its website is {site.value} (verified because {how}).", site)
     socials = ctx.claims_for("social_profile")
-    if socials:
-        names = sorted({PLATFORM.get(c.value.get("platform", ""), c.value.get("platform", "")) for c in socials})
-        say(f"The verified site links to its profiles on {', '.join(names)}.", *socials)
+    by_source: dict[str, list[Claim]] = {}
+    for c in socials:
+        method = (c.match or {}).get("method", "")
+        src = "registry" if method == "registry_declared" else ("wikidata" if "wikidata" in method or "p2333" in method else "site")
+        by_source.setdefault(src, []).append(c)
+    lead = {"site": "The verified site links to its profiles on", "registry": "Its registry entry lists its profile on",
+            "wikidata": "Wikidata (matched on the organisation number) lists its profiles on"}
+    for src, items in by_source.items():
+        names = sorted({PLATFORM.get(c.value.get("platform", ""), c.value.get("platform", "")) for c in items})
+        say(f"{lead[src]} {', '.join(names)}.", *items)
     lei = first(ctx, "lei")
     if lei:
-        say(f"It holds the Legal Entity Identifier {lei.value.get('lei')} ({(lei.value.get('status') or '').lower()}).", lei)
+        reg = (lei.value.get("registration_status") or "").upper()
+        state = {"ISSUED": "registration current", "LAPSED": "registration lapsed", "PENDING_TRANSFER": "transfer pending",
+                 "RETIRED": "retired"}.get(reg, f"registration status {reg.lower()}" if reg else "status not stated")
+        say(f"It holds the Legal Entity Identifier {lei.value.get('lei')} ({state}).", lei)
     lic = ctx.claims_for("financial_licence")
     if lic:
         say(f"Finanstilsynet lists {len(lic)} licence{'s' if len(lic) != 1 else ''} for it.", *lic[:3])

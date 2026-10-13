@@ -25,7 +25,7 @@ def span_of(obj: Any, *keys: str) -> str:
         part = {k: obj[k] for k in keys if k in obj} if keys else obj
     else:
         part = obj
-    return json.dumps(part, ensure_ascii=False, separators=(",", ":"))[:400]
+    return json.dumps(part, ensure_ascii=False, separators=(",", ":"))  # truncated after exact-span repair
 
 
 def _addr(a: dict | None) -> str | None:
@@ -137,8 +137,9 @@ def emit_entity_claims(ctx: CompanyContext, snap: Snapshot, e: dict) -> None:
         ctx.add_claim("employees_registered", "identity", None, ev("harRegistrertAntallAnsatte"), availability="not_available",
                       note="No employees registered in the Aa-register", match=m)
     elif "antallAnsatte" not in e and e.get("harRegistrertAntallAnsatte"):
-        ctx.add_claim("employees_registered", "identity", "1-4", ev("harRegistrertAntallAnsatte"), match=m,
-                      note="Brreg withholds exact counts between 1 and 4 employees for privacy")
+        ctx.add_claim("employees_registered", "identity", "fewer than 5 (exact count withheld by Brreg)",
+                      ev("harRegistrertAntallAnsatte"), match=m,
+                      note="harRegistrertAntallAnsatte is true but Brreg omits antallAnsatte below 5 employees for privacy")
     if e.get("kapital"):
         k = e["kapital"]
         ctx.add_claim("share_capital", "identity", {"amount": k.get("belop"), "currency": k.get("valuta"),
@@ -364,9 +365,12 @@ def describe_paths(changes: list[dict]) -> list[str]:
     seen: list[str] = []
     for ch in changes:
         top = (ch.get("path") or "/").strip("/").split("/")[0]
-        if top.startswith("registreringsdato"):
-            continue
-        word = PATH_WORDS.get(top, top)
+        if top.startswith("registreringsdatoAntallAnsatte"):
+            word = "employee count (re-registered)"
+        elif top.startswith("registreringsdato"):
+            word = "registration dates"
+        else:
+            word = PATH_WORDS.get(top, top)
         if word and word not in seen:
             seen.append(word)
     return seen
@@ -399,8 +403,8 @@ def emit_change_claims(ctx: CompanyContext, snap: Snapshot, items: list[dict]) -
             continue
         words = describe_paths(item.get("endringer") or [])
         kind = item.get("endringstype")
-        if kind == "Endring" and not words:
-            continue
+        if not words and kind not in ("Ny", "Sletting"):
+            words = ["unspecified fields (the feed lists no field paths)"]
         date = (item.get("dato") or "")[:10]
         value = {"date": date, "type": {"Ny": "registered", "Endring": "updated", "Sletting": "deleted"}.get(kind, kind),
                  "changed": words, "update_id": item.get("oppdateringsid")}
