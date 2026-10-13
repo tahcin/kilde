@@ -143,6 +143,11 @@ async def run_batch(orgs: list[str], opt: Options) -> tuple[list[dict], dict]:
             except Exception as exc:  # noqa: BLE001
                 log.warning("jobs prepare failed: %r", exc)
                 batch_info["jobs_error"] = repr(exc)
+        if gleif and want("gleif"):
+            try:
+                batch_info["gleif"] = await gleif.prepare_gleif(f, orgs)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("gleif prepare failed: %r", exc)
         if wiki and want("wikidata"):
             try:
                 batch_info["wikidata"] = await wiki.prepare_wikidata(f, orgs)
@@ -165,7 +170,7 @@ async def run_batch(orgs: list[str], opt: Options) -> tuple[list[dict], dict]:
             if website and want("website"):
                 await _step(ctx, "website", lambda: website.fetch_website(f, ctx), "official_website", "web_presence")
             if gleif and want("gleif"):
-                await _step(ctx, "gleif", lambda: gleif.fetch_gleif(f, ctx), "lei", "identity")
+                await _step(ctx, "gleif", lambda: gleif.fetch_gleif(f, ctx, batch_info.get("gleif")), "lei", "identity")
             if ctx.registry.get("erIKonsern") and want("group"):
                 await _step(ctx, "group", lambda: brreg.fetch_group(f, ctx), "group_parent", "identity")
             if fin and want("finanstilsynet") and _maybe_licensed(ctx.registry):

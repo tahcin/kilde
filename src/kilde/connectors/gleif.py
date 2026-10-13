@@ -65,8 +65,29 @@ def pick_record(data: list[dict], org: str) -> tuple[dict | None, str | None]:
     return pool[0], None
 
 
-async def fetch_gleif(f: Fetcher, ctx: CompanyContext) -> None:
-    state = {"lei_done": False, "pending": [field for _, field in PARENTS]}
+async def prepare_gleif(f: Fetcher, orgs: list[str], chunk: int = 40) -> dict[str, tuple[Snapshot, list[dict]]]:
+    """Batch lookup: one request per 40 organisations (both spellings of each number).
+
+    GLEIF rate-limits at roughly 60 requests a minute, so per-company lookups for a
+    1,000-company batch would trip it; batching keeps the whole batch to about 25 requests."""
+    f.set_rate("api.gleif.org", 1.1)
+    out: dict[str, tuple[Snapshot, list[dict]]] = {}
+    for i in range(0, len(orgs), chunk):
+        part = orgs[i:i + chunk]
+        values = ",".join(f"{spaced(o).replace(' ', '%20')},{o}" for o in part)
+        url = f"{API}/lei-records?filter%5Bentity.registeredAs%5D={values}&page%5Bsize%5D=200"
+        snap = await f.get(url, headers=JSON_HEADERS)
+        if snap.status != 200:
+            continue
+        data = snap.json().get("data") or []
+        for o in part:
+            out[o] = (snap, data)
+    return out
+
+
+async def fetch_gleif(f: Fetcher, ctx: CompanyContext, batch: dict | None = None) -> None:
+    state = {"lei_done": False, "pending": [field for _, field in PARENTS],
+             "prefetched": (batch or {}).get(ctx.org)}
     try:
         await _run(f, ctx, state)
     except Exception as exc:  # never raise into the orchestrator
@@ -82,15 +103,18 @@ async def fetch_gleif(f: Fetcher, ctx: CompanyContext) -> None:
 
 async def _run(f: Fetcher, ctx: CompanyContext, state: dict) -> None:
     org = ctx.org
-    url = search_url(org)
-    snap = await f.get(url, headers=JSON_HEADERS)
-    ctx.requests += 1
-    if snap.status != 200:
-        raise RuntimeError(f"HTTP {snap.status} for {url}")
-    data = snap.json().get("data") or []
+    if state.get("prefetched"):
+        snap, data = state["prefetched"]
+    else:
+        url = search_url(org)
+        snap = await f.get(url, headers=JSON_HEADERS)
+        ctx.requests += 1
+        if snap.status != 200:
+            raise RuntimeError(f"HTTP {snap.status} for {url}")
+        data = snap.json().get("data") or []
     rec, why = pick_record(data, org)
     if rec is None:
-        total = ((snap.json().get("meta") or {}).get("pagination") or {}).get("total", len(data))
+        total = sum(1 for r in data if matches_org(r, org))
         ev = ctx.add_evidence(snap, source_class=OPEN_DATA, method=METHOD, licence=LICENCE,
                               span=_dump({"filter[entity.registeredAs]": [spaced(org), org], "total": total}),
                               note=why)
@@ -108,7 +132,8 @@ async def _run(f: Fetcher, ctx: CompanyContext, state: dict) -> None:
          "detail": f"GLEIF entity.registeredAs '{e.get('registeredAs')}' at {(e.get('registeredAt') or {}).get('id')} equals {org}"}
     last = (r.get("lastUpdateDate") or "")[:10] or None
     ev = ctx.add_evidence(snap, source_class=OPEN_DATA, method=METHOD, licence=LICENCE, span=_record_span(rec),
-                          effective_date=last, note=f"Single record: {API}/lei-records/{a['lei']}")
+                          effective_date=last, note=f"Single record: {API}/lei-records/{a['lei']}",
+                          anchor=("lei", a["lei"]))
     value = {"lei": a["lei"], "status": e.get("status"), "registration_status": r.get("status"),
              "next_renewal": (r.get("nextRenewalDate") or "")[:10] or None, "last_update": last}
     ctx.add_claim("lei", "identity", value, ev, as_of=last, match=m)
