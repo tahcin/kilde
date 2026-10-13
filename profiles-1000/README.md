@@ -1,6 +1,6 @@
 # 1,000 company profiles
 
-Produced on Oct 14, 2026 from a fresh clone of this repository at commit `94a2493`, on 1,000 random companies from Builderr's public universe (seed 1000, none used during development):
+Produced on Oct 14, 2026 from a fresh clone of this repository at commit `94a2493` (the submitted commit adds only a 300-request floor for batches under 15 companies, which does not apply to these runs), on 1,000 random companies from Builderr's public universe (seed 1000, none used during development):
 
 ```bash
 uv run --frozen kilde run --organisations companies-1000.jsonl --output run1000/envelopes.jsonl --run-id profiles-1000 --expected-count 1000

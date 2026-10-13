@@ -15,6 +15,7 @@ from . import __version__ as _v  # noqa: F401
 from .pipeline import Options, run_batch
 
 DEFAULT_REQUESTS_PER_COMPANY = 20  # Unstop: 2,000 requests per 100 companies
+MIN_REQUESTS = 300  # floor for small batches (one large company alone needs more than 20)
 DEFAULT_TIME_BUDGET = 30 * 60  # Unstop publishes 45 minutes; finish well inside it
 
 
@@ -147,7 +148,7 @@ def main(argv: list[str] | None = None) -> None:
     run_id = args.run_id or datetime.now(timezone.utc).strftime("kilde-%Y%m%dT%H%M%SZ")
     state = Path(args.state_dir) / "latest-envelopes.jsonl" if args.state_dir else None
     previous = read_previous(args.previous or (str(state) if state else None))
-    max_requests = args.max_requests or int(os.environ.get("KILDE_MAX_REQUESTS", 0)) or DEFAULT_REQUESTS_PER_COMPANY * len(orgs)
+    max_requests = args.max_requests or int(os.environ.get("KILDE_MAX_REQUESTS", 0)) or max(MIN_REQUESTS, DEFAULT_REQUESTS_PER_COMPANY * len(orgs))
     seconds = args.time_budget or float(os.environ.get("KILDE_TIME_BUDGET", 0)) or DEFAULT_TIME_BUDGET
     opt = Options(max_requests=max_requests, seconds=seconds, concurrency=args.concurrency, previous=previous,
                   run_id=run_id, out_dir=out_dir, cache_dir=os.environ.get("KILDE_CACHE_DIR"),
