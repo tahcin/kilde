@@ -15,7 +15,7 @@ SECTION_WORDS = {
 }
 LEGAL_FORMS = {
     "AS": "private limited company", "ASA": "public limited company", "ENK": "sole proprietorship",
-    "BRL": "housing cooperative", "ESEK": "jointly owned property section", "STI": "foundation",
+    "BRL": "housing cooperative", "ESEK": "condominium owners' association", "STI": "foundation",
     "NUF": "Norwegian branch of a foreign company", "FLI": "association", "SA": "cooperative", "DA": "partnership (shared liability)",
     "ANS": "general partnership", "KS": "limited partnership", "SAM": "co-ownership", "IKS": "inter-municipal company",
     "KF": "municipal enterprise", "SF": "state enterprise", "STAT": "state body", "KOMM": "municipality",
@@ -101,10 +101,11 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
     fin = [c for c in ctx.claims_for("revenue") + ctx.claims_for("annual_result")]
     if fin:
         latest = max(c.value.get("year") or "" for c in fin)
-        rev = next((c for c in ctx.claims_for("revenue") if c.value.get("year") == latest and c.value["account_type"] == "company"), None)
-        res = next((c for c in ctx.claims_for("annual_result") if c.value.get("year") == latest and c.value["account_type"] == "company"), None)
-        rev = rev or next((c for c in ctx.claims_for("revenue") if c.value.get("year") == latest), None)
-        res = res or next((c for c in ctx.claims_for("annual_result") if c.value.get("year") == latest), None)
+        def pick(field: str, kind: str):
+            return next((c for c in ctx.claims_for(field) if c.value.get("year") == latest and c.value["account_type"] == kind), None)
+        # One account type per sentence: company accounts if filed for that year, else group accounts.
+        kind = "company" if (pick("revenue", "company") or pick("annual_result", "company")) else "group"
+        rev, res = pick("revenue", kind), pick("annual_result", kind)
         parts = []
         if rev:
             parts.append(f"revenue of {money(rev.value['amount'], rev.value['currency'])}")
@@ -172,7 +173,17 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
         say(f"It holds the Legal Entity Identifier {lei.value.get('lei')} ({state}).", lei)
     lic = ctx.claims_for("financial_licence")
     if lic:
-        say(f"Finanstilsynet lists {len(lic)} licence{'s' if len(lic) != 1 else ''} for it.", *lic[:3])
+        own = [c for c in lic if (c.value or {}).get("role") not in ("agent", "branch")]
+        agent = [c for c in lic if (c.value or {}).get("role") == "agent"]
+        parts = []
+        if own:
+            parts.append(f"holds {len(own)} licence{'s' if len(own) != 1 else ''} of its own")
+        if agent:
+            names = sorted({str((c.value or {}).get("on_behalf_of") or "").strip() for c in agent} - {""})
+            parts.append(f"is a registered agent under {len(agent)} licence{'s' if len(agent) != 1 else ''} held by others"
+                         + (f" ({', '.join(names[:3])})" if names else ""))
+        if parts:
+            say("According to Finanstilsynet it " + " and ".join(parts) + ".", *(own + agent))
 
     jobs = ctx.claims_for("job_ad")
     if jobs:

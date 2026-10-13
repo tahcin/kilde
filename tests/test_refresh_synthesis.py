@@ -75,3 +75,15 @@ def test_spans_are_exact_raw_substrings():
     assert exact and span in html and "999 888 777" in span
     span, _, exact = repair('<html lang="nb" class="x">', '<html lang="nb">', "text/html")
     assert exact and span == 'lang="nb"'
+
+
+def test_summary_never_mixes_group_and_company_accounts():
+    ctx = build("Kari Testesen", [])
+    ev = ctx.evidence[0]
+    for kind, rev, res in (("group", 5_000_000.0, 900_000.0), ("company", None, 2_400_000.0)):
+        if rev is not None:
+            ctx.add_claim("revenue", "financials", {"amount": rev, "currency": "NOK", "year": "2025", "account_type": kind}, ev)
+        ctx.add_claim("annual_result", "financials", {"amount": res, "currency": "NOK", "year": "2025", "account_type": kind}, ev)
+    text = summarise(ctx, [])["text"]
+    assert "company accounts it reported an annual result of 2.4 million NOK" in text
+    assert "5.0 million" not in text.split("company accounts")[1].split(".")[0]
