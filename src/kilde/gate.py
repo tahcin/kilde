@@ -196,21 +196,42 @@ def check_batch(ctxs: list[CompanyContext]) -> list[str]:
     return notes
 
 
-def tidy(ctx: CompanyContext) -> None:
-    """Cosmetic hygiene after the gate: one claim per (field, value), and descriptions as plain text."""
+# Site text fields whose values are page text: tags and (also double-encoded) HTML entities are decoded.
+SITE_TEXT = ("website_title", "website_description", "dated_news")
+_ENTITY = re.compile(r"&(?:#\d{1,7}|#x[0-9a-fA-F]{1,6}|[A-Za-z][A-Za-z0-9]{1,31});")
+
+
+def _plain(text: str) -> str:
+    """Page text as a reader sees it: no tags, entities decoded (twice when the page double-encoded them)."""
     import html as _html
+    out = re.sub(r"<[^>]+>", " ", text) if re.search(r"<[A-Za-z/!][^>]*>", text) else text
+    for _ in range(2):
+        if not _ENTITY.search(out):
+            break
+        out = _html.unescape(out)
+    return " ".join(out.split())
+
+
+def tidy(ctx: CompanyContext) -> None:
+    """Cosmetic hygiene after the gate: one claim per (field, value) and one per social profile, page text as
+    plain text, and string values with whitespace runs collapsed."""
+    from .socials import duplicates
+    for c in ctx.claims:
+        if c.availability != "available" or type(c.value) is not str:
+            continue  # a CanonicalSocial (str subclass) keeps its shape
+        v = _plain(c.value) if c.field in SITE_TEXT else " ".join(c.value.split())
+        if not v:
+            c.availability, c.value, c.note = "not_available", None, "description was markup only"
+        else:
+            c.value = v
+    socials = [c for c in ctx.claims if c.field == "social_profile" and c.availability == "available"]
+    dup_ids = {id(socials[i]) for i in duplicates([str(c.value) for c in socials])}
     seen = set()
     keep = []
     for c in ctx.claims:
         if c.availability == "available":
-            if c.field == "website_description" and isinstance(c.value, str) and "<" in c.value:
-                text = re.sub(r"\s+", " ", _html.unescape(re.sub(r"<[^>]+>", " ", c.value))).strip()
-                if not text:
-                    c.availability, c.value, c.note = "not_available", None, "description was markup only"
-                else:
-                    c.value = text
             key = (c.field, str(c.value).lower())
-            if c.availability == "available" and key in seen:
+            if key in seen or id(c) in dup_ids:
                 continue
             seen.add(key)
         keep.append(c)

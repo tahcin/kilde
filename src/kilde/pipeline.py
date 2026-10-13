@@ -17,6 +17,7 @@ from .http import Blocked, Budget, BudgetExhausted, Fetcher, UnsafeAddress
 from .model import SECTIONS, CompanyContext, utc_now
 from .refresh import diff
 from .spans import MAX_SPAN, repair
+from .spans import clip as clip_span
 from .synthesis import summarise
 
 log = logging.getLogger("kilde")
@@ -453,12 +454,12 @@ def assemble(ctx: CompanyContext, opt: Options, started_at: str, completed_at: s
         ev.snapshot_path = str(rel)
         raw = snap.content.decode("utf-8", errors="replace")
         span, extra, exact = repair(raw, ev.claim_span, snap.content_type, ctx.anchors.get(ev.id))
-        ev.claim_span = span[:MAX_SPAN] if span else span
+        ev.claim_span = clip_span(span)
         ev.span_context = [x[:MAX_SPAN] for x in extra] or None
         ev.span_exact = exact
     for ev in ctx.evidence:
         if ev.id not in ctx.snapshots and ev.claim_span:
-            ev.claim_span = ev.claim_span[:MAX_SPAN]
+            ev.claim_span = clip_span(ev.claim_span)
     summary = summarise(ctx, changes)
     # The run completed for this input unless the registry itself could not be reached; an unknown
     # organisation number is a completed lookup with identity "not_available".

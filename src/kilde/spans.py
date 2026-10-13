@@ -187,8 +187,72 @@ def text_span(raw: str, span: str) -> str | None:
     return None
 
 
+def _char_forms(ch: str) -> str:
+    """Pattern for one character written literally, as a numeric or named HTML entity, or %-encoded (ASCII
+    punctuation only)."""
+    from html.entities import codepoint2name
+    cp = ord(ch)
+    alts = [re.escape(ch), f"&#0*{cp};", f"&#[xX]0*(?i:{cp:x});"]
+    if cp < 128 and not ch.isalnum() and not ch.isspace():
+        alts.append(f"%(?i:{cp:02x})")
+    if cp in codepoint2name:
+        alts.append(f"&{codepoint2name[cp]};")
+    if ch == "@":
+        alts.append("&commat;")
+    return "(?:" + "|".join(alts) + ")"
+
+
+def encoded_span(raw: str, text: str) -> str | None:
+    """The raw form of `text` when the page writes some of its characters as entities or %-escapes, as
+    anti-spam email links do (mailto:kontor&#64;&#115;ka...). Only for short texts; whitespace may be any run
+    of spaces or &nbsp;."""
+    text = text.strip()
+    if not text or len(text) > 200:
+        return None
+    parts = []
+    for ch in text:
+        parts.append(r"(?:\s|&nbsp;|&#160;)+" if ch.isspace() else _char_forms(ch))
+    try:
+        m = re.search("".join(parts), raw)
+    except re.error:
+        return None
+    return m.group(0) if m else None
+
+
+_ATTR = re.compile(r'([\w:-]+)="([^"<>]*)"')
+
+
+def attribute_span(raw: str, span: str) -> str | None:
+    """A name="value" span as the page writes it: double, single or no quotes, any case of the name."""
+    m = _ATTR.fullmatch(span.strip())
+    if not m:
+        return None
+    name, value = m.groups()
+    v = re.escape(value)
+    pat = rf'(?<![\w:-])(?i:{re.escape(name)})\s*=\s*(?:"{v}"|\'{v}\'|{v}(?=[\s/>]))' if value else None
+    hit = re.search(pat, raw) if pat else None
+    return hit.group(0) if hit else None
+
+
+def _trim(span: str) -> str:
+    """Spans never start or end with whitespace (the trimmed text is still a substring of the raw)."""
+    return span.strip() or span
+
+
 def repair(raw: str, span: str | None, content_type: str, anchor: tuple[str, Any] | None = None) -> tuple[str | None, list[str], bool]:
     """Returns (claim_span, extra exact spans, exact?)."""
+    span, extra, exact = _repair(raw, span, content_type, anchor)
+    if exact and span:
+        span = _trim(span)
+    return span, extra, exact
+
+
+def clip(span: str | None) -> str | None:
+    """A span cut to MAX_SPAN characters, with no whitespace left at either end."""
+    return _trim(span[:MAX_SPAN]) if span else span
+
+
+def _repair(raw: str, span: str | None, content_type: str, anchor: tuple[str, Any] | None = None) -> tuple[str | None, list[str], bool]:
     if not span:
         return span, [], False
     if span in raw:
@@ -205,9 +269,16 @@ def repair(raw: str, span: str | None, content_type: str, anchor: tuple[str, Any
     tag = re.fullmatch(r"<\w+((?:\s+[\w:-]+=\"[^\"]*\")+)\s*/?>", span.strip())
     if tag:  # a single tag: quote its attributes as they appear in the raw page
         for attr in re.findall(r'[\w:-]+="[^"]*"', tag.group(1)):
-            if attr in raw:
-                return attr, [], True
+            hit = attr if attr in raw else attribute_span(raw, attr)
+            if hit:
+                return hit, [], True
+    hit = attribute_span(raw, span)
+    if hit:
+        return hit, [], True
     hit = text_span(raw, span)
+    if hit:
+        return hit, [], True
+    hit = encoded_span(raw, span)
     if hit:
         return hit, [], True
     return span, [], False
