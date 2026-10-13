@@ -303,7 +303,8 @@ def test_wikidata_entity_claims():
     for c in ctx.claims:
         by.setdefault(c.field, []).append(c)
     assert by["wikidata_item"][0].value["qid"] == QID and len(by["wikidata_item"][0].evidence_ids) == 2
-    assert by["official_website"][0].value == "eksempel.test"  # canonical registered domain
+    # Wikidata's website is only a candidate: not published unless Kilde verified the same site itself.
+    assert "official_website" not in by and ctx.facts["wikidata_website_candidate"] == "eksempel.test"
     assert by["inception_date"][0].value == "1999-04"
     assert [c.value["ticker"] for c in by["stock_listing"]] == ["EKS"]
     assert by["isin"][0].value == "NO0000000001"
@@ -311,8 +312,7 @@ def test_wikidata_entity_claims():
     ceo = by["reported_ceo"][0]
     assert ceo.value == {"name": "Kari Oppdiktet", "qid": "Q502", "since": "2019"} and ceo.section == "leadership"
     assert by["employees_reported"][0].value == {"count": 150, "point_in_time": "2024-12-31"}
-    socials = {c.value["platform"]: c.value["url"] for c in by["social_profile"]}
-    assert socials == {"x": "https://x.com/eksempel_no", "linkedin": "https://www.linkedin.com/company/eksempelselskapet/"}
+    assert "social_profile" not in by  # socials only when Wikidata's site is the verified site
     assert by["logo"][0].value["url"] == "https://commons.wikimedia.org/wiki/File:Eksempel_logo.svg"
     assert "headquarters" not in by
     check_evidence(ctx, OPEN_DATA)

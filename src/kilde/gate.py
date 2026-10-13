@@ -23,6 +23,8 @@ GENERIC = {
     "auto", "bil", "data", "media", "design", "solutions", "systems", "tech", "teknikk", "entreprenor",
     "entreprenør", "borettslag", "sameiet", "stiftelsen", "forening", "foreningen", "selskap", "senter",
 }
+FOREIGN_FORMS = ("gmbh", "ag", "ab", "oy", "oyj", "aps", "sia", "uab", "ltd", "limited", "inc", "llc", "bv", "nv",
+                 "sarl", "sas", "spa", "srl", "plc", "corp", "kft", "sro", "doo", "ehf", "kg", "asa", "as", "sa")
 FOREIGN_TLDS = {"se", "dk", "fi", "de", "ee", "lt", "lv", "pl", "uk", "nl", "fr", "es", "it", "ch", "at", "be", "ru"}
 FREE_MAIL = {"gmail.com", "hotmail.com", "outlook.com", "yahoo.com", "online.no", "live.no", "icloud.com", "hotmail.no"}
 
@@ -63,7 +65,6 @@ def check(ctx: CompanyContext) -> list[str]:
     sites = ctx.claims_for("official_website")
     derived = [c for c in ctx.claims if c.field in DERIVED and c.availability == "available"
                and (c.match or {}).get("method") != "registry_declared"
-               and "wikidata" not in (c.match or {}).get("method", "")
                and (c.match or {}).get("method") != "employer_orgnr"]
     if not derived:
         return []
@@ -104,6 +105,7 @@ def check(ctx: CompanyContext) -> list[str]:
         for c in derived:
             withhold(c, f"foreign domain .{tld} for a Norwegian-registered company (possibly a foreign sister company)")
         return notes
+    own_forms = {fold(t) for t in re.findall(r"[\wæøå]+", reg.get("navn", "").lower())}
     # 3. Social profiles from the site must name the company: the handle carries a distinctive token of
     #    the legal name or the site's domain label, or is a pure numeric ID. Site builders and agencies
     #    leave their own profiles in templates (a Surftown-built site linked Surftown's profiles).
@@ -119,8 +121,20 @@ def check(ctx: CompanyContext) -> list[str]:
             (tokens and re.sub(r"[^a-z0-9]", "", "".join(tokens)) in handle_alnum)
         if not (named or numeric_id):
             withhold(c, f"social handle '{handle}' does not carry the company's name or its site's domain (possible template or agency link)")
+            continue
+        # A handle naming another legal entity (a foreign sister such as "hobartgmbh") is not ours.
+        forms = set(re.findall(r"(?<![a-z])(" + "|".join(FOREIGN_FORMS) + r")(?![a-z])", re.sub(r"[^a-z]+", " ", handle))) | \
+            {f for f in FOREIGN_FORMS if handle_alnum.endswith(f) and len(handle_alnum) > len(f) + 3}
+        if forms - own_forms:
+            withhold(c, f"social handle '{handle}' names another legal entity ({', '.join(sorted(forms - own_forms))})")
 
-    # 4. Contacts must match the site domain or the registry.
+    # 4. Norwegian branches of foreign companies (NUF) usually publish on a group site: no site news or pages.
+    if (reg.get("organisasjonsform") or {}).get("kode") == "NUF":
+        for c in derived:
+            if c.availability == "available" and c.field in ("dated_news", "site_page_updated", "site_news"):
+                withhold(c, "branch of a foreign company: site news usually belongs to the wider group")
+
+    # 5. Contacts must match the site domain or the registry.
     reg_phones = {_digits(reg.get(k))[-8:] for k in ("telefon", "mobil") if reg.get(k)}
     for c in derived:
         if c.availability != "available":

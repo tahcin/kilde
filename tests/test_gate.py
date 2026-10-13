@@ -72,3 +72,12 @@ def test_profile_shared_by_two_companies_is_withheld():
     b.org = "888888888"
     gate.check_batch([a, b])
     assert all(c.availability == "ambiguous" for x in (a, b) for c in x.claims if c.field == "social_profile")
+
+
+def test_handle_naming_a_foreign_sister_entity_is_withheld():
+    from kilde.connectors.website import canonical_social
+    ctx = ctx_with("https://www.hobarttest.no/", {"navn": "HOBARTTEST NORGE NUF", "organisasjonsform": {"kode": "NUF"}},
+                   [("social_profile", canonical_social("youtube", "https://www.youtube.com/user/hobarttestgmbh")),
+                    ("social_profile", canonical_social("facebook", "https://www.facebook.com/hobarttestnorge"))])
+    gate.check(ctx)
+    assert [c.availability for c in ctx.claims if c.field == "social_profile"] == ["ambiguous", "available"]

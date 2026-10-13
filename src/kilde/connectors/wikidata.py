@@ -352,7 +352,11 @@ def emit_entity(ctx: CompanyContext, batch: WikidataBatch, qsnap: Snapshot, snap
     from urllib.parse import urlsplit as _us
     known = {str(c.value) for c in ctx.claims_for("official_website")}
     site_dom = site_domain(_us(str(_value(site))).netloc) if site and isinstance(_value(site), str) else None
-    if site and site_dom and site_dom not in known:
+    # Wikidata items can conflate related entities (a pension foundation's item listed the operating
+    # company's site), so its website is only a candidate: never published unless Kilde verified that
+    # same site itself, in which case it is already published.
+    ctx.facts["wikidata_website_candidate"] = site_dom
+    if False and site and site_dom and site_dom not in known:
         ctx.add_claim("official_website", "web_presence", site_dom, ev("P856", site, ("P407", "P1001")),
                       confidence=0.9, match=m,
                       note=f"Wikidata lists {n} website statements; this one is preferred or valid for Norway" if n > 1 else None)
@@ -431,6 +435,9 @@ def emit_entity(ctx: CompanyContext, batch: WikidataBatch, qsnap: Snapshot, snap
         for s in statements(claims, p, current=True)[:5]:
             handle = _value(s)
             if isinstance(handle, str) and handle.strip():
+                # Socials only when Wikidata's website is the site Kilde verified for this company.
+                if not site_dom or site_dom not in known:
+                    continue
                 social = canonical_social(platform, pattern.format(quote(handle.strip(), safe="-_./")))
                 if str(social) in {str(c.value) for c in ctx.claims_for("social_profile")}:
                     continue
