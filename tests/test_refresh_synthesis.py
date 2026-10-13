@@ -1,7 +1,7 @@
 """Refresh diffs and summary citations, on a made-up company."""
-from pata.model import CompanyContext, Snapshot
-from pata.refresh import diff
-from pata.synthesis import summarise
+from kilde.model import CompanyContext, Snapshot
+from kilde.refresh import diff
+from kilde.synthesis import summarise
 
 
 def snap(body: bytes = b"{}") -> Snapshot:
@@ -64,7 +64,7 @@ def test_every_summary_sentence_cites_existing_claims():
 
 
 def test_spans_are_exact_raw_substrings():
-    from pata.spans import repair
+    from kilde.spans import repair
     raw = '[{"id":11,"regnskapsperiode":{"fraDato":"2024-01-01","tilDato":"2024-12-31"},"valuta":"NOK","x":{"sumDriftsinntekter":500.0}},' \
           '{"id":12,"regnskapsperiode":{"fraDato":"2025-01-01","tilDato":"2025-12-31"},"valuta":"NOK","x":{"sumDriftsinntekter":900.0}}]'
     span, extra, exact = repair(raw, '{"sumDriftsinntekter": 900.0, "valuta": "NOK", "regnskapsperiode": {"fraDato": "2025-01-01", "tilDato": "2025-12-31"}}',

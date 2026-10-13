@@ -1,4 +1,4 @@
-"""Tests for the static HTML report (src/pata/report.py)."""
+"""Tests for the static HTML report (src/kilde/report.py)."""
 from __future__ import annotations
 
 import copy
@@ -10,7 +10,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "src"))
 
-from pata.report import NLOD, build_data, write_report  # noqa: E402
+from kilde.report import NLOD, build_data, write_report  # noqa: E402
 
 FIXTURE = os.path.join(HERE, "fixtures", "envelopes_sample.jsonl")
 

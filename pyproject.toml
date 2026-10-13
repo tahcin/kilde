@@ -1,7 +1,7 @@
 [project]
-name = "pata"
+name = "kilde"
 version = "1.0.0"
-description = "Pata: an evidence-first Norwegian company research agent for the Builderr Signalpost challenge"
+description = "Kilde: an evidence-first Norwegian company research agent for the Builderr Signalpost challenge"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.scripts]
-pata = "pata.cli:main"
+kilde = "kilde.cli:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<9"]
@@ -24,4 +24,4 @@ requires = ["hatchling>=1.25"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/pata"]
+packages = ["src/kilde"]

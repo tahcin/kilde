@@ -1,4 +1,4 @@
-"""Build src/pata/data/codes.json from SSB Klass (run once; the agent makes no Klass requests at run time).
+"""Build src/kilde/data/codes.json from SSB Klass (run once; the agent makes no Klass requests at run time).
 
 Classifications (https://data.ssb.no/api/klass/v1/):
   6   Standard for næringsgruppering (NACE): SN2025 at today's date, plus SN2007 (valid to
@@ -24,10 +24,10 @@ import httpx
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
-from pata.http import USER_AGENT  # noqa: E402
+from kilde.http import USER_AGENT  # noqa: E402
 
 API = "https://data.ssb.no/api/klass/v1/classifications/{id}/codesAt?date={date}"
-OUT = ROOT / "src" / "pata" / "data" / "codes.json"
+OUT = ROOT / "src" / "kilde" / "data" / "codes.json"
 SN2007_DATE = "2024-12-31"
 ATTRIBUTION = "Kilde: Statistisk sentralbyrå (SSB), Klass. Licensed under CC BY 4.0 (https://creativecommons.org/licenses/by/4.0/)."
 

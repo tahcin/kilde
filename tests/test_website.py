@@ -6,9 +6,9 @@ from urllib.parse import urlsplit
 
 import pytest
 
-from pata.connectors import website as W
-from pata.http import Blocked, Budget
-from pata.model import CompanyContext, Snapshot, utc_now
+from kilde.connectors import website as W
+from kilde.http import Blocked, Budget
+from kilde.model import CompanyContext, Snapshot, utc_now
 
 OURS = "999000002"
 OTHER = "999000010"

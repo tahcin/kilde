@@ -6,9 +6,9 @@ import json
 
 import pytest
 
-from pata.connectors import finanstilsynet, gleif, wikidata
-from pata.http import BudgetExhausted
-from pata.model import OPEN_DATA, OFFICIAL_REGISTER_OTHER, CompanyContext, Snapshot
+from kilde.connectors import finanstilsynet, gleif, wikidata
+from kilde.http import BudgetExhausted
+from kilde.model import OPEN_DATA, OFFICIAL_REGISTER_OTHER, CompanyContext, Snapshot
 
 ORG = "100200300"
 OTHER = "900800700"
@@ -272,13 +272,13 @@ def wd_routes(qlever: dict, ent: dict | None = None) -> list:
 
 
 def test_wikidata_robots_rfc9309():
-    rules = wikidata.parse_robots(ROBOTS, "PataSignalpost")
+    rules = wikidata.parse_robots(ROBOTS, "KildeSignalpost")
     ok = wikidata.rfc9309_allowed
     assert ok(rules, f"https://www.wikidata.org/wiki/Special:EntityData/{QID}.json")
     assert not ok(rules, f"https://www.wikidata.org/wiki/Special:EntityData/{QID}")
     assert not ok(rules, "https://www.wikidata.org/w/api.php?action=wbsearchentities")
     assert ok(rules, f"https://www.wikidata.org/wiki/{QID}")
-    named = wikidata.parse_robots("User-agent: PataSignalpost\nDisallow: /\n\nUser-agent: *\nAllow: /\n", "PataSignalpost")
+    named = wikidata.parse_robots("User-agent: KildeSignalpost\nDisallow: /\n\nUser-agent: *\nAllow: /\n", "KildeSignalpost")
     assert not ok(named, "https://www.wikidata.org/wiki/Q1")
 
 

@@ -6,7 +6,7 @@ Every outbound request goes through `Fetcher.get`, which
 - limits concurrency per host,
 - captures the response as a `Snapshot` for evidence.
 
-`PATA_CACHE_DIR` turns on a disk cache for development. Cached responses are not
+`KILDE_CACHE_DIR` turns on a disk cache for development. Cached responses are not
 outbound requests and keep their original retrieval time.
 """
 from __future__ import annotations
@@ -26,8 +26,8 @@ from protego import Protego
 from . import __version__
 from .model import Snapshot, utc_now
 
-USER_AGENT = f"PataSignalpost/{__version__} (+https://github.com/tahcin/pata)"
-ROBOTS_TOKEN = "PataSignalpost"
+USER_AGENT = f"KildeSignalpost/{__version__} (+https://github.com/tahcin/kilde)"
+ROBOTS_TOKEN = "KildeSignalpost"
 MAX_BYTES = 3_000_000
 
 
@@ -84,7 +84,7 @@ class Fetcher:
         self.robots_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
         self.host_min_interval: dict[str, float] = {}
         self.host_last: dict[str, float] = defaultdict(float)
-        cache_dir = cache_dir or os.environ.get("PATA_CACHE_DIR")
+        cache_dir = cache_dir or os.environ.get("KILDE_CACHE_DIR")
         self.cache = Path(cache_dir) if cache_dir else None
         if self.cache:
             self.cache.mkdir(parents=True, exist_ok=True)

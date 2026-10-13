@@ -49,7 +49,7 @@ def _fmt(v) -> str:
 
 
 def build(envs: list[dict]) -> tuple[str, list[dict]]:
-    lines = ["# Pata audit pack", "",
+    lines = ["# Kilde audit pack", "",
              "For each claim: open the source URL, check the quoted span is there, check the value matches it and",
              "that the fact belongs to this organisation number. Verdicts: " + ", ".join(f"`{v}`" for v in AUDIT_VERDICTS) + ".",
              "`wrong_company` or `fabricated_financial` is a hard fail, so note the reason.", "",

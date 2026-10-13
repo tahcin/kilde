@@ -173,7 +173,7 @@ def test_gates(envs):
 
 def test_ux_checklist(tmp_path, envs):
     sys.path.insert(0, os.path.join(ROOT, "src"))
-    from pata.report import write_report
+    from kilde.report import write_report
     path = tmp_path / "report.html"
     write_report(envs, str(path), {"run_id": "t"})
     res = score.score_ux(str(path))

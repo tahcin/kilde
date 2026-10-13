@@ -1,4 +1,4 @@
-"""Command line: `pata run --organisations batch.jsonl` (one command, one envelope per input)."""
+"""Command line: `kilde run --organisations batch.jsonl` (one command, one envelope per input)."""
 from __future__ import annotations
 
 import argparse
@@ -85,7 +85,7 @@ def profile_of(env: dict) -> dict:
 
 
 def main(argv: list[str] | None = None) -> None:
-    ap = argparse.ArgumentParser(prog="pata", description="Pata: evidence-first Norwegian company research agent")
+    ap = argparse.ArgumentParser(prog="kilde", description="Kilde: evidence-first Norwegian company research agent")
     sub = ap.add_subparsers(dest="cmd")
     r = sub.add_parser("run", help="research a batch of organisation numbers")
     r.add_argument("--organisations", "--input", required=True, help="JSONL, JSON or text list of organisation numbers")
@@ -114,13 +114,13 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(f"Expected {args.expected_count} organisations, received {len(orgs)}")
     out = Path(args.output)
     out_dir = out.parent
-    run_id = args.run_id or datetime.now(timezone.utc).strftime("pata-%Y%m%dT%H%M%SZ")
+    run_id = args.run_id or datetime.now(timezone.utc).strftime("kilde-%Y%m%dT%H%M%SZ")
     state = Path(args.state_dir) / "latest-envelopes.jsonl" if args.state_dir else None
     previous = read_previous(args.previous or (str(state) if state else None))
-    max_requests = args.max_requests or int(os.environ.get("PATA_MAX_REQUESTS", 0)) or DEFAULT_REQUESTS_PER_COMPANY * len(orgs)
-    seconds = args.time_budget or float(os.environ.get("PATA_TIME_BUDGET", 0)) or DEFAULT_TIME_BUDGET
+    max_requests = args.max_requests or int(os.environ.get("KILDE_MAX_REQUESTS", 0)) or DEFAULT_REQUESTS_PER_COMPANY * len(orgs)
+    seconds = args.time_budget or float(os.environ.get("KILDE_TIME_BUDGET", 0)) or DEFAULT_TIME_BUDGET
     opt = Options(max_requests=max_requests, seconds=seconds, concurrency=args.concurrency, previous=previous,
-                  run_id=run_id, out_dir=out_dir, cache_dir=os.environ.get("PATA_CACHE_DIR"),
+                  run_id=run_id, out_dir=out_dir, cache_dir=os.environ.get("KILDE_CACHE_DIR"),
                   modules=set(args.modules.split(",")) if args.modules else None)
     envelopes, report = asyncio.run(run_batch(orgs, opt))
 

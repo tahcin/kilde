@@ -19,14 +19,14 @@ from .refresh import diff
 from .spans import MAX_SPAN, repair
 from .synthesis import summarise
 
-log = logging.getLogger("pata")
+log = logging.getLogger("kilde")
 STEP_TIMEOUT = {"website": 25, "registry": 20, "jobs": 15, "report_copies": 10}
 STATE_RANK = ["available", "ambiguous", "blocked", "not_available", "not_applicable", "failed"]
 
 
 def _optional(module: str):
     try:
-        return importlib.import_module(f"pata.connectors.{module}")
+        return importlib.import_module(f"kilde.connectors.{module}")
     except Exception as exc:  # noqa: BLE001 - a broken optional connector must not stop the run
         log.warning("connector %s unavailable: %r", module, exc)
         return None
@@ -214,7 +214,7 @@ async def run_batch(orgs: list[str], opt: Options) -> tuple[list[dict], dict]:
         changes = diff(ctx, opt.previous.get(org))
         envelopes.append(assemble(ctx, opt, started_at, completed_at, commit, changes, snap_dir))
     report = {
-        "run_id": opt.run_id, "agent": "Pata", "version": __version__, "commit": commit,
+        "run_id": opt.run_id, "agent": "Kilde", "version": __version__, "commit": commit,
         "started_at": started_at, "completed_at": completed_at, "expected_count": len(orgs),
         "emitted_envelopes": len(envelopes), "runtime_ms": int((time.monotonic() - t0) * 1000),
         "operations": {"requests": budget.used, "max_requests": opt.max_requests, "dns_lookups": budget.dns_lookups,
@@ -263,7 +263,7 @@ def assemble(ctx: CompanyContext, opt: Options, started_at: str, completed_at: s
     terminal = "completed" if ctx.registry else ("not_available" if any(c.availability == "not_available" for c in ctx.claims) else "failed")
     return {
         "organisation_number": ctx.org,
-        "agent": {"name": "Pata", "version": __version__, "commit": commit},
+        "agent": {"name": "Kilde", "version": __version__, "commit": commit},
         "run": {"run_id": opt.run_id, "started_at": started_at, "completed_at": completed_at, "terminal_status": terminal},
         "legal_name": (ctx.registry or {}).get("navn"),
         "sections": {s: {"state": section_state(ctx, s), "claim_ids": [c.id for c in ctx.claims if c.section == s]}

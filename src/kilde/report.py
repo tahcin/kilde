@@ -177,7 +177,7 @@ def write_report(envelopes: list[dict], path: str, run_report: dict) -> None:
         f'<li id="org-{html.escape(c["o"])}">{html.escape(c["n"])} ({html.escape(c["o"])})</li>'
         for c in (data or {}).get("co", [])[:2000])
     page = (PAGE.replace("/*CSS*/", CSS).replace("/*JS*/", JS)
-            .replace("__TITLE__", html.escape(f"Pata report {meta['run_id']}".strip()))
+            .replace("__TITLE__", html.escape(f"Kilde report {meta['run_id']}".strip()))
             .replace("__META__", _embed(meta)).replace("__DATA__", payload)
             .replace("__NOSCRIPT__", noscript_rows).replace("__NLOD__", html.escape(NLOD)))
     with open(path, "w", encoding="utf-8") as fh:
@@ -196,7 +196,7 @@ PAGE = """<!doctype html>
 <body>
 <a class="skip" href="#main">Skip to company profile</a>
 <header class="top">
-  <div class="brand"><span class="mark" aria-hidden="true"></span><div><h1>Pata</h1><p class="sub">Norwegian company profiles with a source for every fact</p></div></div>
+  <div class="brand"><span class="mark" aria-hidden="true"></span><div><h1>Kilde</h1><p class="sub">Norwegian company profiles with a source for every fact</p></div></div>
   <dl class="run" id="run"></dl>
   <details class="sources"><summary>Sources and licences</summary><div id="sources"></div><p class="nlod">__NLOD__</p></details>
 </header>
@@ -666,7 +666,7 @@ function runHeader(){
   var r=META,rt=r.runtime_ms!=null?(r.runtime_ms>=60000?(r.runtime_ms/60000).toFixed(1)+' min':(r.runtime_ms/1000).toFixed(1)+' s'):'not recorded';
   var items=[['Run',r.run_id||'not recorded'],['Started',r.started_at?date(r.started_at)+' '+String(r.started_at).slice(11,16)+' UTC':'not recorded'],
     ['Companies',num(r.companies)],['Requests',num(r.requests)],['Runtime',rt],['Third-party cost','$'+Number(r.cost_usd||0).toFixed(2)]];
-  if(r.agent&&r.agent.version)items.push(['Agent',(r.agent.name||'Pata')+' '+r.agent.version]);
+  if(r.agent&&r.agent.version)items.push(['Agent',(r.agent.name||'Kilde')+' '+r.agent.version]);
   $('run').innerHTML=items.map(function(x){return '<div><dt>'+esc(x[0])+'</dt><dd>'+(x[0]==='Started'||x[0]==='Companies'||x[0]==='Requests'?x[1]:esc(x[1]))+'</dd></div>';}).join('');
   $('sources').innerHTML='<ul>'+(r.sources||[]).map(function(s){return '<li>'+esc(s.name)+(s.licence?' ('+esc(s.licence)+')':'')+(s.evidence?', '+num(s.evidence)+' evidence records':'')+'</li>';}).join('')+
     '</ul><p>Report generated '+date(r.generated_at)+'. Each value links to the page or API response it was read from; "Quote" shows the exact text used.</p>';

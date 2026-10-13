@@ -1,4 +1,4 @@
-"""Pata self-scorer: a mirror of Builderr Signalpost scoring version 2.
+"""Kilde self-scorer: a mirror of Builderr Signalpost scoring version 2.
 
 Recall 50, precision and evidence 30, synthesis 12, UX 8. Qualifying line 65.
 Standard library only, so it runs in any Python 3.12.
@@ -552,7 +552,7 @@ def render_table(res: dict) -> str:
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="Pata self-scorer (Builderr Signalpost scoring v2 mirror)")
+    ap = argparse.ArgumentParser(description="Kilde self-scorer (Builderr Signalpost scoring v2 mirror)")
     ap.add_argument("--envelopes", required=True)
     ap.add_argument("--pool", help="JSONL of auditor finds: {org, family, value_key}")
     ap.add_argument("--audit", help="JSONL of audit verdicts: {org, claim_id, verdict, note}")
