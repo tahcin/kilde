@@ -40,6 +40,26 @@ HOSTED = ("barnehage.no", "wixsite.com", "squarespace.com", "webnode.no", "webno
           "github.io", "netlify.app", "vercel.app", "business.site", "godaddysites.com", "mozello.com")
 
 
+# Site builders' default blog posts and pages (WordPress, Wix, Squarespace, Webflow and theme demos). A post with
+# one of these titles or slugs is the platform's sample content, never company news or a page update.
+TEMPLATE_TITLE = re.compile(
+    r"(?i)^\s*(hello,? world!?|hei,? verden!?|hallo,? verden!?|sample (post|page)|eksempel(side|innlegg)|"
+    r"(this is )?(the title of )?(your|my) (very )?first (blog )?post!?|your blog'?s first post|"
+    r"welcome to (your|my|our) (new )?(blog|website|site)!?|velkommen til (bloggen|min blogg|vår blogg|din blogg)!?|"
+    r"design a stunning blog|grow your blog( community)?|test ?post|testinnlegg|lorem ipsum.*|"
+    r"dette er (tittelen på )?(ditt|mitt) første (blogg)?innlegg!?)\s*$")
+TEMPLATE_SLUG = re.compile(
+    r"(?i)/(hello-world|hei-verden|hallo-verden|sample-page|sample-post|eksempelside|eksempelinnlegg|lorem-ipsum|"
+    r"(this-is-)?(the-title-of-)?(your|my)-(very-)?first-(blog-)?post|welcome-to-(your|my|our)-(new-)?(blog|website|site)|"
+    r"velkommen-til-(bloggen|min-blogg|var-blogg|din-blogg)|design-a-stunning-blog|grow-your-blog(-community)?)"
+    r"(-\d+)?(/|\.html?|$|\?)")
+
+
+def template_post(title: str | None, url: str | None) -> bool:
+    """True for a site builder's default post or page (by its title or its URL slug)."""
+    return bool((title and TEMPLATE_TITLE.match(title)) or (url and TEMPLATE_SLUG.search(urlsplit(url).path or "")))
+
+
 def registered_domain(url_or_host: str) -> str:
     host = urlsplit(url_or_host if "://" in url_or_host else "http://" + url_or_host).netloc.lower().split(":")[0]
     host = host[4:] if host.startswith("www.") else host
@@ -153,6 +173,17 @@ def check(ctx: CompanyContext) -> list[str]:
         for c in derived:
             if c.availability == "available" and c.field in ("dated_news", "site_page_updated", "site_news"):
                 withhold(c, "branch of a foreign company: site news usually belongs to the wider group")
+
+    # 5b. Site builders' default posts (hello world, "this is your first post", lorem ipsum) are never news.
+    for c in derived:
+        if c.availability != "available" or c.field not in ("dated_news", "site_page_updated", "site_news"):
+            continue
+        v = c.value
+        title = re.sub(r"\s*\([^()]*\)\s*$", "", v) if isinstance(v, str) else (v or {}).get("title")
+        url = (v or {}).get("url") if isinstance(v, dict) else None
+        detail = str((c.match or {}).get("detail") or "").split(" ")[0]
+        if template_post(title, url) or template_post(None, detail if detail.startswith("http") else None):
+            withhold(c, "a site builder's default post or page, not company news")
 
     # 6. Contacts must match the site domain or the registry.
     reg_phones = {_digits(reg.get(k))[-8:] for k in ("telefon", "mobil") if reg.get(k)}

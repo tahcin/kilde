@@ -8,6 +8,11 @@ inactive or deleted, so an ad is published only after a fresh detail request in 
 status ACTIVE and an expiry in the future. Contact persons and the free-text description are
 stripped before the response is stored as a snapshot.
 
+Expired ads are not used as a dated "hiring activity" signal. The terms allow republishing ads and
+statistical or analytical use, but say republished ads "skal straks fjernast" when NAV deactivates or
+deletes them. A per-company claim naming an inactive ad (title, date, link), with the ad stored as
+evidence, is a republication of a removed ad, so it is not clearly permitted and Kilde does not do it.
+
 How. The feed has no employer filter and the org number is only in each ad's detail
 (`ad_content.employer.orgnr`), so a full walk is far beyond a run's budget. `prepare` loads a
 declared prebuilt index (scripts/build_nav_index.py, src/kilde/data/nav_jobs_index.json.gz), walks

@@ -32,6 +32,7 @@ import dns.exception
 import dns.resolver
 from bs4 import BeautifulSoup
 
+from ..gate import template_post
 from ..http import Blocked, BudgetExhausted, Fetcher
 from ..model import COMPANY_OWNED, CompanyContext, Evidence, Snapshot
 
@@ -44,6 +45,7 @@ MAX_REQUESTS = 12         # HTTP requests per company, robots.txt and Brreg name
 RETRY_CAP = 20            # cap on the pipeline's second, unhurried attempt
 VERIFIED_CAP = 16         # raised cap once a site is proven and exclusive (news and careers)
 STEP_BUDGET = 6           # requests each for dated news and hiring on a verified exclusive site
+NEWS_BUDGET = 8           # dated news: listing, its page 2 or feed, and article pages for undated listings
 RELATED_STRICT = False    # True: every non-exclusive site becomes related_website; False (default): a company's own domain that only names other companies stays official, with nothing derived
 RESERVE = 3               # stop when the run budget has fewer than this left
 MAX_INTERNAL = 3          # extra pages per candidate when the homepage is not conclusive
@@ -2171,7 +2173,9 @@ def org_structured(page: Page, legal_name: str) -> tuple[dict, str] | None:
 
 
 JOBS_TOKENS = {"stilling", "stillinger", "karriere", "jobb", "jobbe", "jobs", "job", "career", "careers",
-               "vacancies", "vacancy", "rekruttering", "rekrutering", "stillingsannonser", "jobbmuligheter"}
+               "vacancies", "vacancy", "rekruttering", "rekrutering", "stillingsannonser", "stillingsannonse",
+               "jobbmuligheter"}
+JOIN_PATH = re.compile(r"(?i)(^|[/\-_])(join-?us|join-our-team|work-with-us|bli-en-av-oss|bli-med-oss)([/\-_.]|$)")
 NOT_JOBS_PATH = re.compile(r"/(nyheter|nyhet|news|aktuelt|blogg?|artikler|presse|tag|kategori|category)/", re.I)
 
 
@@ -2180,7 +2184,7 @@ def jobs_url(path: str) -> bool:
     path = unquote(path).lower()
     if NOT_JOBS_PATH.search(path + "/"):
         return False
-    return any(t in JOBS_TOKENS for t in re.split(r"[/\-_.]+", _translit(path)) if t)
+    return bool(JOIN_PATH.search(path)) or any(t in JOBS_TOKENS for t in re.split(r"[/\-_.]+", _translit(path)) if t)
 
 
 def careers_link(pages: list[Page], domain: str, scope: Scope | None = None) -> tuple[str, Page, str] | str | None:
@@ -2253,8 +2257,32 @@ DATE_PATTERNS = (
 )
 
 
-def find_date(block) -> tuple[str, str] | None:
-    """(ISO date, the literal text it came from) from a news item block; never guessed."""
+SLASH_DATE = re.compile(r"(?<![\d/])(\d{1,2})/(\d{1,2})/(20\d\d|19\d\d)(?![\d/])")
+
+
+def slash_order(page: "Page") -> str | None:
+    """How a page writes slash dates: 'dmy' (Norwegian 24/8/2026) or 'mdy' (US 8/24/2026). Decided from the
+    page's own unambiguous dates (a part above 12); when none is, a Norwegian-language page means 'dmy'.
+    Mixed or unknown: None, and no slash date on the page is read."""
+    first = second = False
+    for m in SLASH_DATE.finditer(page.text):
+        a, b = int(m.group(1)), int(m.group(2))
+        first |= a > 12
+        second |= b > 12
+    if first and second:
+        return None
+    if first:
+        return "dmy"
+    if second:
+        return "mdy"
+    html_el = page.soup.find("html")
+    lang = (html_el.get("lang") if html_el else "") or ""
+    return "dmy" if re.match(r"(?i)(nb|nn|no)\b", lang) else None
+
+
+def find_date(block, slash: str | None = None) -> tuple[str, str] | None:
+    """(ISO date, the literal text it came from) from a news item block; never guessed. Slash dates are read
+    only in the order the page was shown to use (`slash`, from slash_order)."""
     t = block.find("time") if hasattr(block, "find") else None
     if t is not None and t.get("datetime"):
         d = _date(t["datetime"])
@@ -2262,11 +2290,16 @@ def find_date(block) -> tuple[str, str] | None:
             return d, t["datetime"]
     # Only a short, standalone date line counts (e.g. "20.01.2026" or "Publisert 8. januar 2026"), never a
     # date inside a sentence, which is usually an event date rather than the publication date.
+    patterns = list(DATE_PATTERNS)
+    if slash == "dmy":
+        patterns.append((SLASH_DATE, lambda m: (m[3], m[2], m[1])))
+    elif slash == "mdy":
+        patterns.append((SLASH_DATE, lambda m: (m[3], m[1], m[2])))
     for node in block.find_all(string=True):
         text = re.sub(r"\s+", " ", str(node)).strip()
         if not text or len(text) > 40:
             continue
-        for rx, parts in DATE_PATTERNS:
+        for rx, parts in patterns:
             m = rx.search(text)
             if m and len(re.sub(r"(?i)publisert|published|posted|oppdatert|updated|dato|date|[:|\-·•,\s]", "",
                                 rx.sub("", text, count=1))) <= 12:
@@ -2283,6 +2316,7 @@ NEWS_PATH = re.compile(r"/(nyheter|nyhet|news|aktuelt|blogg?|artikler|presse|nyt
 def news_items(page: Page, domain: str, scope: Scope, limit: int = 5) -> list[tuple[dict, str]]:
     """Dated posts on a news or blog listing page: ({title, url, date}, span)."""
     listing = urlsplit(page.url).path.rstrip("/")
+    slash = slash_order(page)
     items: dict[str, tuple[dict, str]] = {}
     for a in page.soup.find_all("a", href=True):
         if _in_chrome(a):
@@ -2303,7 +2337,7 @@ def news_items(page: Page, domain: str, scope: Scope, limit: int = 5) -> list[tu
             if len(txt) > 700 or len({x for x in links if same_site(host_of(x), domain)} - {u}) > 1:
                 found = None
                 break  # the block holds more than one item: a date here may belong to another post
-            found = find_date(block)
+            found = find_date(block, slash)
             if found:
                 break
         if not found:
@@ -2336,6 +2370,142 @@ def news_listing_link(pages: list[Page], domain: str) -> str | None:
                     and urlsplit(u).path.strip("/").count("/") == 0:
                 return u
     return None
+
+
+NEWS_TEXT = re.compile(r"(?i)^(siste |våre |vare |our |latest |alle |all )?(nyheter|nyhet|news|aktuelt|blogg?|artikler|"
+                       r"articles|presse(rom|meldinger)?|press|nyhetsarkiv|fagartikler|fagnotater|notes|innsikt|insights|"
+                       r"siste nytt|nytt|news ?(&|og|and) ?(media|presse|press)|"
+                       r"nyheter ?(&|og) ?(presse|media|aktuelt))$")
+NEWS_SEG = re.compile(r"(?i)^(nyheter|nyhet|news|aktuelt|blogg?|artikler|articles|presse|presserom|pressemeldinger|"
+                      r"nytt|siste-nytt|nyhetsarkiv|fagartikler|fagnotater|notes|innsikt|insights|our-news|latest-news|"
+                      r"nyheter-og-(presse|media)|news-and-(media|press))(\.(html?|php|aspx?))?$")
+FILE_EXT = re.compile(r"(?i)\.(pdf|jpe?g|png|gif|webp|docx?|xlsx?|pptx?|zip|mp4|mp3)$")
+
+
+def news_listings(pages: list[Page], domain: str) -> list[str]:
+    """Candidate news listing pages on the verified site, in a fixed order: a one-segment news path (as
+    /nyheter/), then a link whose text is a news word (Nyheter, Aktuelt, Blogg, Our News) at any depth or on a
+    subdomain of the verified domain (blog.example.no), then a deeper path ending in a news word (/no/kunnskap/
+    nyheter, /nyheter.html). Never the front page of the verified host, a category, a tag or a file."""
+    home = pages[0]
+    first = news_listing_link(pages, domain)
+    by_text: list[str] = []
+    by_seg: list[str] = []
+    for p in pages:
+        for a in p.soup.find_all("a", href=True):
+            u = urljoin(p.url, a["href"].strip()).split("#")[0].split("?")[0]
+            pu = urlsplit(u)
+            if pu.scheme not in ("http", "https") or not same_site(host_of(u), domain) or FILE_EXT.search(pu.path):
+                continue
+            if pu.path in ("", "/") and bare(pu.hostname or "") == bare(home.host):
+                continue
+            if re.search(r"(?i)/(tag|tags|kategori|category|categories|author|forfatter|page|side)/", pu.path + "/"):
+                continue
+            label = re.sub(r"\s+", " ", a.get_text(" ", strip=True)).strip(" >»→›")
+            seg = unquote(pu.path.rstrip("/").rsplit("/", 1)[-1])
+            if label and len(label) <= 30 and NEWS_TEXT.match(label):
+                by_text.append(u)
+            elif seg and NEWS_SEG.match(seg):
+                by_seg.append(u)
+    out: list[str] = []
+    for u in ([first] if first else []) + by_text + by_seg:
+        if u not in out:
+            out.append(u)
+    return out
+
+
+ARTICLE_TYPES = {"article", "blogposting", "newsarticle", "report", "techarticle", "scholarlyarticle", "pressrelease",
+                 "analysisnewsarticle", "opinionnewsarticle", "reportagenewsarticle", "socialmediaposting",
+                 "liveblogposting", "posting"}
+PUB_LABEL = re.compile(r"(?i)publisert|skrevet|posted|published|\bdato\b|\bdate\b")
+
+
+def _ld_types(d: dict) -> set[str]:
+    t = d.get("@type")
+    return {str(x).lower() for x in (t if isinstance(t, list) else [t]) if x}
+
+
+def article_published(page: Page, loose: bool) -> tuple[str, str] | None:
+    """The publication date of one article page, from what the page itself declares: meta
+    article:published_time, or datePublished of a JSON-LD Article (BlogPosting, NewsArticle and the like).
+    With `loose` (the page sits under the news listing's own path) also a JSON-LD datePublished of any type, or
+    a single standalone date on the page labelled as a publication or byline date ("Publisert 3. mars 2026",
+    "18/8/2025 Skrevet av ..."). Returns (iso date or datetime, the exact source text)."""
+    tag = page.soup.find("meta", attrs={"property": re.compile(r"^article:published_time$", re.I)})
+    if tag and tag.get("content"):
+        iso = _iso_with_offset(tag["content"])
+        if iso:
+            return iso, tag["content"]
+    for strict in (True, False):
+        if not strict and not loose:
+            break
+        for d in page.jsonld:
+            if isinstance(d.get("datePublished"), str) and (not strict or _ld_types(d) & ARTICLE_TYPES):
+                iso = _iso_with_offset(d["datePublished"])
+                if iso:
+                    return iso, d["datePublished"]
+    if not loose:
+        return None
+    slash = slash_order(page)
+    seen: dict[str, tuple[str, Any]] = {}
+    for node in page.soup.find_all(string=True):
+        if node.parent is None or _in_chrome(node.parent):
+            continue
+        text = re.sub(r"\s+", " ", str(node)).strip()
+        if not text or len(text) > 40:
+            continue
+        got = find_date(node.parent, slash) if node.parent.name not in ("a",) else None
+        if got and got[1] in text:
+            seen.setdefault(got[0], (got[1], node))
+    if len(seen) != 1:
+        return None  # no date, or several (event dates, other posts): never guessed
+    day, (raw, node) = next(iter(seen.items()))
+    near = node.parent.parent if node.parent.parent is not None else node.parent
+    if node.find_parent("time") is None and not (len(near.get_text(" ", strip=True)) <= 200
+                                                 and PUB_LABEL.search(near.get_text(" ", strip=True))):
+        return None
+    return day, raw
+
+
+def listing_articles(page: Page, domain: str) -> list[tuple[str, str, bool]]:
+    """Article links on a news listing that shows no dates: (url, link text, loose) in page order, where
+    loose means the article sits under the listing's own path or a news path (e.g. /nyheter/x, /post/x).
+    Only links in the page body with a title-like text (or a heading in their item block)."""
+    listing = urlsplit(page.url).path.rstrip("/")
+    out: dict[str, tuple[str, str, bool]] = {}
+    menu = {urljoin(page.url, a["href"].strip()).split("#")[0].split("?")[0].rstrip("/")
+            for a in page.soup.find_all("a", href=True) if _in_chrome(a)}
+    for a in page.soup.find_all("a", href=True):
+        if _in_chrome(a):
+            continue
+        u = urljoin(page.url, a["href"].strip()).split("#")[0].split("?")[0]
+        pu = urlsplit(u)
+        path = pu.path.rstrip("/")
+        if pu.scheme not in ("http", "https") or not same_site(host_of(u), domain) or path in ("", listing):
+            continue
+        if FILE_EXT.search(path) or NOT_POST.search(path + "/") or NEWS_SEG.match(path.rsplit("/", 1)[-1]):
+            continue
+        under = (listing and path.startswith(listing + "/")) or bool(
+            re.search(r"(?i)/(post|posts|blog|blogg|nyheter|nyhet|news|aktuelt|artikler|articles|notes|presse)/[^/]+$", path))
+        if not under and (bare(pu.hostname or "") != bare(page.host) or u.rstrip("/") in menu):
+            continue  # a page the site menu also links to is a section, not a post
+        text = re.sub(r"\s+", " ", a.get_text(" ", strip=True))
+        if len(text) < 15:
+            block, head = a, None
+            for _ in range(3):
+                block = block.parent
+                if block is None:
+                    break
+                head = block.find(re.compile(r"^h[1-5]$"))
+                if head is not None:
+                    break
+            text = re.sub(r"\s+", " ", head.get_text(" ", strip=True)) if head is not None else text
+        if len(text) < 15 or re.fullmatch(r"(?i)(les mer|read more|mer|more|se alle|vis alle).*", text):
+            continue
+        if u not in out:
+            out[u] = (u, text[:200], under)
+    items = list(out.values())
+    return items if len(items) >= 2 else []  # a listing lists several posts
 
 
 def _date_floor(ctx: CompanyContext) -> str:
@@ -2395,7 +2565,7 @@ async def sitemap_activity(f: Fetcher, sp: _Spend, ctx: CompanyContext, home: Pa
             early = [x for x in dated if x[1] < floor]
             if early:
                 ctx.facts["website_activity_before_founding"] = len(early)
-            dated = [x for x in dated if x[1] >= floor and not PLACEHOLDER_SLUG.search(x[0])]
+            dated = [x for x in dated if x[1] >= floor and not PLACEHOLDER_SLUG.search(x[0]) and not template_post(None, x[0])]
             if not dated:
                 return
             if _activity_blocked(ctx, "site_page_updated"):
@@ -2935,9 +3105,11 @@ def inline_news(page: Page) -> list[dict]:
     """Dated items listed on a page without links of their own: a short standalone date next to a heading
     (e.g. <p class="datetime">2024.07.04</p><h5>title</h5>). The item URL is the page with a fragment."""
     out, seen = [], set()
+    slash = slash_order(page)
     for node in page.soup.find_all(string=True):
         text = re.sub(r"\s+", " ", str(node)).strip()
-        if not text or len(text) > 40 or not any(rx.search(text) for rx, _ in DATE_PATTERNS):
+        if not text or len(text) > 40 or not (any(rx.search(text) for rx, _ in DATE_PATTERNS)
+                                              or (slash and SLASH_DATE.search(text))):
             continue
         block = node.parent.parent if node.parent is not None else None
         if block is None or len(block.get_text(" ", strip=True)) > 1500:
@@ -2945,7 +3117,7 @@ def inline_news(page: Page) -> list[dict]:
         heads = block.find_all(re.compile(r"^h[2-6]$"))
         if len(heads) != 1:
             continue
-        found = find_date(node.parent)
+        found = find_date(node.parent, slash)
         title = _clean(heads[0].get_text(" ", strip=True), 200)
         if not found or not title or len(title) < 8 or (title, found[0]) in seen:
             continue
@@ -2993,7 +3165,23 @@ def verbatim(raw: str, text: str | None) -> str | None:
         m = re.search(r"\s+".join(parts), raw)
         if m:
             return m.group(0)
+    # any non-ASCII letter or punctuation written as a numeric (&#248; &#xF8;) or named (&oslash;) entity
+    parts = ["".join(_entity_alt(ch) for ch in w) for w in text.split()]
+    if parts:
+        m = re.search(r"\s+".join(parts), raw)
+        if m:
+            return m.group(0)
     return None
+
+
+def _entity_alt(ch: str) -> str:
+    if ch.isascii() and ch.isalnum():
+        return re.escape(ch)
+    from html.entities import codepoint2name
+    opts = [re.escape(ch), f"&#0*{ord(ch)};", f"&#[xX]0*(?i:{ord(ch):x});"]
+    if ord(ch) in codepoint2name:
+        opts.append(f"&{codepoint2name[ord(ch)]};")
+    return "(?:" + "|".join(opts) + ")"
 
 
 DEMO_TITLES = re.compile(r"(?i)^(hello,? world!?|hei,? verden!?|build dream home|construction company|powerful modern idea|"
@@ -3036,10 +3224,12 @@ def _news_ok(item: dict, floor: str, domain: str) -> bool:
     path = urlsplit(item["url"]).path
     if item.get("inline"):
         path = "/#inline"
+    elif path in ("", "/") and re.fullmatch(r"p=\d+", urlsplit(item["url"]).query):
+        path = "/?p"  # a WordPress post under plain permalinks (/?p=1042)
     return (floor <= day <= today and same_site(host_of(item["url"]), domain) and path not in ("", "/")
             and not NOT_POST.search(path + "/") and not SAMPLE_POST.match(item["title"])
             and not PLACEHOLDER.search(item["title"]) and not PLACEHOLDER_SLUG.search(item["url"])
-            and len(item["title"]) >= 4)
+            and not template_post(item["title"], item["url"]) and len(item["title"]) >= 4)
 
 
 def _is_wordpress(page: Page) -> bool:
@@ -3050,6 +3240,28 @@ def _is_wordpress(page: Page) -> bool:
 def _is_wix(page: Page) -> bool:
     gen = page.soup.find("meta", attrs={"name": re.compile("^generator$", re.I)})
     return bool((gen and "wix" in (gen.get("content") or "").lower()) or b"static.wixstatic.com" in page.snap.content)
+
+
+async def _undated_listing(sp: "_Spend", page: Page, domain: str, floor: str, found: dict) -> None:
+    """A news listing without dates: read its newest article pages (in page order, while the budget allows,
+    at most five) and keep those that declare their own publication date."""
+    for url, text, loose in listing_articles(page, domain)[:5]:
+        if not sp.can(1):
+            break
+        art, _st = await _fetch_page(sp, url)
+        if not art or not same_site(art.host, domain) or urlsplit(art.url).path in ("", "/") \
+                or art.url.rstrip("/") == page.url.rstrip("/"):
+            continue
+        got = article_published(art, loose)
+        if not got:
+            continue
+        h1 = art.soup.find("h1")
+        title = _clean(h1.get_text(" ", strip=True), 200) if h1 is not None else None
+        if not title or len(title) < 8:
+            title = _clean(text, 200)
+        it = {"title": title, "url": url, "datetime": got[0], "title_span": title, "date_span": got[1]}
+        if title and _news_ok(it, floor, domain) and url not in found:
+            found[url] = (it, art.snap, None)
 
 
 async def collect_dated_news(sp: "_Spend", ctx: CompanyContext, pages: list[Page], domain: str,
@@ -3123,13 +3335,14 @@ async def collect_dated_news(sp: "_Spend", ctx: CompanyContext, pages: list[Page
         if found:
             break
     if not found:
-        listing = news_listing_link(pages, domain)
-        probes = [listing] if listing else [origin + p for p in NEWS_PROBES]
+        listings = news_listings(pages, domain)
+        probes = listings[:2] if listings else [origin + p for p in NEWS_PROBES]
         for url in probes:
             if not sp.can(1):
                 break
             page, _st = await _fetch_page(sp, url)
-            if not page or not same_site(page.host, domain) or urlsplit(page.url).path in ("", "/"):
+            if not page or not same_site(page.host, domain) or (
+                    urlsplit(page.url).path in ("", "/") and bare(page.host) == bare(home.host)):
                 continue
             # a blog collection often has its own feed (Squarespace: <collection>?format=rss)
             lfeeds = [urljoin(page.url, ln.get("href") or "") for ln in page.soup.find_all("link", attrs={"type": FEED_TYPES})]
@@ -3162,7 +3375,16 @@ async def collect_dated_news(sp: "_Spend", ctx: CompanyContext, pages: list[Page
                           "title_span": span, "date_span": None}
                     if _news_ok(it, floor, domain) and it["url"] not in found:
                         found[it["url"]] = (it, lp.snap, lp)
-            break
+            if not found and not scope.shared:
+                # dates written beside headings, without links of their own
+                for it in inline_news(page):
+                    if _news_ok(it, floor, domain) and it["url"] not in found:
+                        found[it["url"]] = (it, page.snap, None)
+            if not found and not scope.shared:
+                await _undated_listing(sp, page, domain, floor, found)
+            ctx.facts["website_dated_news_checked"] = (ctx.facts.get("website_dated_news_checked") or [])[:2] + [page.url]
+            if found or not listings:
+                break
         # listing dates are dates only: read the article page for the full datetime while the budget allows
         for url in sorted(found, key=lambda u: found[u][0]["datetime"], reverse=True)[:4]:
             it, snap, lp = found[url]
@@ -3263,11 +3485,84 @@ def _careers_page_ok(page: Page, domain: str, home: Page, probed: bool, nace: st
     return jobs_url(path) or bool(JOB_HEADING.search(head))
 
 
+# Recruitment platforms: a company's own job board there (subdomain, or a company path or id), never the
+# platform's front page, login or candidate pages. Linked from the verified exclusive site, it is the company's
+# careers page. The platform itself is not fetched.
+ATS_BOARDS = ("teamtailor.com", "webcruiter.no", "webcruiter.com", "jobbnorge.no", "recman.no", "recman.page",
+              "easycruit.com", "hrmanager.no", "hr-manager.net", "reachmee.com", "varbi.com", "jobylon.com",
+              "smartrecruiters.com", "workable.com", "lever.co", "greenhouse.io", "talentech.io", "emply.com",
+              "jobteaser.com", "personio.de", "personio.com", "homerun.co", "recruitee.com", "breezy.hr")
+ATS_GENERIC_SUB = {"www", "app", "api", "help", "support", "status", "blog", "login", "auth", "cdn", "static",
+                   "candidate", "career", "careers", "jobs", "apply", "boards", "job-boards", "emp", "web"}
+ATS_NOT_BOARD = re.compile(r"(?i)/(login|logg-?inn|signin|sign-in|register|registrer|signup|customer|kunde|admin|"
+                           r"candidate/profile|profile|my-?page|minside|privacy|personvern|cookie|terms)(/|$)")
+ATS_JOBS_TEXT = re.compile(r"(?i)\b(karriere|ledige? stilling(er)?|stillinger|jobb(e)?( hos oss)?|jobbmuligheter|"
+                           r"careers?|jobs?|vacanc(y|ies)|open positions|join (us|our team)|work (with|at) us|"
+                           r"søk (jobb|stilling)|apply)\b")
+
+
+def ats_board(url: str, names: list[str] | None = None) -> bool:
+    """A company's own board on a recruitment platform (e.g. acme.teamtailor.com, jobs.lever.co/acme,
+    candidate.hr-manager.net/...?customer=123), not the platform's own pages. With `names` (distinctive name
+    words and the site's domain label), the board's subdomain or path must carry one of them, so a link to a
+    chain's or partner's board is not taken as ours."""
+    pu = urlsplit(url)
+    host = (pu.hostname or "").lower()
+    plat = next((h for h in ATS_BOARDS if host == h or host.endswith("." + h)), None)
+    if not plat or ATS_NOT_BOARD.search(pu.path):
+        return False
+    if names is not None:
+        ident = re.sub(r"[^a-z0-9]", "", _translit(unquote(host[: -len(plat)] + pu.path).lower()))
+        if not any(n and len(n) >= 4 and n in ident for n in names):
+            return False
+    sub = host[: -len(plat)].rstrip(".")
+    sub = sub[4:] if sub.startswith("www.") else sub
+    own_sub = bool(sub) and sub.split(".")[-1] not in ATS_GENERIC_SUB
+    segs = [x for x in pu.path.split("/") if x]
+    own_path = bool(segs) and segs[0].lower() not in {"", "jobs", "job", "search", "sok", "nb", "en", "no", "nb-no",
+                                                     "en-us", "home", "index", "about", "pricing", "blog"}
+    own_query = bool(re.search(r"(?i)(customer|company|companylock|cid|employer|kunde|org)[a-z_]*=\w+", pu.query))
+    return own_sub or own_path or own_query
+
+
+def ats_link(pages: list[Page], scope: "Scope", legal_name: str = "") -> tuple[str, Page, str] | None:
+    """The first link on the verified site's pages to the company's own board on a recruitment platform, with a
+    jobs wording in the link text or the URL, whose board names the company (a name word or the domain label)."""
+    names = [re.sub(r"[^a-z0-9]", "", _translit(w.lower())) for w in name_words(legal_name)
+             if w.lower() not in GENERIC_WORDS and w.lower() not in LEGAL_SUFFIX]
+    names.append(re.sub(r"[^a-z0-9]", "", _translit(bare(pages[0].host).split(".")[0])))
+    for p in pages:
+        for a in p.soup.find_all("a", href=True):
+            u = urljoin(p.url, a["href"].strip()).split("#")[0]
+            if urlsplit(u).scheme not in ("http", "https") or not ats_board(u, names):
+                continue
+            label = re.sub(r"\s+", " ", a.get_text(" ", strip=True))[:80]
+            if not (ATS_JOBS_TEXT.search(label) or ATS_JOBS_TEXT.search(unquote(urlsplit(u).path).replace("-", " "))
+                    or ATS_JOBS_TEXT.search((a.get("title") or "") + " " + (a.get("aria-label") or ""))):
+                continue
+            if not scope.accept(a, p):
+                continue
+            return u, p, f'<a href="{a["href"][:200]}">{label}</a>' if label else a["href"][:200]
+    return None
+
+
 async def collect_hiring(sp: "_Spend", ctx: CompanyContext, pages: list[Page], domain: str, scope: "Scope") -> None:
     """hiring_signal: the careers page URL (linked, or found by probing the usual paths), plus one claim per
     real posting on it (JSON-LD JobPosting naming us, or a linked ATS posting)."""
     site_match = {"method": "verified_site", "detail": f"careers page on verified site {domain}"}
     link = careers_link(pages, domain, scope)
+    reg = ctx.registry or {}
+    if link is None and not ((reg.get("naeringskode1") or {}).get("kode") or "").startswith("78"):
+        # no careers page of its own, but a link to its board on a recruitment platform (a staffing firm's
+        # board lists its clients' jobs, so not for NACE 78)
+        ats = ats_link(pages, scope, reg.get("navn") or "")
+        if ats:
+            url, p, span = ats
+            ctx.facts["website_hiring_signal_checked"] = [url]
+            ctx.add_claim("hiring_signal", "hiring", url, _ev(ctx, p, span),
+                          match={"method": "ats_link_on_verified_site",
+                                 "detail": f"job board on a recruitment platform, linked from the verified site {domain}"})
+            return
     candidates = [link[0]] if isinstance(link, tuple) else []
     origin = f"{urlsplit(pages[0].url).scheme}://{urlsplit(pages[0].url).netloc}"
     probed = not candidates
@@ -3377,7 +3672,7 @@ async def fetch_website(f: Fetcher, ctx: CompanyContext) -> None:
             if scope.exclusive:
                 for step, fld, sec in ((collect_dated_news, "dated_news", "activity"),
                                        (collect_hiring, "hiring_signal", "hiring")):
-                    sp.cap = sp.used + STEP_BUDGET  # its own budget, separate from discovery
+                    sp.cap = sp.used + (NEWS_BUDGET if fld == "dated_news" else STEP_BUDGET)  # its own budget
                     before = len(ctx.claims)
                     starved = False
                     try:
