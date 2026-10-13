@@ -1564,3 +1564,28 @@ def test_seed_order_commoncrawl_before_other_seeds_and_domain_matches(monkeypatc
                                              {"domain": "c-cc.no", "sources": ["commoncrawl"]}]})
     order = [d for d, s, _ in W.candidates(ctx_for(navn="FJELLBEKK TREVARE AS")) if s.startswith("seed:")]
     assert order == ["c-cc.no", "b-osm.no", "a-weak.no"]
+
+
+def _kvist_row(name, extra=None):
+    row = {"organisasjonsnummer": SISTER, "navn": name}
+    row.update(extra or {})
+    q = "%20".join(W._twords(" ".join(W.name_words(name))))
+    return W.BRREG_SEARCH + f"?navn={q}&size=20", (200, json.dumps({"_embedded": {"enheter": [row]}}), "application/json")
+
+
+def test_staff_club_mentioned_on_own_domain_keeps_official_website():
+    """Narrow rule: a staff club sharing our name, mentioned on the site, is a mention, not an operator."""
+    body = (f'<h1>Fjellbekk Trevare</h1><p>Bedriftsklubben Fjellbekk Trevare AS arrangerer sommerfest. '
+            f'Bedriftsklubben Fjellbekk Trevare AS ønsker alle velkommen.</p>'
+            '<footer><a href="mailto:post@fjellbekk.no">post@fjellbekk.no</a></footer>')
+    url, resp = _kvist_row("BEDRIFTSKLUBBEN FJELLBEKK TREVARE AS")
+    claims = run(FakeFetcher({"https://fjellbekk.no/": (200, html(body)), url: resp}), ctx_for(hjemmeside="fjellbekk.no"))
+    assert claims["official_website"].value == "fjellbekk.no"
+
+
+def test_copyright_owner_in_footer_makes_own_domain_a_related_website():
+    body = '<h1>Fjellbekk Trevare</h1><footer>© 2026 Kvist Holding AS</footer>'
+    url, resp = _kvist_row("KVIST HOLDING AS")
+    claims = run(FakeFetcher({"https://fjellbekk.no/": (200, html(body)), url: resp}), ctx_for(hjemmeside="fjellbekk.no"))
+    assert claims["official_website"].availability == "ambiguous"
+    assert claims["related_website"].value["domain"] == "fjellbekk.no"

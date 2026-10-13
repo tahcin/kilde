@@ -43,7 +43,7 @@ SECTION = "web_presence"
 MAX_REQUESTS = 10         # HTTP requests per company, robots.txt and Brreg name checks included
 VERIFIED_CAP = 16         # raised cap once a site is proven and exclusive (news and careers)
 STEP_BUDGET = 6           # requests each for dated news and hiring on a verified exclusive site
-RELATED_STRICT = True     # every non-exclusive site becomes related_website (False: own domains named-only stay)
+RELATED_STRICT = False    # True: every non-exclusive site becomes related_website; False (default): a company's own domain that only names other companies stays official, with nothing derived
 RESERVE = 3               # stop when the run budget has fewer than this left
 MAX_INTERNAL = 3          # extra pages per candidate when the homepage is not conclusive
 DNS_TIMEOUT = 3.0
@@ -1519,6 +1519,7 @@ class Scope:
     path_scoped: bool = False
     other_mail: set[str] = field(default_factory=set)  # contact addresses on another organisation's domain
     codeclared: dict[str, str] = field(default_factory=dict)  # other org -> name, declaring the same website
+    dominant_kind: dict[str, str] = field(default_factory=dict)  # dominant name -> operator, namesake or mention
     addr: tuple | None = None  # (street regex, postcode) of our registered address
 
     def __post_init__(self) -> None:
@@ -1703,6 +1704,16 @@ OPERATOR_PAGE = re.compile(r"(?i)om-?oss|about|kontakt|contact|personvern|privac
 OPERATOR_MARK = re.compile(r"(?i)footer|header|contact|kontakt|imprint|impressum|copyright|address|adresse|company-info")
 
 
+def _owner_text(p: Page) -> str:
+    """Text where an operator is named: footer, imprint and copyright blocks."""
+    parts = []
+    for el in p.soup.find_all(True):
+        marks = " ".join(el.get("class") or []) + " " + (el.get("id") or "")
+        if el.name == "footer" or re.search(r"(?i)footer|imprint|impressum|copyright", marks):
+            parts.append(el.get_text(" ", strip=True))
+    return " | ".join(parts)
+
+
 def _operator_text(p: Page) -> str:
     """Text in operator positions: header, footer, navigation, address and contact or imprint blocks."""
     parts = []
@@ -1722,6 +1733,7 @@ def other_company_names(pages: list[Page], words: list[str]) -> list[tuple[str, 
     best: dict[tuple[str, str], int] = {}
     for p in pages:
         optext = _operator_text(p)
+        ownertext = _owner_text(p)
         path_txt = unquote(urlsplit(p.url).path)
         op_page = bool(OPERATOR_PAGE.search(path_txt)) and not re.search(r"(?i)personvern|privacy", path_txt)
         offsite = " | ".join(a.get_text(" ", strip=True) for a in p.soup.find_all("a", href=True)
@@ -1757,10 +1769,15 @@ def other_company_names(pages: list[Page], words: list[str]) -> list[tuple[str, 
                 ctx_hit = bool(OWNER_CONTEXT.search(txt[max(0, m.start() - 60):m.end() + 10]))
                 mention = m.group(0).strip()
                 positional = is_title or ctx_hit or op_page or (mention in optext)
-                score[key] = max(score.get(key, 0), 2 if positional else 1)
+                operator = is_title or ctx_hit or (mention in ownertext)
+                score[key] = max(score.get(key, 0), 3 if operator else (2 if positional else 1))
         for k, v in score.items():
             best[k] = max(best.get(k, 0), v)
-    return [(k[0], k[1], best[k] >= 2) for k in sorted(best, key=lambda k: -best[k])]
+    return [(k[0], k[1], best[k] >= 2, best[k] >= 3) for k in sorted(best, key=lambda k: -best[k])]
+
+
+STAFF_BODIES = re.compile(r"(?i)bedriftsklubb|bedriftsidrettslag|bil(klubb)?\b|velferd|personalforening|fagforening|"
+                          r"pensjonskasse|pensjon|idrettslag|photo club|fotoklubb|kunstforening|vennefor")
 
 
 def _tied(row: dict, e: dict, site_host: str) -> str | None:
@@ -1779,8 +1796,8 @@ def _tied(row: dict, e: dict, site_host: str) -> str | None:
     return None
 
 
-async def confirm_dominant(sp: "_Spend", ctx: CompanyContext, names: list[tuple[str, str, bool]], limit: int = 3,
-                           site_host: str = "") -> dict[str, str]:
+async def confirm_dominant(sp: "_Spend", ctx: CompanyContext, names: list[tuple], limit: int = 3,
+                           site_host: str = "", kinds: dict[str, str] | None = None) -> dict[str, str]:
     """Registered companies that count against exclusivity: named in an operator position, or tied to us
     (address, phone, email domain or name words). Clients, partners and suppliers in body text do not count."""
     out: dict[str, str] = {}
@@ -1788,10 +1805,13 @@ async def confirm_dominant(sp: "_Spend", ctx: CompanyContext, names: list[tuple[
     ours = {t for t in _core_tokens(e.get("navn") or "") if len(t) >= 4 and t not in GENERIC_WORDS}
     # positional names first, then body names that share our name words, then the rest
     ordered = sorted(names, key=lambda n: (not n[2], not (set(n[0].split()) & ours)))
-    for lab, suffix, positional in ordered:
+    kinds = {} if kinds is None else kinds
+    for lab, suffix, positional, *rest in ordered:
+        operator = bool(rest and rest[0])
         if suffix in FOREIGN_SUFFIX:
             if positional or set(lab.split()) & ours:
                 out[f"{lab} {suffix}"] = "foreign"
+                kinds[f"{lab} {suffix}"] = "operator" if operator else "mention"
             continue
         if limit <= 0:
             break
@@ -1802,7 +1822,16 @@ async def confirm_dominant(sp: "_Spend", ctx: CompanyContext, names: list[tuple[
         row = _ROW_CACHE.get(got[lab]) or {}
         tie = _tied(row, e, site_host)
         if positional or tie:
-            out[f"{lab} {suffix}"] = got[lab]
+            key = f"{lab} {suffix}"
+            out[key] = got[lab]
+            if operator:
+                kinds[key] = "operator"
+            elif tie and tie != "shares our distinctive name words":
+                kinds[key] = "namesake"  # shares our address, phone or email domain
+            elif tie and not STAFF_BODIES.search(row.get("navn") or lab):
+                kinds[key] = "namesake"
+            else:
+                kinds[key] = "mention"
     return out
 
 
@@ -2389,11 +2418,13 @@ async def prepare_scope(sp: _Spend, ctx: CompanyContext, v: Verdict) -> Scope:
             others.setdefault(num, s)
     others = {k: (x[1] if isinstance(x, tuple) else x) for k, x in others.items()}
     sisters = await confirm_sisters(sp, ctx, sister_labels(v.pages, words))
+    kinds: dict[str, str] = {}
     named = [n for n in other_company_names(v.pages, words) if n[0] not in sisters][:6]
-    dominant = await confirm_dominant(sp, ctx, named, limit=3, site_host=home.host)
-    positional_names = {f"{lab} {suffix}" for lab, suffix, pos in named if pos}
+    dominant = await confirm_dominant(sp, ctx, named, limit=3, site_host=home.host, kinds=kinds)
+    positional_names = {f"{n[0]} {n[1]}" for n in named if n[2]}
     if v.namesake:
         dominant[v.namesake[0].lower()] = v.namesake[1]
+        kinds[v.namesake[0].lower()] = "namesake"
     reg_mail = ((ctx.registry or {}).get("epostadresse") or "@").rsplit("@", 1)[1].lower()
     own_tokens = [t for t in _core_tokens((ctx.registry or {}).get("navn") or "")
                   if len(t) >= 4 and t not in GENERIC_WORDS and t not in REGIONS]
@@ -2428,7 +2459,9 @@ async def prepare_scope(sp: _Spend, ctx: CompanyContext, v: Verdict) -> Scope:
     a = e.get("forretningsadresse") or {}
     srx = _street_regex(([x for x in a.get("adresse") or [] if x] or [""])[-1]) if a.get("adresse") else None
     addr = (srx, a["postnummer"]) if srx and a.get("postnummer") else None
-    return Scope(ctx.org, words, others, sisters, dominant, v.cross, v.path_scoped, other_mail, codeclared, addr)
+    sc = Scope(ctx.org, words, others, sisters, dominant, v.cross, v.path_scoped, other_mail, codeclared, addr)
+    sc.dominant_kind = kinds
+    return sc
 
 
 def _orgnr_in_operator_position(v: Verdict, org: str) -> bool:
@@ -2525,8 +2558,12 @@ def emit_site(ctx: CompanyContext, v: Verdict, scope: Scope | None = None) -> li
         ctx.facts["website_shared"] = {"others": sorted(scope.others), "sisters": scope.sisters}
     if v.cross or v.path_scoped:
         url = home.url.split("#")[0]  # the exact page that proves us, not the host's front page
+    # A company's own domain stays official only when other companies are merely mentioned there (clients,
+    # partners, projects, staff clubs). An operator, a namesake, contacts on another organisation's domain,
+    # a redirect, a section page, a co-declaring company or another org number make it a related website.
     own_domain_only = (not RELATED_STRICT and not (v.cross or v.path_scoped or scope.others or scope.codeclared
-                                                   or scope.sisters))
+                                                   or scope.sisters or scope.other_mail)
+                       and all(scope.dominant_kind.get(k) == "mention" for k in scope.dominant))
     if not scope.exclusive and own_domain_only:
         # the company's own domain, non-exclusive only because other companies are named on it: the site is the
         # company's, but nothing is derived from it
