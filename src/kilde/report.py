@@ -237,7 +237,7 @@ PAGE = """<!doctype html>
 <body>
 <a class="skip" href="#main">Skip to company profile</a>
 <header class="bar">
-  <a class="word" href="#" aria-label="Kilde, back to the first company">Kilde</a>
+  <a class="word" href="#" aria-label="Kilde, back to the first company"><span class="mark" aria-hidden="true"></span>Kilde</a>
   <dl class="run" id="run"></dl>
   <a class="bar-link" href="#sources">Sources and licences</a>
 </header>
@@ -329,7 +329,8 @@ p{margin:0}
 .muted{color:var(--muted)}
 
 /* run bar */
-.bar{display:flex;align-items:baseline;gap:10px 36px;flex-wrap:wrap;padding:14px 28px;border-bottom:1px solid var(--line)}
+.mark{display:inline-block;width:22px;height:22px;border-radius:6px;background:var(--accent);box-shadow:inset -7px -7px 0 0 color-mix(in srgb,var(--accent) 38%,#ffffff);margin-right:9px;vertical-align:-4px;flex:none}
+.bar{display:flex;align-items:center;gap:10px 36px;flex-wrap:wrap;padding:14px 28px;border-bottom:1px solid var(--line)}
 .word{font-size:19px;font-weight:700;letter-spacing:-.02em;color:var(--ink);text-decoration:none}
 .run{display:flex;flex-wrap:wrap;gap:4px 24px;margin:0;font-size:13.5px}
 .run div{display:flex;gap:6px}
@@ -822,7 +823,7 @@ function stats(co){
     out.push(c?cell(p[1],vbtn(co,c,nfmt(c.v.amount)),esc(c.v.currency||'')+' '+esc(c.v.year)):cell(p[1],'Not available','',true));});
   var e=any(co,'employees_registered')[0];
   if(e&&e.a==='available'){var ev=typeof e.v==='string'&&/fewer than 5/i.test(e.v)?'Under 5':(typeof e.v==='number'?nfmt(e.v):esc(String(e.v)));out.push(cell('Employees',vbtn(co,e,ev),'Registry'));}
-  else out.push(cell('Employees',e&&e.a==='not_available'&&/no employees/i.test(e.n||'')?vbtn(co,e,'None'):'Not available',e&&e.a==='not_available'&&/no employees/i.test(e.n||'')?'Registry':'',!(e&&/no employees/i.test(e.n||''))));
+  else out.push(cell('Employees',e&&e.a==='not_available'&&/no employees/i.test(e.n||'')?vbtn(co,e,'None registered'):'Not available',e&&e.a==='not_available'&&/no employees/i.test(e.n||'')?'Registry':'',!(e&&/no employees/i.test(e.n||''))));
   var w=av(co,'registered_workplace'),wn=any(co,'registered_workplace')[0];
   out.push(w.length?cell('Workplaces',vbtn(co,w[0],String(w.length)),'Registered'):(wn&&wn.a==='not_available'?cell('Workplaces',vbtn(co,wn,'None'),'Registered'):cell('Workplaces',STATE_LABEL[st(wn?wn.a:'failed')],'',true)));
   var j=av(co,'job_ad'),jn=any(co,'job_ad')[0];
