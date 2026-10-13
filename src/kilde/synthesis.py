@@ -91,7 +91,9 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
                 bits.append(f"registered on {reg.value}")
         text = " ".join(bits)
         if ind:
-            text += f", in the industry \"{ind.value['name']}\" ({ind.value['code']})"
+            from .codes import code_name
+            en = code_name("nace_en", ind.value.get("code"))
+            text += f", in the industry \"{en or ind.value['name']}\" ({ind.value['code']})"
         say(text + ".", name, form, muni, reg, ind, first(ctx, "incorporation_date") if reg else None)
 
     status = first(ctx, "legal_status")

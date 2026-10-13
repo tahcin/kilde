@@ -75,3 +75,17 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+
+# English industry names (added Oct 13): SN2007 then SN2025, later wins.
+def add_english(path="src/kilde/data/codes.json"):
+    import json, urllib.request
+    d = json.load(open(path))
+    en = {}
+    for date in ("2024-12-31", "2026-10-13"):
+        req = urllib.request.Request(f"https://data.ssb.no/api/klass/v1/classifications/6/codesAt?date={date}&language=en",
+                                     headers={"Accept": "application/json"})
+        for c in json.load(urllib.request.urlopen(req, timeout=60))["codes"]:
+            en[c["code"]] = c["name"]
+    d["nace_en"] = en
+    json.dump(d, open(path, "w"), ensure_ascii=False)
