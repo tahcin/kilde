@@ -231,8 +231,15 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
             f"for it (including SkatteFUNN), the latest \"{clip(str((projects[0].value or {}).get('title', '')), 100)}\".", *projects[:3])
     inspections = sorted(ctx.claims_for("food_inspection"), key=lambda c: c.as_of or "", reverse=True)
     if inspections:
-        say(f"Mattilsynet has published {len(inspections)} food safety inspection{'s' if len(inspections) != 1 else ''} of its "
-            f"premises, the latest on {inspections[0].as_of}.", *inspections[:3])
+        # One claim per inspected place; each carries how many inspections are on file for it.
+        places = {(c.value or {}).get("place_organisation_number") or (c.value or {}).get("place") for c in inspections}
+        on_file = sum(int((c.value or {}).get("inspections_on_file") or 1) for c in inspections
+                      if c is max((x for x in inspections if (x.value or {}).get("place") == (c.value or {}).get("place")),
+                                  key=lambda x: x.as_of or ""))
+        latest = inspections[0]
+        say(f"Mattilsynet's Smilefjes register lists {on_file} food safety inspection{'s' if on_file != 1 else ''} at "
+            f"{'its premises' if len(places) == 1 else str(len(places)) + ' of its premises'}; the latest, on {latest.as_of}, found: {(latest.value or {}).get('result', 'see source')}.",
+            *inspections[:3])
     approval = first(ctx, "approval_sentral_godkjenning")
     if approval:
         v = approval.value or {}
