@@ -26,6 +26,15 @@ PLATFORM = {"linkedin": "LinkedIn", "facebook": "Facebook", "instagram": "Instag
             "twitter": "X", "tiktok": "TikTok"}
 
 
+def clip(text: str, n: int = 220) -> str:
+    """Shorten at a word boundary and say so with an ellipsis."""
+    text = " ".join(str(text).split())
+    if len(text) <= n:
+        return text
+    cut = text[:n].rsplit(" ", 1)[0].rstrip(",;:")
+    return cut + " ..."
+
+
 def money(amount: Any, cur: str | None) -> str:
     try:
         a = float(amount)
@@ -86,9 +95,9 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
     desc = first(ctx, "website_description")
     purpose = first(ctx, "statutory_purpose") or first(ctx, "registered_activity")
     if desc:
-        say(f"Its own website describes it as: \"{desc.value[:220]}\"", desc)
+        say(f"Its own website describes it as: \"{clip(desc.value)}\"", desc)
     elif purpose:
-        say(f"Its registered purpose is: \"{purpose.value[:220]}\"", purpose)
+        say(f"Its registered purpose is: \"{clip(purpose.value)}\"", purpose)
 
     emp = first(ctx, "employees_registered")
     if emp:
@@ -181,7 +190,7 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
         if agent:
             names = sorted({str((c.value or {}).get("on_behalf_of") or "").strip() for c in agent} - {""})
             parts.append(f"is a registered agent under {len(agent)} licence{'s' if len(agent) != 1 else ''} held by others"
-                         + (f" ({', '.join(names[:3])})" if names else ""))
+                         + (f" ({', '.join(names)})" if names else ""))
         if parts:
             say("According to Finanstilsynet it " + " and ".join(parts) + ".", *(own + agent))
 

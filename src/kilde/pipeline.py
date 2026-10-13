@@ -21,7 +21,7 @@ from .synthesis import summarise
 
 log = logging.getLogger("kilde")
 COPIES_WINDOW = 28 * 60  # seconds; the endpoint asks for about 30 requests a minute
-STEP_TIMEOUT = {"website": 25, "registry": 20, "jobs": 90, "report_copies": 10}
+STEP_TIMEOUT = {"website": 60, "registry": 20, "jobs": 90, "report_copies": 10}
 STATE_RANK = ["available", "ambiguous", "blocked", "not_available", "not_applicable", "failed"]
 
 
@@ -55,14 +55,23 @@ class Options:
         self.modules = modules
 
 
-async def _step(ctx: CompanyContext, name: str, fn: Callable[[], Awaitable[None]], field: str, section: str) -> None:
+async def _step(ctx: CompanyContext, name: str, fn: Callable[[], Awaitable[None]], field: str, section: str,
+                timeout: float | None = None) -> None:
     """Run one connector step; turn every failure into an explicit state, never an exception."""
     t = time.monotonic()
+    n_claims, n_evidence = len(ctx.claims), len(ctx.evidence)
     try:
-        await asyncio.wait_for(fn(), timeout=STEP_TIMEOUT.get(name, 20))
+        await asyncio.wait_for(fn(), timeout=timeout or STEP_TIMEOUT.get(name, 20))
     except asyncio.TimeoutError:
-        ctx.module_states.setdefault(name, "failed")
-        ctx.error(name, f"step timed out after {STEP_TIMEOUT.get(name, 20)} s")
+        # Roll back whatever the step published half-way, so a timeout never leaves partial facts
+        # (and a retry starts clean). The step is recorded as timed out for a possible second pass.
+        for ev in ctx.evidence[n_evidence:]:
+            ctx.snapshots.pop(ev.id, None)
+            ctx.anchors.pop(ev.id, None)
+        del ctx.claims[n_claims:]
+        del ctx.evidence[n_evidence:]
+        ctx.module_states[name] = "timeout"
+        ctx.error(name, f"step timed out after {timeout or STEP_TIMEOUT.get(name, 20)} s")
         if not any(c.field == field and c.availability == "available" for c in ctx.claims):
             ctx.mark(field, section, "failed", note="source too slow (step timeout)")
     except BudgetExhausted as exc:
@@ -195,6 +204,20 @@ async def run_batch(orgs: list[str], opt: Options) -> tuple[list[dict], dict]:
                 await _step(ctx, "report_copies", lambda: accounts.fetch_report_copies(f, ctx), "annual_report_pdf", "financials")
 
     await guarded(asyncio.gather(copies_queue(), *(phase_b(c) for c in ctxs.values())), deadline_b)
+
+    # Second pass: website steps that timed out under load get one more, unhurried try. This keeps
+    # results stable between runs (Builderr runs each entry twice and compares the facts).
+    async def retry_website(ctx: CompanyContext) -> None:
+        async with retry_sem:
+            ctx.claims[:] = [c for c in ctx.claims if not (c.field == "official_website" and c.availability == "failed")]
+            ctx.module_states.pop("website", None)
+            await _step(ctx, "website", lambda: website.fetch_website(f, ctx), "official_website", "web_presence", timeout=120)
+
+    retry_sem = asyncio.Semaphore(8)
+    retry = [c for c in ctxs.values() if c.module_states.get("website") == "timeout"]
+    if website and retry and time.monotonic() < deadline_b - 60:
+        await guarded(asyncio.gather(*(retry_website(c) for c in retry)), budget.started + opt.seconds * 0.97)
+    batch_info["website_retries"] = len(retry)
     await f.close()
 
     # Assemble.
@@ -229,6 +252,7 @@ async def run_batch(orgs: list[str], opt: Options) -> tuple[list[dict], dict]:
         "started_at": started_at, "completed_at": completed_at, "expected_count": len(orgs),
         "emitted_envelopes": len(envelopes), "runtime_ms": int((time.monotonic() - t0) * 1000),
         "publication_gate": {"withheld": len(gate_notes), "notes": gate_notes[:200]},
+        "website_retries": batch_info.get("website_retries", 0),
         "operations": {"requests": budget.used, "max_requests": opt.max_requests, "dns_lookups": budget.dns_lookups,
                        "cache_hits": budget.cache_hits, "by_host": dict(sorted(budget.by_host.items(), key=lambda x: -x[1])[:25]),
                        "third_party_cost_usd": 0.0, "llm_calls": 0, "time_budget_seconds": opt.seconds},

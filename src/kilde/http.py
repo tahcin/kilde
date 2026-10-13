@@ -65,7 +65,7 @@ class Budget:
 
 
 class Fetcher:
-    def __init__(self, budget: Budget, *, per_host: int = 2, total: int = 48, timeout: float = 12.0,
+    def __init__(self, budget: Budget, *, per_host: int = 2, total: int = 96, timeout: float = 15.0,
                  cache_dir: str | None = None):
         self.budget = budget
         self.client = httpx.AsyncClient(
