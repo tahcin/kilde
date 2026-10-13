@@ -144,7 +144,7 @@ SOCIAL = {
 }
 FB_RESERVED = {"me", "sharer", "sharer.php", "share", "share.php", "dialog", "plugins", "login", "login.php", "home",
                "home.php", "groups", "watch", "events", "help", "policies", "privacy", "settings", "marketplace",
-               "gaming", "hashtag", "search", "photo.php", "story.php", "permalink.php", "notes", "fundraisers", "#"}
+               "gaming", "hashtag", "search", "pg", "photo.php", "story.php", "permalink.php", "notes", "fundraisers", "#"}
 SOCIAL_DROP = re.compile(r"sharer|/share|/intent|/dialog|/plugins|/hashtag|/watch|/embed|/results|/p/|/reel|"
                          r"/explore|/accounts|/login|/signup|/help|/policies|/privacy|/legal|/home$|/search|"
                          r"/shareArticle|/feed|/posts/|/photos|/events/|/i/|/status/|/video/|/tr\?|/tr$|/groups/",
@@ -1449,6 +1449,8 @@ def clean_social(url: str) -> tuple[str, str] | None:
     if not plat:
         return None
     path = re.sub(r"/+", "/", p.path).rstrip("/")
+    if plat == "facebook":
+        path = re.sub(r"(?i)^/pg(?=/[^/]+)", "", path)  # facebook.com/pg/<handle>/about is the page <handle>
     fb_p = plat == "facebook" and bool(re.match(r"^/p/[^/]+-\d{6,}$", path))
     if not path or (SOCIAL_DROP.search(path + ("?" + p.query if p.query else "")) and not fb_p):
         return None
@@ -2781,7 +2783,7 @@ class CanonicalSocial(str):
 
 def canonical_social(platform: str, url: str) -> CanonicalSocial:
     p = urlsplit(url)
-    value = (SOCIAL_HOSTS[platform] + p.path.rstrip("/")).lower()
+    value = (SOCIAL_HOSTS[platform] + unquote(p.path).rstrip("/")).lower()
     ids = [v for k, v in parse_qsl(p.query) if k == "id" and v.isdigit()]
     if p.path.endswith("profile.php") and ids:
         value = f"facebook.com/profile.php?id={ids[0]}"
