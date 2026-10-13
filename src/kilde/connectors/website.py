@@ -29,6 +29,7 @@ from urllib.parse import parse_qsl, unquote, urlencode, urljoin, urlsplit, urlun
 
 import dns.asyncresolver
 import dns.exception
+import dns.resolver
 from bs4 import BeautifulSoup
 
 from ..http import Blocked, BudgetExhausted, Fetcher
@@ -101,7 +102,7 @@ ORG_CONTEXT = re.compile(r"(org(?:anisasjons)?\.?\s*-?\s*n(?:r|o|ummer)\.?|organ
                          r"foretaksregisteret|business\s*(?:id|reg)|\bmva\b|\bvat\b|\bno\s?(?=\d))", re.I)
 NINE = re.compile(r"(?<![\d.,])(?:NO\s?)?([89]\d{2})[\s. ]?(\d{3})[\s. ]?(\d{3})(?:\s?MVA)?(?![\d,])")
 EMAIL = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
-PHONE_TEXT = re.compile(r"(?<![\d])(?:\+|00)?(?:47[\s.\- ]?)?(?:\d[\s.\- ]?){7}\d(?!\d)")
+PHONE_TEXT = re.compile(r"(?<![\d])(?:\+|00)?(?:47[\s.\-\u00a0]?)?(?:\d[\s.\-\u00a0]?){7}\d(?![\s.\-\u00a0]?\d)")
 PHONE_LABEL = re.compile(r"(tlf|telefon|phone|mobil|tel\.?|ring oss|sentralbord)", re.I)
 GENERIC_DESC = re.compile(r"just another wordpress site|^(home|hjem|forside)$|coming soon|kommer snart|"
                           r"^(?:my|min) (?:site|side)$", re.I)
@@ -188,32 +189,105 @@ def _ascii_variants(words: list[str]) -> list[list[str]]:
     return outs
 
 
-def name_domains(name: str) -> list[str]:
-    """Domains guessed from the legal name, best first: full name then name without generic words, .no then .com."""
-    words = [w for w in name_words(name) if re.fullmatch(r"[0-9a-zæøåäöüé]+", w)]
-    if not words:
+REGIONS = {"viken", "vestfold", "telemark", "agder", "rogaland", "vestland", "hordaland", "sogn", "fjordane", "more",
+           "romsdal", "trondelag", "nordland", "troms", "finnmark", "innlandet", "hedmark", "oppland", "akershus",
+           "ostfold", "buskerud", "oslo", "nord", "sor", "vest", "ost", "midt", "nordre", "sondre", "ostre", "vestre",
+           "sunnmore", "nordmore", "hallingdal", "valdres", "gudbrandsdal", "gudbrandsdalen", "lofoten", "vesteralen",
+           "helgeland", "jaeren", "ryfylke", "haugalandet", "sunnhordland", "salten", "namdal", "innherred", "fosen",
+           "romerike", "hadeland", "toten", "solor", "odal", "setesdal", "lister", "dalane", "stavanger", "bergen",
+           "trondheim", "tromso", "kristiansand", "drammen", "fredrikstad", "sandnes", "sarpsborg", "skien", "alesund",
+           "bodo", "moss", "haugesund", "sandefjord", "arendal", "tonsberg", "porsgrunn", "larvik", "halden",
+           "lillehammer", "molde", "harstad", "gjovik", "kongsberg", "mandal", "asker", "baerum", "hamar", "kongsvinger"}
+FORM_NAME_WORDS = {"stiftelsen", "stiftelse", "sameiet", "sameie", "borettslag", "borettslaget", "andelslag",
+                   "foreningen", "boligsameiet", "eierseksjonssameiet", "the"}
+
+
+def _places(e: dict | None) -> set[str]:
+    out = set(REGIONS)
+    for key in ("forretningsadresse", "beliggenhetsadresse", "postadresse"):
+        a = (e or {}).get(key) or {}
+        for k in ("kommune", "poststed"):
+            out |= {_translit(w) for w in re.findall(r"[a-zæøåäöü]+", (a.get(k) or "").lower()) if len(w) >= 3}
+    return out
+
+
+def _distinctive(ws: list[str], places: set[str]) -> bool:
+    return any(len(w) >= 4 and w not in GENERIC_WORDS and _translit(w) not in places and not w.isdigit() for w in ws)
+
+
+def name_variants(name: str, e: dict | None = None) -> list[list[str]]:
+    """The legal name and safe shortenings: leading initials joined ('P.E.' as 'pe') or dropped, form words
+    ('Sameiet', 'Stiftelsen') dropped, and place or region words (registry municipality, post town, counties,
+    'Viken', 'Nord') dropped. Every variant keeps at least one distinctive word."""
+    base = name_words(name)
+    places = _places(e)
+    out: list[list[str]] = [base] if base else []
+
+    def add(ws: list[str]) -> None:
+        if ws and ws not in out and _distinctive(ws, places if len(ws) > 1 else set()):
+            out.append(ws)
+
+    lead = 0
+    while lead < len(base) and len(base[lead]) == 1 and base[lead].isalpha():
+        lead += 1
+    stems = [base]
+    if 0 < lead < len(base):
+        joined = ["".join(base[:lead])] + base[lead:]
+        dropped = base[lead:]
+        add(joined)
+        add(dropped)
+        stems += [joined, dropped]
+    for st in list(stems):
+        no_form = [w for w in st if w not in FORM_NAME_WORDS]
+        add(no_form)
+        for ws in (st, no_form):
+            no_place = [w for w in ws if _translit(w) not in places]
+            if no_place and _distinctive(no_place, set()):
+                add(no_place)
+    return out
+
+
+def name_domains(name: str, e: dict | None = None) -> list[str]:
+    """Domains guessed from the legal name, best first: full name, then the safe variants (initials, form and
+    place words dropped, hyphenated words kept whole), .no before .com. A kindergarten also gets
+    <name>.barnehage.no. Single common words are skipped."""
+    places = _places(e)
+    variants = [[w for w in ws if re.fullmatch(r"[0-9a-zæøåäöüé]+", w)] for ws in name_variants(name, e)]
+    variants = [v for v in variants if v]
+    if not variants:
         return []
-    core = [w for w in words if w not in GENERIC_WORDS and not w.isdigit()]
+    words = variants[0]
+    seqs: list[list[str]] = []
+    for ws in variants:
+        for cand in (ws, [w for w in ws if w not in GENERIC_WORDS and not w.isdigit()]):
+            if cand and cand not in seqs:
+                seqs.append(cand)
+    # hyphenated words kept whole, with place words dropped ("SJØ-SPORT MANDAL" as sjo-sport)
+    raw = re.findall(r"[0-9a-zæøåäöüé]+(?:-[0-9a-zæøåäöüé]+)+", name.lower())
     labels: list[str] = []
-    for ws in (words, core):
-        if not ws:
-            continue
+    for ws in seqs:
         for v in _ascii_variants(ws):
             for lab in ("".join(v), "-".join(v)):
                 if lab not in labels:
                     labels.append(lab)
+    for r in raw:
+        for v in _ascii_variants([r]):
+            if v[0] not in labels:
+                labels.append(v[0])
     good = []
     for lab in labels:
-        if not (3 <= len(lab) <= 40):
+        if not (3 <= len(lab) <= 40) or lab.isdigit() or lab in COMMON_LABELS or len(lab) < 4:
             continue
-        if "-" not in lab and (len(lab) < 5 or lab in COMMON_LABELS) and len(words) == 1:
+        if "-" not in lab and len(lab) < 5 and len(words) == 1:
             continue
-        if lab in COMMON_LABELS or (len(lab) < 4):
-            continue
-        if lab.isdigit():
+        if lab.replace("-", "") in places and "-" not in lab:
             continue
         good.append(lab)
-    return [f"{lab}.{tld}" for tld in ("no", "com") for lab in good]
+    out = [f"{lab}.no" for lab in good] + [f"{lab}.com" for lab in good]
+    if (((e or {}).get("naeringskode1") or {}).get("kode") or "").startswith(("88.91", "85.1")):
+        kids = [lab for lab in good if "barnehage" not in lab and not any(f in lab for f in FORM_NAME_WORDS)]
+        out = [f"{lab}.barnehage.no" for lab in kids[:2]] + out
+    return out
 
 
 def _word_rx(w: str) -> str:
@@ -236,7 +310,7 @@ def name_regex(words: list[str]) -> re.Pattern | None:
 ENTITY = re.compile(r"((?:[0-9A-Za-zÆØÅæøåÄÖäöé&\-.]+[  ]+){1,6}?)(AS|ASA|A/S|ANS|DA)\b")
 
 
-def name_check(text: str, words: list[str]) -> tuple[str | None, str | None]:
+def name_check(text: str, words: list[str], conflict_words: list[str] | None = None) -> tuple[str | None, str | None]:
     """Return (span, conflict). span is the text showing the legal name; conflict is a different entity name
     on the page that shares our name's words (e.g. 'Kari Bygg AS' when we are 'Kari AS'), which blocks the
     strong methods."""
@@ -247,11 +321,12 @@ def name_check(text: str, words: list[str]) -> tuple[str | None, str | None]:
     if not m:
         return None, None
     span = _window(text, m.start(), m.end(), 40)
-    norm_ours = [_translit(w) for w in words]
+    norm_ours = [_translit(w) for w in (conflict_words or words)]
     legal_found = False
     conflict = None
     for em in ENTITY.finditer(text):
-        ws = [_translit(w) for w in re.findall(r"[0-9a-zæøåäöé]+", em.group(1).lower().replace("&", " og "))]
+        last = re.split(r"[.!?:;|]\s", em.group(1))[-1]  # never across a sentence boundary
+        ws = [_translit(w) for w in re.findall(r"[0-9a-zæøåäöé]+", last.lower().replace("&", " og "))]
         if norm_ours[0] not in ws:
             continue
         tail = ws[len(ws) - 1 - ws[::-1].index(norm_ours[0]):]  # from the last occurrence of our first word
@@ -334,12 +409,18 @@ def parse_page(snap: Snapshot) -> Page:
 
 
 def find_orgnr(page: Page, org: str) -> str | None:
-    """Span showing our organisation number, from visible text or structured data."""
-    g = f"{org[:3]}[\\s. ]?{org[3:6]}[\\s. ]?{org[6:]}"
-    rx = re.compile(r"(?<![\d.,])(?:NO\s?)?" + g + r"(?:\s?MVA)?(?![\d,])", re.I)
-    m = rx.search(page.text)
-    if m:
-        return _window(page.text, m.start(), m.end(), 30)
+    """Span showing our organisation number (label plus number), from visible text or structured data.
+    A number inside a URL (e.g. a link to a register page) does not count."""
+    g = f"{org[:3]}[\\s.\u00a0]?{org[3:6]}[\\s.\u00a0]?{org[6:]}"
+    rx = re.compile(r"(?<![\d.,/=])(?:NO\s?)?" + g + r"(?:\s?MVA)?(?![\d,/])", re.I)
+    for m in rx.finditer(page.text):
+        before = page.text[max(0, m.start() - 40):m.start()]
+        if re.search(r"(https?://|www\.)\S*$", before):
+            continue  # part of a URL written out as text
+        lab = list(re.finditer(r"(?i)(org(?:anisasjons)?\.?\s*-?\s*n(?:r|o|ummer)\.?|organi[sz]ation\s*(?:no|number)\.?|"
+                               r"foretaksregisteret|mva|vat)[\s:.]*$", before))
+        start = m.start() - (len(before) - lab[-1].start()) if lab else m.start()
+        return page.text[start:m.end()].strip()
     for d in page.jsonld:
         for k in ("taxID", "vatID", "identifier", "leiCode", "organizationNumber", "duns"):
             v = d.get(k)
@@ -348,8 +429,19 @@ def find_orgnr(page: Page, org: str) -> str | None:
                 if isinstance(x, dict):
                     x = x.get("value") or x.get("@value")
                 if isinstance(x, (str, int)) and re.sub(r"\D", "", str(x)) == org:
-                    return json.dumps({k: v}, ensure_ascii=False)[:200]
+                    return str(x)
     return None
+
+
+FOREIGN_ORG = (
+    (re.compile(r"(?i)\b(?:org(?:anisations)?\.?\s*(?:nr|nummer|no)?\.?|corporate id(?:entity)?(?: no\.?)?)\s*[:.]?\s*"
+                r"(\d{6}-\d{4})(?!\d)"), "SE"),
+    (re.compile(r"(?i)\bCVR(?:-?nr\.?|-?nummer)?\s*[:.]?\s*(\d{2}\s?\d{2}\s?\d{2}\s?\d{2})(?!\d)"), "DK"),
+    (re.compile(r"(?i)\b(?:Y-tunnus|FO-nummer|business id)\s*[:.]?\s*(\d{7}-\d)(?!\d)"), "FI"),
+    (re.compile(r"(?i)\b(?:VAT|moms(?:reg)?(?:\.?\s?nr)?|USt-?IdNr\.?|BTW)\s*(?:no\.?|nr\.?|number|id)?\s*[:.]?\s*"
+                r"((?:SE|DK|FI|DE|GB|NL|BE|FR|EE|LT|LV|PL|AT|IE|ES|IT)\s?[0-9A-Z]{8,12})\b"), "VAT"),
+    (re.compile(r"\b(SE\d{10}01)\b"), "VAT"),
+)
 
 
 def other_orgnrs(page: Page, org: str) -> dict[str, str]:
@@ -362,6 +454,10 @@ def other_orgnrs(page: Page, org: str) -> dict[str, str]:
         before = page.text[max(0, m.start() - 30):m.end() + 4]
         if ORG_CONTEXT.search(before) or re.search(r"MVA", m.group(0)):
             out[num] = _window(page.text, m.start(), m.end(), 30)
+    for rx, cc in FOREIGN_ORG:
+        for m in rx.finditer(page.text):
+            key = f"{cc}:{re.sub(r'[^0-9A-Z]', '', m.group(1).upper())}"
+            out.setdefault(key, page.text[m.start():m.end()].strip())
     return out
 
 
@@ -462,10 +558,14 @@ class Verdict:
     proof: list[tuple[Page, str]] = field(default_factory=list)  # (page, span)
     others: dict[str, tuple[Page, str]] = field(default_factory=dict)
     final_url: str | None = None
+    variant: list[str] | None = None  # set when the name matched only through a shortened name variant
+    cross: bool = False         # redirected to another registered domain
+    path_scoped: bool = False   # the site is one section of a host that serves others (chain or portal)
 
     def summary(self) -> dict[str, Any]:
         return {"domain": self.domain, "source": self.source, "status": self.status, "method": self.method,
-                "final_url": self.final_url, "other_orgnrs": sorted(self.others)[:5] or None}
+                "final_url": self.final_url, "other_orgnrs": sorted(self.others)[:5] or None,
+                "cross_domain_redirect": self.cross or None, "section_of_host": self.path_scoped or None}
 
 
 def judge(v: Verdict, org: str, e: dict, registry_host: str | None) -> None:
@@ -498,13 +598,23 @@ def judge(v: Verdict, org: str, e: dict, registry_host: str | None) -> None:
         v.status = "related" if v.source in ("registry", "email") else "other_company"
         v.detail = "site prints organisation number(s) " + ", ".join(sorted(v.others)) + " and not ours"
         return
-    words = name_words(e.get("navn") or "")
+    variants = name_variants(e.get("navn") or "", e)
+    full = variants[0] if variants else []
+    lead = 0
+    while lead < len(full) - 1 and len(full[lead]) == 1:
+        lead += 1
+    conflict_words = full[lead:]
     name_span = name_page = conflict = None
-    for p in pages:
-        s, c = name_check(p.text, words)
-        if s and not name_span:
-            name_span, name_page = s, p
-        conflict = conflict or c
+    v.variant = None
+    for words in variants:
+        for p in pages:
+            s, c = name_check(p.text, words, conflict_words)
+            if s and not name_span:
+                name_span, name_page = s, p
+                v.variant = words if words != full and words != full[lead:] else None
+            conflict = conflict or c
+        if name_span:
+            break
     if not name_span:
         v.status = "no_match"
         return
@@ -528,6 +638,19 @@ def judge(v: Verdict, org: str, e: dict, registry_host: str | None) -> None:
             v.detail = "registry phone number and legal name shown on the site"
             v.proof = [(p, s), (name_page, name_span)]
             return
+    reg_email = (e.get("epostadresse") or "").strip().lower()
+    if "@" in reg_email:
+        for p in pages:
+            i = p.text.lower().find(reg_email)
+            hit = _window(p.text, i, i + len(reg_email), 25) if i >= 0 else None
+            if not hit:
+                a = p.soup.find("a", href=lambda h: bool(h) and unquote(h).lower().strip() == "mailto:" + reg_email)
+                hit = a["href"] if a else None
+            if hit:
+                v.status, v.method = "proven", "email_and_name"
+                v.detail = "registry email address and legal name shown on the site"
+                v.proof = [(p, hit), (name_page, name_span)]
+                return
     for p in pages:
         s = find_address(p, e)
         if s:
@@ -545,6 +668,7 @@ class _Spend:
 
     def __init__(self, f: Fetcher, ctx: CompanyContext):
         self.f, self.ctx, self.used = f, ctx, 0
+        self.dns: dict[str, bool] = {}
 
     def can(self, n: int = 1) -> bool:
         return self.used + n <= MAX_REQUESTS and self.f.budget.remaining_requests() > RESERVE + n
@@ -571,15 +695,39 @@ class _OutOfRequests(Exception):
     pass
 
 
+async def _resolve(sp: "_Spend", f: Fetcher, host: str) -> bool:
+    if host not in sp.dns:
+        sp.dns[host] = await resolves(f, host)
+    return sp.dns[host]
+
+
+_DNS_SEM: asyncio.Semaphore | None = None
+DNS_PARALLEL = 24
+
+
 async def resolves(f: Fetcher, host: str) -> bool:
-    for rtype in ("A", "AAAA"):
-        f.budget.dns_lookups += 1
-        try:
-            ans = await dns.asyncresolver.resolve(host, rtype, lifetime=DNS_TIMEOUT)
-            if len(ans):
-                return True
-        except (dns.exception.DNSException, OSError):
-            continue
+    """True when the host has an A or AAAA record. NXDOMAIN or no answer means False; a timeout is retried
+    once, so a busy resolver is not mistaken for a missing domain."""
+    global _DNS_SEM
+    if _DNS_SEM is None:
+        _DNS_SEM = asyncio.Semaphore(DNS_PARALLEL)
+    async with _DNS_SEM:
+        for rtype in ("A", "AAAA"):
+            for attempt in range(2):
+                f.budget.dns_lookups += 1
+                try:
+                    ans = await dns.asyncresolver.resolve(host, rtype, lifetime=DNS_TIMEOUT * (attempt + 1))
+                    if len(ans):
+                        return True
+                    break
+                except (dns.resolver.NXDOMAIN, dns.resolver.NoNameservers):
+                    return False
+                except dns.resolver.NoAnswer:
+                    break
+                except (dns.exception.Timeout, OSError):
+                    continue
+                except dns.exception.DNSException:
+                    break
     return False
 
 
@@ -624,13 +772,16 @@ async def check_candidate(f: Fetcher, sp: _Spend, ctx: CompanyContext, v: Verdic
     home: Page | None = None
     status = "unreachable"
     hosts = [v.domain, "www." + v.domain] if not v.domain.startswith("www.") else [v.domain]
-    live: list[str] = []
-    for h in hosts:
-        if await resolves(f, h):
-            live.append(h)
+    ok = await asyncio.gather(*[_resolve(sp, f, h) for h in hosts])
+    live = [h for h, r in zip(hosts, ok) if r]
     if not live:
         v.status = "no_dns"
         return
+    # connect probes for every live host and port at once, so dead hosts cost one timeout, not four
+    probe_keys = [(h, port) for h in live for port in (443, 80)]
+    probe = dict(zip(probe_keys, await asyncio.gather(*[reachable(h, port) for h, port in probe_keys])))
+    if v.source in ("registry", "email") and not any(probe.values()):
+        probe[(live[0], 443)] = True  # a declared domain gets one real HTTPS attempt even if the probe timed out
     http_later: list[str] = []
     attempts = [("https", h) for h in live]
     home_parked: Page | None = None
@@ -642,12 +793,12 @@ async def check_candidate(f: Fetcher, sp: _Spend, ctx: CompanyContext, v: Verdic
             attempts += [("http", x) for x in http_later]
         scheme, h = attempts[i]
         i += 1
-        if not await reachable(h, 443 if scheme == "https" else 80):
+        if not probe.get((h, 443 if scheme == "https" else 80)):
             if scheme == "https" and h not in http_later:
                 http_later.append(h)
             continue
         url = f"{scheme}://{h}/"
-        if start_url and host_of(start_url) == h:
+        if start_url and bare(host_of(start_url)) == bare(h):
             url = scheme + start_url[start_url.index("://"):]
         if not sp.can(2):
             v.status = "skipped_budget"
@@ -683,7 +834,23 @@ async def check_candidate(f: Fetcher, sp: _Spend, ctx: CompanyContext, v: Verdic
         v.status = "platform"
         return
     v.pages = [home]
+    v.cross = not same_site(final, bare(v.domain))
+    v.path_scoped = _is_section(home.url)
     judge(v, ctx.org, e, registry_host)
+    await _check_variant(sp, ctx, v)
+    if v.cross and v.status == "proven" and v.method == "orgnr_on_page" and _is_front_or_about(home.url):
+        # The domain redirects to a brand site whose front or about page prints our org number: treat the
+        # target domain as ours, read its front page, and let the exclusivity test judge the whole site.
+        v.cross, v.path_scoped = False, False
+        v.detail = f"{v.detail} (redirected from {v.domain})"
+        root = canonical_url(home)
+        if home.url.rstrip("/") != root.rstrip("/") and sp.can(1):
+            front, _st = await _fetch_page(sp, root)
+            if front and same_site(front.host, home.host) and not is_parked(front):
+                v.pages = [front, home]
+        return
+    if v.cross or v.path_scoped:
+        return  # another domain's page, or one section of a shared host: judge that page alone
     if v.status == "proven" and v.method == "orgnr_on_page":
         return
     for link in internal_links(home)[:MAX_INTERNAL]:
@@ -696,6 +863,48 @@ async def check_candidate(f: Fetcher, sp: _Spend, ctx: CompanyContext, v: Verdic
             if v.status == "proven" and v.method == "orgnr_on_page":
                 return
     judge(v, ctx.org, e, registry_host)
+    await _check_variant(sp, ctx, v)
+
+
+COMMON_NOUNS = {"forsikring", "bank", "sparebank", "kraft", "energi", "entreprenor", "tak", "maling", "frisor", "klinikk",
+                "tannlege", "lege", "butikk", "kafe", "restaurant", "hotell", "skole", "barnehage", "verksted", "rorlegger",
+                "elektriker", "snekker", "regnskap", "revisjon", "advokat", "eiendom", "bygg", "transport", "service",
+                "senter", "sport", "trafikkskole", "taxi", "bilverksted", "utleie", "salg", "marina", "camping"}
+
+
+async def _check_variant(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> None:
+    """A strong proof that rests on a shortened name (place, form or initials dropped) holds only when that
+    shortened name is not itself another registered company (e.g. 'Viken Forsikring AS' for 'Nordre Viken
+    Forsikring AS') and is not a single common noun."""
+    if v.status != "proven" or v.method == "orgnr_on_page" or not v.variant:
+        return
+    lab = " ".join(_translit(w) for w in v.variant)
+    if len(v.variant) == 1 and _translit(v.variant[0]) in COMMON_NOUNS:
+        v.status, v.method = "name_only", None
+        v.detail = f"only the common word '{lab}' of the legal name is shown"
+        return
+    other = await confirm_sisters(sp, ctx, [lab], limit=1)
+    if lab in other:
+        v.status, v.method = "name_only", None
+        v.detail = f"the site shows '{lab}', which is another registered company ({other[lab]})"
+
+
+LANG_SEG = {"no", "nb", "nn", "en", "se", "sv", "da", "de", "fi", "home", "hjem", "forside", "index.html", "index.php"}
+
+
+ABOUT_SEG = re.compile(r"^(om-?oss|om|about(-us)?|kontakt(-oss)?|contact(-us)?|firma|selskapet|company)$", re.I)
+
+
+def _is_front_or_about(url: str) -> bool:
+    segs = [x for x in urlsplit(url).path.split("/") if x]
+    return not segs or (len(segs) == 1 and bool(ABOUT_SEG.match(segs[0]) or segs[0].lower() in LANG_SEG))
+
+
+def _is_section(url: str) -> bool:
+    """True when the page is a deeper section of a host (a member page on a chain site or a school on a portal),
+    not the site's front page or a language root."""
+    segs = [x for x in urlsplit(url).path.split("/") if x]
+    return bool(segs) and not (len(segs) == 1 and segs[0].lower() in LANG_SEG)
 
 
 def candidates(ctx: CompanyContext) -> list[tuple[str, str, str | None]]:
@@ -726,7 +935,7 @@ def candidates(ctx: CompanyContext) -> list[tuple[str, str, str | None]]:
         d = em.rsplit("@", 1)[1]
         if d not in FREE_MAIL and not any(d.endswith("." + x) for x in FREE_MAIL):
             add(d, "email")
-    for d in name_domains(e.get("navn") or ""):
+    for d in name_domains(e.get("navn") or "", e):
         add(d, "guess")
     return out
 
@@ -845,6 +1054,9 @@ class Scope:
     words: list[str]
     others: dict[str, str] = field(default_factory=dict)    # other org number -> span
     sisters: dict[str, str] = field(default_factory=dict)   # sister label -> its org number
+    dominant: dict[str, str] = field(default_factory=dict)  # other company named prominently -> org or country
+    cross: bool = False
+    path_scoped: bool = False
 
     def __post_init__(self) -> None:
         ours_t = [_translit(w) for w in self.words]
@@ -858,6 +1070,26 @@ class Scope:
     @property
     def shared(self) -> bool:
         return bool(self.others or self.sisters)
+
+    @property
+    def exclusive(self) -> bool:
+        """The site is ours alone: no other org number of any country, no confirmed sister or dominating
+        company, no redirect to another domain, and not one section of a shared host."""
+        return not (self.others or self.sisters or self.dominant or self.cross or self.path_scoped)
+
+    def reasons(self) -> str:
+        out = []
+        if self.cross:
+            out.append("the company's domain redirects to another registered domain")
+        if self.path_scoped:
+            out.append("the page is one section of a host that serves others (chain or portal)")
+        if self.others:
+            out.append("the site prints other organisation numbers " + ", ".join(sorted(self.others)[:4]))
+        if self.sisters:
+            out.append("it names sister companies " + ", ".join(f"{k} ({v})" for k, v in self.sisters.items()))
+        if self.dominant:
+            out.append("it is presented by other companies " + ", ".join(f"{k} ({v})" for k, v in self.dominant.items()))
+        return "; ".join(out)
 
     def _num_hit(self, text: str, nums: list[str]) -> bool:
         return any(re.search(rf"(?<!\d){n[:3]}[\s.\u00a0]?{n[3:6]}[\s.\u00a0]?{n[6:]}(?!\d)", text)
@@ -878,17 +1110,19 @@ class Scope:
     def owner(self, el) -> str:
         """'ours', 'sister', 'both' or 'unknown', from the smallest enclosing block that names a company."""
         node = el
-        for level in range(8):
-            if node is None or not hasattr(node, "get_text"):
+        for level in range(6):
+            if node is None or not hasattr(node, "get_text") or node.name in ("body", "html", "main", "[document]"):
                 break
             own = node.get_text(" ", strip=True)
             texts = [own]
             if level == 0 and hasattr(node, "get"):
                 texts += [unquote(str(node.get("href") or "")), str(node.get("aria-label") or ""), str(node.get("title") or "")]
-            if level <= 2:
+            if level <= 1:  # a short heading or label right before the item (e.g. "Reklamasjon - Rør")
                 sib = node.find_previous_sibling()
-                if sib is not None and hasattr(sib, "get_text"):
-                    texts.append(sib.get_text(" ", strip=True)[:200])
+                if sib is not None and getattr(sib, "name", None) in ("h1", "h2", "h3", "h4", "h5", "h6", "strong", "b",
+                                                                       "dt", "label", "span", "p", "div") \
+                        and len(sib.get_text(" ", strip=True)) <= 80:
+                    texts.append(sib.get_text(" ", strip=True))
             t = " ".join(texts)
             o, s = self.names_ours(t), self.names_sister(t)
             if o and s:
@@ -897,7 +1131,7 @@ class Scope:
                 return "sister"
             if o:
                 return "ours"
-            if len(own) > 800:
+            if len(own) > 400:
                 break
             node = node.parent
         return "unknown"
@@ -925,6 +1159,8 @@ class Scope:
         return self.slug in path and not _word_hit(self.sister_unique, path.replace("-", " "))
 
     def describe(self) -> str:
+        if not self.shared:
+            return "site not exclusive to this company: " + self.reasons()
         parts = []
         if self.sisters:
             parts.append("sister companies " + ", ".join(f"{k} ({v})" for k, v in self.sisters.items()))
@@ -975,6 +1211,80 @@ def sister_labels(pages: list[Page], words: list[str]) -> list[str]:
             elif _in_chrome(a) and 2 <= len(a.get_text(" ", strip=True).split()) <= 4:
                 add(_twords(a.get_text(" ", strip=True)))
     return labels
+
+
+CREDIT = re.compile(r"(?i)(levert|utviklet|utvikla|laget|designet|design|webdesign|nettside|nettsted|nettbutikk|"
+                    r"drevet|driftet|powered|made|built|hosted|hosting|produsert|publisert|tema|theme|webbyrå|byrå|"
+                    r"utvikling|levert av|fra)\s*(av|by|med|with|fra|:)?\s*:?\s*$")
+OWNER_CONTEXT = re.compile(r"(?i)(behandlingsansvarlig|data controller|controller|eies av|eid av|drives av|driftes av|"
+                           r"er en del av|en avdeling|sin avdeling|avdeling av|datterselskap|subsidiary of|part of|©|copyright|"
+                           r"ta kontakt med)")
+FOREIGN_SUFFIX = {"ab", "aps", "oy", "oyj", "gmbh", "ltd", "limited", "inc", "llc", "bv", "srl", "sarl", "ou", "uab"}
+ENTITY_ANY = re.compile(r"((?:[0-9A-Za-zÆØÅæøåÄÖäöüé&\-]+[ \u00a0]+){1,5}?)"
+                        r"(AS|ASA|A/S|ANS|DA|SA|AB|ApS|Oy|OY|Oyj|GmbH|Ltd|Limited|Inc|LLC|BV|OÜ|UAB|STI)\b\.?")
+
+
+CONNECTORS = {"og", "&", "i", "for", "av", "de", "la", "von", "van", "der", "and", "of"}
+
+
+def other_company_names(pages: list[Page], words: list[str]) -> list[tuple[str, str]]:
+    """Other legal names (with a legal-form suffix) that present the site: named twice on one page, or in the
+    page title, a copyright line or an ownership or controller sentence. Names inside links to other sites
+    (web agency and partner credits) do not count. Returns (name words, suffix), most prominent first."""
+    ours = [_translit(w) for w in words]
+    best: dict[tuple[str, str], int] = {}
+    for p in pages:
+        offsite = " | ".join(a.get_text(" ", strip=True) for a in p.soup.find_all("a", href=True)
+                             if urlsplit(urljoin(p.url, a["href"])).scheme in ("http", "https")
+                             and not same_site(host_of(urljoin(p.url, a["href"])), p.host))
+        title = p.soup.title.get_text(" ", strip=True) if p.soup.title else ""
+        score: dict[tuple[str, str], int] = {}
+        for txt, is_title in ((title, True), (p.text, False)):
+            for m in ENTITY_ANY.finditer(txt):
+                raw = re.split(r"[.!?:;|,()\[\]]\s", m.group(1))[-1]
+                toks = raw.split()
+                run: list[str] = []
+                for i in range(len(toks) - 1, -1, -1):  # the trailing run of capitalised words is the name
+                    t = toks[i]
+                    if t[:1].isupper() or t[:1].isdigit() or t == "&":
+                        run.insert(0, t)
+                    elif t.lower() in CONNECTORS and run and i > 0 and toks[i - 1][:1].isupper():
+                        run.insert(0, t)
+                    else:
+                        break
+                ws = _twords(" ".join(run).replace("&", " og "))
+                while ws and ws[0].isdigit():
+                    ws.pop(0)
+                foreign = m.group(2).lower() in FOREIGN_SUFFIX
+                if not ws or len(ws) > 6:
+                    continue
+                if not foreign and (ws == ours or ws[-len(ours):] == ours or ours[-len(ws):] == ws):
+                    continue  # our own name or its tail (a same-named foreign AB or GmbH is a different company)
+                before = txt[max(0, m.start() - 40):m.start()]
+                if CREDIT.search(before) or (not is_title and " ".join(run) and " ".join(run) in offsite):
+                    continue  # a web agency or partner credit
+                key = (" ".join(ws), m.group(2).lower())
+                ctx_hit = bool(OWNER_CONTEXT.search(txt[max(0, m.start() - 60):m.end() + 10]))
+                score[key] = score.get(key, 0) + (2 if (is_title or ctx_hit) else 1)
+        for k, v in score.items():
+            best[k] = max(best.get(k, 0), v)
+    return sorted((k for k, v in best.items() if v >= 2), key=lambda k: -best[k])
+
+
+async def confirm_dominant(sp: "_Spend", ctx: CompanyContext, names: list[tuple[str, str]], limit: int = 2
+                           ) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for lab, suffix in names:
+        if suffix in FOREIGN_SUFFIX:
+            out[f"{lab} {suffix}"] = "foreign"
+            continue
+        if limit <= 0:
+            break
+        limit -= 1
+        got = await confirm_sisters(sp, ctx, [lab], limit=1)
+        if lab in got:
+            out[f"{lab} {suffix}"] = got[lab]
+    return out
 
 
 async def confirm_sisters(sp: "_Spend", ctx: CompanyContext, labels: list[str], limit: int = 2) -> dict[str, str]:
@@ -1041,7 +1351,8 @@ def collect_socials(pages: list[Page], words: list[str], domains: set[str], scop
                     c = clean_social(s)
                     if c and not (scope.sisters and scope.names_sister(s)):
                         found.setdefault(c[0], {}).setdefault(c[1], [p, json.dumps({"sameAs": s})[:300], True, True])
-    keys = {re.sub(r"[^a-z0-9]", "", _translit(w)) for w in words if len(w) >= 4}
+    keys = {re.sub(r"[^a-z0-9]", "", _translit(w)) for w in words if len(w) >= 4 and _translit(w) not in REGIONS
+            and w not in GENERIC_WORDS and w not in FORM_NAME_WORDS}
     keys.add(re.sub(r"[^a-z0-9]", "", _translit("".join(words))))
     keys |= {re.sub(r"[^a-z0-9]", "", d.split(".")[0]) for d in domains if d}
     keys = {k for k in keys if len(k) >= 4}
@@ -1082,10 +1393,20 @@ def _element_for(page: Page, needle: str):
     return page.soup.find(string=lambda x: bool(x) and needle in x)
 
 
+LEGAL_PAGE = re.compile(r"(?i)personvern|privacy|cookie|informasjonskapsl|vilk[aå]r|terms|legal|gdpr|"
+                        r"salgsbetingelser|kj[oø]psbetingelser|angrerett|apenhetsloven|åpenhetsloven|disclaimer|impressum")
+
+
 def extract_contacts(pages: list[Page], domain: str, registry_phones: set[str] = frozenset(),
-                     scope: Scope | None = None) -> tuple[list, list, int]:
-    """(emails, phones, how many were dropped as not provably ours) from the verified site's pages."""
+                     scope: Scope | None = None, email_domains: set[str] = frozenset()
+                     ) -> tuple[list, list, int]:
+    """(emails, phones, how many were dropped as not provably ours) from the verified site's pages.
+
+    Never from privacy, cookie, terms or legal pages. Emails only on the site's own domain or the registry
+    email domain. Phones only when they are the registry number or sit in a block that names us."""
     scope = scope or Scope("", [])
+    pages = [p for p in pages if not LEGAL_PAGE.search(unquote(urlsplit(p.url).path))]
+    email_domains = {bare(d) for d in email_domains if d} | {domain}
     emails: dict[str, tuple[Page, str]] = {}
     phones: dict[str, tuple[Page, str]] = {}
     skipped: set[str] = set()
@@ -1093,7 +1414,10 @@ def extract_contacts(pages: list[Page], domain: str, registry_phones: set[str] =
     def put(store: dict, key: str, page: Page, span: str, el) -> None:
         if key in store or key in skipped:
             return
-        if scope.accept(el, page):
+        ok = scope.accept(el, page)
+        if ok and store is phones and scope.org and key[-8:] not in registry_phones:
+            ok = el is not None and scope.owner(el) == "ours"  # a block that names us (legal name or org number)
+        if ok:
             store[key] = (page, span)
         else:
             skipped.add(key)
@@ -1113,6 +1437,8 @@ def extract_contacts(pages: list[Page], domain: str, registry_phones: set[str] =
                 put(phones, n, p, a["href"][:100], a)
         for m in PHONE_TEXT.finditer(p.text):
             before = p.text[max(0, m.start() - 25):m.start()]
+            if re.search(r"(\+|00)(?!47)\d{1,3}[\s.\-\u00a0]?$", before):
+                continue  # the rest of a foreign number written with its country code
             n = norm_phone(m.group(0))
             labels = re.findall(r"(?i)tlf|telefon|phone|mobil|tel\b|ring oss|sentralbord|faks|fax|telefaks", before)
             if labels and re.fullmatch(r"(?i)faks|fax|telefaks", labels[-1]):
@@ -1120,7 +1446,7 @@ def extract_contacts(pages: list[Page], domain: str, registry_phones: set[str] =
             if n and PHONE_LABEL.search(before) and n not in phones and n not in skipped:
                 put(phones, n, p, _window(p.text, m.start(), m.end(), 20), _element_for(p, m.group(0).strip()))
     # only addresses on the company's own domain; generic mailboxes first
-    own = [(a, ps) for a, ps in emails.items() if same_site(a.rsplit("@", 1)[1], domain)]
+    own = [(a, ps) for a, ps in emails.items() if any(same_site(a.rsplit("@", 1)[1], d) for d in email_domains)]
     generic = [x for x in own if x[0].split("@")[0] in GENERIC_MAILBOX]
     # personal mailboxes only when the site publishes no generic one, and then just one
     picked = generic[:2] if generic else own[:1]
@@ -1402,7 +1728,7 @@ async def fetch_news(sp: _Spend, ctx: CompanyContext, pages: list[Page], domain:
 async def prepare_scope(sp: _Spend, ctx: CompanyContext, v: Verdict) -> Scope:
     """Fetch a contact page if none was read yet, then decide whether the site is shared."""
     home = v.pages[0]
-    if not any(INTERNAL_PRIORITY[0].search(urlsplit(p.url).path) for p in v.pages):
+    if not (v.cross or v.path_scoped) and not any(INTERNAL_PRIORITY[0].search(urlsplit(p.url).path) for p in v.pages):
         for link in internal_links(home):
             if INTERNAL_PRIORITY[0].search(link) or INTERNAL_PRIORITY[1].search(link):
                 if sp.can(1) and link not in {p.url for p in v.pages}:
@@ -1417,7 +1743,14 @@ async def prepare_scope(sp: _Spend, ctx: CompanyContext, v: Verdict) -> Scope:
             others.setdefault(num, s)
     others = {k: (x[1] if isinstance(x, tuple) else x) for k, x in others.items()}
     sisters = await confirm_sisters(sp, ctx, sister_labels(v.pages, words))
-    return Scope(ctx.org, words, others, sisters)
+    dominant = await confirm_dominant(sp, ctx, [n for n in other_company_names(v.pages, words)
+                                                if n[0] not in sisters][:3])
+    return Scope(ctx.org, words, others, sisters, dominant, v.cross, v.path_scoped)
+
+
+DERIVED_FIELDS = (("website_description", SECTION), ("site_contact_email", SECTION), ("site_contact_phone", SECTION),
+                  ("social_profile", SECTION), ("structured_data_organization", SECTION), ("careers_page", "hiring"),
+                  ("site_page_updated", "activity"), ("site_news", "activity"))
 
 
 def emit_site(ctx: CompanyContext, v: Verdict, scope: Scope | None = None) -> list[Page]:
@@ -1435,6 +1768,17 @@ def emit_site(ctx: CompanyContext, v: Verdict, scope: Scope | None = None) -> li
             url = home.url.split("?")[0].split("#")[0]  # our own section of the shared site
         m["detail"] = f"{m['detail']}; {scope.describe()}"
         ctx.facts["website_shared"] = {"others": sorted(scope.others), "sisters": scope.sisters}
+    if v.cross or v.path_scoped:
+        url = home.url.split("#")[0]  # the exact page that proves us, not the host's front page
+    if not scope.exclusive:
+        m["detail"] = f"{m['detail']}; not exclusive: {scope.reasons()}"
+        ctx.add_claim("official_website", SECTION, url, proof_evs, confidence=conf, match=m,
+                      note="Only the website itself is published; facts from this site are withheld because "
+                           + scope.reasons())
+        why = "site not exclusive to this company (" + scope.reasons() + "); derived facts withheld"
+        for fld, sec in DERIVED_FIELDS:
+            ctx.mark(fld, sec, "ambiguous", note=why)
+        return v.pages
     ctx.add_claim("official_website", SECTION, url, proof_evs, confidence=conf, match=m)
     site_match = {"method": "verified_site", "detail": f"from {domain}, proven by {v.method}"}
     unsure = f"{scope.describe()}; not provably this company's" if scope.shared else ""
@@ -1460,7 +1804,9 @@ def emit_site(ctx: CompanyContext, v: Verdict, scope: Scope | None = None) -> li
         ctx.add_claim("site_language", SECTION, lang["lang"].strip()[:12],
                       _ev(ctx, home, f'<html lang="{lang["lang"].strip()[:12]}">'), match=site_match)
 
-    emails, phones, skipped = extract_contacts(v.pages, domain, _digits_phones(ctx.registry or {}), scope)
+    reg_mail = ((ctx.registry or {}).get("epostadresse") or "@").rsplit("@", 1)[1].lower()
+    emails, phones, skipped = extract_contacts(v.pages, domain, _digits_phones(ctx.registry or {}), scope,
+                                               {reg_mail} if reg_mail and reg_mail not in FREE_MAIL else set())
     for a, p, s in emails:
         ctx.add_claim("site_contact_email", SECTION, a, _ev(ctx, p, s), match=site_match)
     for n, p, s in phones:
@@ -1502,6 +1848,7 @@ async def fetch_website(f: Fetcher, ctx: CompanyContext) -> None:
     if not e or e.get("_gone") or ctx.facts.get("deleted"):
         ctx.mark("official_website", SECTION, "not_applicable", note="no live registry record")
         return
+    ctx.facts["website_exclusive"] = False
     cands = candidates(ctx)
     registry_host = next((bare(d) for d, s, _ in cands if s == "registry"), None)
     sp = _Spend(f, ctx)
@@ -1510,6 +1857,8 @@ async def fetch_website(f: Fetcher, ctx: CompanyContext) -> None:
     proven: Verdict | None = None
     budget_note = None
     try:
+        hosts = [h for d, _s, _u in cands[:24] for h in (d, "www." + d)]
+        await asyncio.gather(*[_resolve(sp, f, h) for h in hosts])
         for dom, src, start in cands:
             if not sp.can(2):
                 budget_note = "per-company request cap reached"
@@ -1527,13 +1876,16 @@ async def fetch_website(f: Fetcher, ctx: CompanyContext) -> None:
                 break
         if proven:
             scope = await prepare_scope(sp, ctx, proven)
+            ctx.facts["website_exclusive"] = bool(scope.exclusive and proven.method == "orgnr_on_page")
+            ctx.facts["website_exclusive_reason"] = scope.reasons() or "exclusive"
             emit_site(ctx, proven, scope)
             dom = bare(proven.pages[0].host)
-            try:
-                await fetch_news(sp, ctx, proven.pages, dom, scope)
-                await sitemap_activity(f, sp, ctx, proven.pages[0], dom, scope)
-            except (_OutOfRequests,):
-                pass
+            if scope.exclusive:
+                try:
+                    await fetch_news(sp, ctx, proven.pages, dom, scope)
+                    await sitemap_activity(f, sp, ctx, proven.pages[0], dom, scope)
+                except (_OutOfRequests,):
+                    pass
     except BudgetExhausted:
         budget_note = "budget_exhausted"
     except _OutOfRequests:
