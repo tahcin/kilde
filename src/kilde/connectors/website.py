@@ -2357,7 +2357,7 @@ def news_items(page: Page, domain: str, scope: Scope, limit: int = 5) -> list[tu
         if scope.shared and not (scope.url_ours(u) or scope.accept(block, page)):
             continue
         span = _clean(block.get_text(" ", strip=True), 300)
-        items[u] = ({"title": title, "url": u, "date": found[0]}, span or found[1])
+        items[u] = ({"title": title, "url": u, "date": found[0], "date_text": found[1]}, span or found[1])
     ranked = sorted(items.values(), key=lambda x: x[0]["date"], reverse=True)
     return ranked[:limit]
 
@@ -3372,7 +3372,7 @@ async def collect_dated_news(sp: "_Spend", ctx: CompanyContext, pages: list[Page
             for lp in listing_pages:
                 for val, span in news_items(lp, domain, scope, limit=limit):
                     it = {"title": val["title"], "url": val["url"], "datetime": val["date"],
-                          "title_span": span, "date_span": None}
+                          "title_span": span, "date_span": val.get("date_text")}
                     if _news_ok(it, floor, domain) and it["url"] not in found:
                         found[it["url"]] = (it, lp.snap, lp)
             if not found and not scope.shared:

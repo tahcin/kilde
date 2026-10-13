@@ -1743,6 +1743,8 @@ def test_slash_dates_read_only_in_the_order_the_page_uses():
     ctx = ctx_for(hjemmeside="fjellbekk.no")
     run(_site({"https://fjellbekk.no/aktuelt": (200, listing)}, body=body), ctx)
     assert _news(ctx) == ["Protokoll årsmøte 2026 (2026-04-20)", "Innkalling til årsmøte 2026 (2026-02-03)"]
+    first = ctx.claims_for("dated_news")[0]
+    assert "20/04/2026" in {e.claim_span for e in ctx.evidence if e.id in first.evidence_ids}  # the listing's date cited
 
 
 def test_news_listing_found_by_link_text_on_deeper_paths_files_and_subdomains():
