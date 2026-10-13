@@ -1275,3 +1275,67 @@ def test_open_data_seed_is_a_candidate_with_no_special_trust(monkeypatch):
     monkeypatch.setattr(W, "_SEEDS", {OURS: [{"domain": "annet.no", "sources": ["osm_orgnr"]}]})
     run(FakeFetcher({"https://annet.no/": (200, html("<h1>Fjellbekk Trevare</h1>"))}), ctx2)
     assert not ctx2.claims_for("official_website")  # a name alone never proves a seed
+
+
+# ---------------------------------------------------------------- round 6 audit fixes
+def test_headhunter_client_searches_are_not_a_hiring_signal():
+    """Borka shape: a recruiter's list of client searches, all filled, plus a CV form."""
+    body = f'<a href="/stillinger">Stillinger</a><footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>'
+    jobs = html('<h1>Stillinger</h1><p>Registrer CV. Utvalgte kunder.</p>'
+                '<a href="/stillinger/key-account-manager-kvist-pharma">Key Account Manager, Kvist Pharma</a>'
+                '<a href="/stillinger/besatte-roller/2024-medical-advisor-kvist">Medical Advisor (besatt)</a>')
+    ctx = ctx_for(hjemmeside="fjellbekk.no", naeringskode1={"kode": "70.200"})
+    run(_site({"https://fjellbekk.no/stillinger": (200, jobs)}, body=body), ctx)
+    assert not ctx.claims_for("hiring_signal")
+
+
+def test_staffing_firm_needs_own_hiring_wording():
+    body = f'<a href="/ledige-stillinger">Ledige stillinger</a><footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>'
+    jobs = html("<h1>Ledige stillinger</h1><p>Vi søker lagerarbeidere til våre kunder.</p>")
+    ctx = ctx_for(hjemmeside="fjellbekk.no", naeringskode1={"kode": "78.200"})
+    run(_site({"https://fjellbekk.no/ledige-stillinger": (200, jobs)}, body=body), ctx)
+    assert not ctx.claims_for("hiring_signal")
+    jobs2 = html("<h1>Ledige stillinger</h1><p>Vil du jobbe hos oss? Vi søker en ny kollega på kontoret.</p>")
+    ctx2 = ctx_for(hjemmeside="fjellbekk.no", naeringskode1={"kode": "78.200"})
+    run(_site({"https://fjellbekk.no/ledige-stillinger": (200, jobs2)}, body=body), ctx2)
+    assert ctx2.claims_for("hiring_signal")
+
+
+def test_wordpress_main_feed_before_a_linked_page_feed():
+    """Easy-Regn shape: the only linked feed is a page's empty feed; the posts are in /feed/."""
+    head = '<link rel="alternate" type="application/rss+xml" href="https://fjellbekk.no/testside/feed/">'
+    body = f'<link href="/wp-content/a.css"><footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>'
+    rss = ('<rss><channel><item><title>Ny versjon 4.2</title><link>https://fjellbekk.no/ny-versjon-4-2/</link>'
+           '<pubDate>Fri, 05 Jun 2026 10:00:00 +0000</pubDate></item></channel></rss>')
+    f = _site({"https://fjellbekk.no/feed/": (200, rss, "text/xml"),
+               "https://fjellbekk.no/testside/feed/": (200, "<rss><channel></channel></rss>", "text/xml")},
+              body=body, head=head)
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(f, ctx)
+    assert [c.value for c in ctx.claims if c.field == "dated_news"] == ["Ny versjon 4.2 (2026-06-05T10:00:00+00:00)"]
+
+
+def test_facebook_p_path_and_google_redirect_wrappers():
+    c = W.clean_social("https://www.facebook.com/p/DEVO-100063562930121/")
+    assert str(W.canonical_social(*c)) == "facebook.com/p/devo-100063562930121"
+    assert W.unwrap_redirect("https://www.google.com/url?q=https%3A%2F%2Fwww.instagram.com%2Ffjellbekk%2F&sa=D") == \
+        "https://www.instagram.com/fjellbekk/"
+    body = (f'<footer>Fjellbekk Trevare AS · Org.nr {OURS} '
+            '<a href="https://www.google.com/url?q=https%3A%2F%2Fwww.instagram.com%2Ffjellbekk_trevare%2F&sa=D">ig</a>'
+            '<a href="https://l.facebook.com/l.php?u=https%3A%2F%2Fwww.linkedin.com%2Fcompany%2Ffjellbekk-trevare">li</a>'
+            '</footer>')
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(_site(body=body), ctx)
+    assert sorted(str(c.value) for c in ctx.claims if c.field == "social_profile") == [
+        "instagram.com/fjellbekk_trevare", "linkedin.com/company/fjellbekk-trevare"]
+
+
+def test_email_span_is_verbatim_in_the_snapshot():
+    """Hølonda shape: the mailto link is entity-encoded in the source; the span must be exact source text."""
+    body = (f'<footer>Fjellbekk Trevare AS · Org.nr {OURS} <a href="mailto:post&#64;fjellbekk.no">Send e-post</a></footer>'
+            '<script type="application/ld+json">{"@type":"Organization","name":"Fjellbekk Trevare","email":"post@fjellbekk.no"}</script>')
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    claims = run(_site(body=body), ctx)
+    ev = next(e for e in ctx.evidence if e.id in claims["site_contact_email"].evidence_ids)
+    raw = ctx.snapshots[ev.id].content.decode()
+    assert ev.claim_span in raw

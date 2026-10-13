@@ -21,7 +21,7 @@ Stop rule: two consecutive rounds with zero wrong-company facts and clearly abov
 | 3 | 47.7 (broad) | 29.8 | 12 | 8 | 8 | An owners' association matched by name and address to a namesake hotel operator at the same address. Fix: Brønnøysund name-collision check for any proof other than the org number; housing entities only by org number or registry declaration. |
 | 4 | 43.9 | 30.0 | 12 | 8 | 2 | A registry website shared by four group companies; the parent's social profiles published. Fix: shared-registry-website check, privacy-page operator check. |
 | 5 | 37.4 | 30.0 | 12 | 8 | **0** | Clean. Total 79.4 (four families), 86.7 (broad). Three wrong values fixed: a phone parsed from a date, a personal page taken as a careers page, a placeholder Facebook link. |
-| 6 | see below | | | | | |
+| 6 | 32.9 (45.7 broad) | 30.0 | 12 | 8 | **0** | Clean. Total 74.8 (four families), 87.6 (broad). Second clean round in a row. One wrong value fixed: a headhunter's client-assignment page taken as its careers page. |
 
 Across all rounds every registry, accounts and update-feed claim checked against the live APIs was correct (about 9,000 claims), and no financial value was ever invented.
 

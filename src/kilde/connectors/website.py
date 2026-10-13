@@ -1240,6 +1240,21 @@ def canonical_url(page: Page) -> str:
     return urlunsplit((p.scheme, p.netloc.lower(), "/", "", ""))
 
 
+def unwrap_redirect(url: str) -> str:
+    """The target of a click-tracking wrapper (google.com/url?q=, l.facebook.com/l.php?u=, lm.facebook.com)."""
+    try:
+        p = urlsplit(url.strip())
+    except ValueError:
+        return url
+    host = (p.hostname or "").lower()
+    q = dict(parse_qsl(p.query))
+    if host.endswith("google.com") and p.path == "/url":
+        return q.get("q") or q.get("url") or url
+    if host in ("l.facebook.com", "lm.facebook.com") and p.path.startswith("/l.php"):
+        return q.get("u") or url
+    return url
+
+
 def clean_social(url: str) -> tuple[str, str] | None:
     """(platform, cleaned url) for a company profile link, or None for share links and generic pages."""
     try:
@@ -1253,7 +1268,8 @@ def clean_social(url: str) -> tuple[str, str] | None:
     if not plat:
         return None
     path = re.sub(r"/+", "/", p.path).rstrip("/")
-    if not path or SOCIAL_DROP.search(path + ("?" + p.query if p.query else "")):
+    fb_p = plat == "facebook" and bool(re.match(r"^/p/[^/]+-\d{6,}$", path))
+    if not path or (SOCIAL_DROP.search(path + ("?" + p.query if p.query else "")) and not fb_p):
         return None
     segs = [s for s in path.split("/") if s]
     query = ""
@@ -1266,6 +1282,8 @@ def clean_social(url: str) -> tuple[str, str] | None:
             return None  # theme placeholders and reserved paths (facebook.com/me resolves to the viewer)
         if segs[0] == "people" and len(segs) >= 3 and segs[2].isdigit():
             segs = segs[:3]
+        elif segs[0] == "p" and len(segs) >= 2 and re.search(r"-\d{6,}$", segs[1]):
+            segs = segs[:2]  # facebook.com/p/<Name>-<id>, a page's public profile path
         elif segs[0] == "profile.php":
             ids = [v for k, v in parse_qsl(p.query) if k == "id" and v.isdigit()]
             if not ids:
@@ -1293,7 +1311,7 @@ def clean_social(url: str) -> tuple[str, str] | None:
         segs = segs[:1]
     else:  # instagram, x
         segs = segs[:1]
-    handle = (segs[1] if segs[0] == "people" and len(segs) == 3 else segs[-1]).lstrip("@").lower()
+    handle = (segs[1] if segs[0] in ("people", "p") and len(segs) >= 2 else segs[-1]).lstrip("@").lower()
     if segs[0] != "profile.php" and handle in PLACEHOLDER_HANDLES:
         return None
     canon_host = {"linkedin": "www.linkedin.com", "facebook": "www.facebook.com", "instagram": "www.instagram.com",
@@ -1706,8 +1724,8 @@ def collect_socials(pages: list[Page], words: list[str], domains: set[str], scop
                 fr["data-href"] = q["href"]
                 links.append(fr)
         for a in links:
-            raw = a.get("href") if a.name == "a" else a.get("data-href")
-            c = clean_social(raw or "")
+            raw = unwrap_redirect((a.get("href") if a.name == "a" else a.get("data-href")) or "")
+            c = clean_social(raw)
             if not c:
                 continue
             if not scope.accept(a, p):
@@ -1743,7 +1761,7 @@ def collect_socials(pages: list[Page], words: list[str], domains: set[str], scop
             p, s, chrome, iconic = urls[u]
             path = urlsplit(u).path
             segs = [x for x in path.split("/") if x]
-            raw_handle = segs[1] if len(segs) == 3 and segs[0] == "people" else (segs[-1] if segs else "")
+            raw_handle = segs[1] if len(segs) >= 2 and segs[0] in ("people", "p") else (segs[-1] if segs else "")
             handle = re.sub(r"[^a-z0-9]", "", _translit(unquote(raw_handle)))
             if _names_other_company(handle, words, other_names):
                 dropped.append(u)
@@ -1773,6 +1791,19 @@ def norm_phone(raw: str) -> str | None:
     if len(d) == 8 and d[0] in "2345679":
         return "+47" + d
     return None
+
+
+def raw_span(page: Page, value: str, fallback: str) -> str:
+    """A span that occurs verbatim in the snapshot: the decoded text if it is there, else the raw form of the
+    value as the source writes it (entity-encoded mailto, JSON-LD field)."""
+    raw = page.snap.content.decode("utf-8", "replace")
+    if fallback and fallback in raw:
+        return fallback
+    if value in raw:
+        return value
+    enc = re.escape(value).replace("@", "(?:@|&#64;|&#x40;|%40|&commat;)").replace("\\.", "(?:\\.|&#46;|&#x2e;)")
+    m = re.search(enc, raw, re.I)
+    return m.group(0) if m else fallback
 
 
 def _element_for(page: Page, needle: str):
@@ -1851,7 +1882,7 @@ def extract_contacts(pages: list[Page], domain: str, registry_phones: set[str] =
     generic = [x for x in own if x[0].split("@")[0] in GENERIC_MAILBOX]
     # personal mailboxes only when the site publishes no generic one, and then just one
     picked = generic[:2] if generic else own[:1]
-    em = [(a, p, s) for a, (p, s) in picked]
+    em = [(a, p, raw_span(p, a, s)) for a, (p, s) in picked]
     order = sorted(phones.items(), key=lambda x: x[0][-8:] not in registry_phones)
     ph = [(n, p, s) for n, (p, s) in order][:2]
     return em, ph, len(skipped)
@@ -2564,8 +2595,9 @@ async def collect_dated_news(sp: "_Spend", ctx: CompanyContext, pages: list[Page
             href = urljoin(p.url, ln.get("href") or "")
             if href and same_site(host_of(href), domain) and "comments" not in href and href not in feeds:
                 feeds.append(href)
-    if not feeds and _is_wordpress(home):
-        feeds.append(origin + "/feed/")
+    if _is_wordpress(home):
+        # the main posts feed first; a linked feed may be a single page's (e.g. /testside/feed/) and empty
+        feeds = [origin + "/feed/"] + [x for x in feeds if x.rstrip("/") != origin + "/feed"]
     if not feeds and _is_wix(home):
         feeds.append(origin + "/blog-feed.xml")
     for feed in ([] if found else feeds[:2]):
@@ -2681,7 +2713,15 @@ COMPANY_RECRUITING = re.compile(r"(?i)ledige stillinger|ledig stilling|vi søker
                                 r"vacanc|open positions|join (our|the) team")
 
 
-def _careers_page_ok(page: Page, domain: str, home: Page, probed: bool) -> bool:
+RECRUITER_MARKS = re.compile(r"(?i)registrer (din )?cv|cv submission|executive search|headhunt|rekrutteringsbyrå|"
+                             r"for vår kunde|for våre kunder|på vegne av (vår|våre) kunde|vår oppdragsgiver|"
+                             r"our client|on behalf of (our|a) client|bemanning|vikarbyrå|utvalgte kunder|kandidater")
+OWN_HIRING = re.compile(r"(?i)jobb(e)? hos oss|jobbe i |bli en av oss|bli med på laget|ny kollega|nye kollegaer|"
+                        r"join (our|the) team|work (with|at) us|vi ansetter|vi har ledig")
+FILLED = re.compile(r"(?i)besatt|besatte|avsluttet|filled|closed|utløpt|expired")
+
+
+def _careers_page_ok(page: Page, domain: str, home: Page, probed: bool, nace: str = "", our_name: str = "") -> bool:
     """A real careers page: on the verified domain, not the front page (or a copy of it served at another
     path), and with a jobs word in its path or heading; a probed page needs the jobs word in its heading."""
     path = urlsplit(page.url).path
@@ -2694,6 +2734,20 @@ def _careers_page_ok(page: Page, domain: str, home: Page, probed: bool) -> bool:
     if PERSONAL_LETTER.search(page.text[:6000]) and not COMPANY_RECRUITING.search(page.text[:8000]):
         return False  # a personal application letter, not a company hiring
     if not RECRUIT_TEXT.search(page.text[:8000]) and not any(str(d.get("@type")) == "JobPosting" for d in page.jsonld):
+        return False
+    # a recruiter's or staffing firm's list of client searches is not this company hiring
+    if nace.startswith("78") or RECRUITER_MARKS.search(page.text[:12000]):
+        own = OWN_HIRING.search(page.text[:12000])
+        if our_name:
+            rx = name_regex(name_words(our_name))
+            own = own or (rx and re.search(r"(?i)jobbe (i|hos) ", page.text) and rx.search(page.text))
+        if not own:
+            return False
+    # every listed role filled or closed: nothing open here
+    jobs = [a for a in page.soup.find_all("a", href=True)
+            if same_site(host_of(urljoin(page.url, a["href"])), domain) and jobs_url(urlsplit(urljoin(page.url, a["href"])).path)
+            and urlsplit(urljoin(page.url, a["href"])).path.rstrip("/") != path.rstrip("/")]
+    if jobs and all(FILLED.search(a["href"] + " " + a.get_text(" ", strip=True)) for a in jobs):
         return False
     head = " ".join([page.soup.title.get_text(" ", strip=True) if page.soup.title else ""] +
                     [h.get_text(" ", strip=True) for h in page.soup.find_all(["h1", "h2"])[:3]])
@@ -2718,7 +2772,9 @@ async def collect_hiring(sp: "_Spend", ctx: CompanyContext, pages: list[Page], d
             break
         known = next((p for p in pages if p.url.rstrip("/") == url.rstrip("/")), None)
         got = known or (await _fetch_page(sp, url))[0]
-        if got and _careers_page_ok(got, domain, pages[0], probed):
+        reg = ctx.registry or {}
+        if got and _careers_page_ok(got, domain, pages[0], probed, ((reg.get("naeringskode1") or {}).get("kode") or ""),
+                                    reg.get("navn") or ""):
             page = got
             break
         if len(candidates) > 1 and got is None:
