@@ -102,3 +102,14 @@ def test_tidy_dedupes_and_strips_markup():
     gate.tidy(ctx)
     assert len([c for c in ctx.claims if c.field == "social_profile"]) == 1
     assert [c.value for c in ctx.claims if c.field == "website_description"] == ["Vi lager gode rør."]
+
+
+def test_bare_numeric_facebook_page_id_passes_and_glued_own_form_is_ours():
+    reg = {"navn": "FJELLTOPP ASA", "forretningsadresse": {"landkode": "NO"}}
+    ctx = ctx_with("https://www.fjelltopp.no/", reg, [("social_profile", "facebook.com/100087098506924"),
+                                                       ("social_profile", "facebook.com/fjelltoppasa"),
+                                                       ("social_profile", "facebook.com/fjelltoppgmbh"),
+                                                       ("social_profile", "facebook.com/kjedetest")])
+    gate.check(ctx)
+    got = {str(c.value): c.availability for c in ctx.claims if c.field == "social_profile" and c.value}
+    assert got == {"facebook.com/100087098506924": "available", "facebook.com/fjelltoppasa": "available"}
