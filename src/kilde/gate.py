@@ -32,9 +32,18 @@ def fold(s: str) -> str:
     return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
 
 
+# Shared hosting platforms: the company's own site is the subdomain, not the platform.
+HOSTED = ("barnehage.no", "wixsite.com", "squarespace.com", "webnode.no", "webnode.page", "blogspot.com",
+          "wordpress.com", "weebly.com", "jimdofree.com", "jimdo.com", "123hjemmeside.no", "my.canva.site",
+          "github.io", "netlify.app", "vercel.app", "business.site", "godaddysites.com", "mozello.com")
+
+
 def registered_domain(url_or_host: str) -> str:
     host = urlsplit(url_or_host if "://" in url_or_host else "http://" + url_or_host).netloc.lower().split(":")[0]
     host = host[4:] if host.startswith("www.") else host
+    for h in HOSTED:
+        if host.endswith("." + h):
+            return host
     parts = host.split(".")
     return ".".join(parts[-3:]) if len(parts) > 2 and parts[-2] in ("co", "com") else ".".join(parts[-2:])
 
@@ -95,7 +104,23 @@ def check(ctx: CompanyContext) -> list[str]:
         for c in derived:
             withhold(c, f"foreign domain .{tld} for a Norwegian-registered company (possibly a foreign sister company)")
         return notes
-    # 3. Contacts must match the site domain or the registry.
+    # 3. Social profiles from the site must name the company: the handle carries a distinctive token of
+    #    the legal name or the site's domain label, or is a pure numeric ID. Site builders and agencies
+    #    leave their own profiles in templates (a Surftown-built site linked Surftown's profiles).
+    for c in derived:
+        if c.field != "social_profile" or c.availability != "available":
+            continue
+        handle = fold(str(c.value).split("/", 1)[1] if "/" in str(c.value) else str(c.value))
+        handle_alnum = re.sub(r"[^a-z0-9]", "", handle)
+        label_alnum = re.sub(r"[^a-z0-9]", "", label)
+        numeric_id = bool(re.search(r"(profile\.php\?id=\d+|channel/uc[\w-]{10,}|/\d{6,}$|-\d{9,}$)", handle))
+        named = any(re.sub(r"[^a-z0-9]", "", t) in handle_alnum for t in tokens if len(t) >= 4) or \
+            (len(label_alnum) >= 3 and label_alnum in handle_alnum) or \
+            (tokens and re.sub(r"[^a-z0-9]", "", "".join(tokens)) in handle_alnum)
+        if not (named or numeric_id):
+            withhold(c, f"social handle '{handle}' does not carry the company's name or its site's domain (possible template or agency link)")
+
+    # 4. Contacts must match the site domain or the registry.
     reg_phones = {_digits(reg.get(k))[-8:] for k in ("telefon", "mobil") if reg.get(k)}
     for c in derived:
         if c.availability != "available":
@@ -112,4 +137,26 @@ def check(ctx: CompanyContext) -> list[str]:
             norwegian = str(c.value).startswith("+47") or (len(d) == 8)
             if not norwegian and d[-8:] not in reg_phones:
                 withhold(c, "foreign phone number that is not the registry phone")
+    return notes
+
+
+def check_batch(ctxs: list[CompanyContext]) -> list[str]:
+    """A social profile published for two or more companies in one batch is a template or agency link:
+    withhold it wherever the handle does not carry that company's own name."""
+    owners: dict[str, list] = {}
+    for ctx in ctxs:
+        for c in ctx.claims:
+            if c.field == "social_profile" and c.availability == "available":
+                owners.setdefault(str(c.value), []).append((ctx, c))
+    notes = []
+    for value, items in owners.items():
+        if len({ctx.org for ctx, _ in items}) < 2:
+            continue
+        for ctx, c in items:
+            handle = re.sub(r"[^a-z0-9]", "", fold(value.split("/", 1)[-1]))
+            tokens = distinctive_tokens((ctx.registry or {}).get("navn", ""))
+            if not any(re.sub(r"[^a-z0-9]", "", t) in handle for t in tokens if len(t) >= 4):
+                c.availability, c.value, c.confidence = "ambiguous", None, 0.0
+                c.note = "Withheld by the publication gate: the same profile appears for several companies in this batch"
+                notes.append(f"{ctx.org} social_profile: shared across companies ({value})")
     return notes

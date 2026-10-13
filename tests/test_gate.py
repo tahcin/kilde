@@ -52,3 +52,23 @@ def test_brand_domain_kept_only_when_connector_marks_it_exclusive():
     ctx = ctx_with("https://brandtest.no/", reg, [("site_contact_email", "post@brandtest.no")])
     gate.check(ctx)
     assert states(ctx) == {"site_contact_email": "ambiguous"}
+
+
+def test_template_social_links_are_withheld():
+    from kilde.connectors.website import canonical_social
+    ctx = ctx_with("https://www.hmdtest.no/", {"navn": "INTERIØR OG MALEFAG AS", "hjemmeside": "www.hmdtest.no"},
+                   [("social_profile", canonical_social("facebook", "https://www.facebook.com/surftown.com")),
+                    ("social_profile", canonical_social("facebook", "https://www.facebook.com/hmdtest")),
+                    ("social_profile", canonical_social("facebook", "https://www.facebook.com/profile.php?id=100063562930121"))])
+    gate.check(ctx)
+    got = [(c.availability) for c in ctx.claims if c.field == "social_profile"]
+    assert got == ["ambiguous", "available", "available"]
+
+
+def test_profile_shared_by_two_companies_is_withheld():
+    from kilde.connectors.website import canonical_social
+    a = ctx_with("https://alfa.no/", {"navn": "ALFA TEST AS"}, [("social_profile", canonical_social("instagram", "https://instagram.com/byraet"))])
+    b = ctx_with("https://beta.no/", {"navn": "BETA TEST AS"}, [("social_profile", canonical_social("instagram", "https://instagram.com/byraet"))])
+    b.org = "888888888"
+    gate.check_batch([a, b])
+    assert all(c.availability == "ambiguous" for x in (a, b) for c in x.claims if c.field == "social_profile")

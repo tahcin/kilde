@@ -286,6 +286,12 @@ async def run_batch(orgs: list[str], opt: Options) -> tuple[list[dict], dict]:
     snap_dir = opt.out_dir / "snapshots"
     gate_notes: list[str] = []
     for org in orgs:
+        try:
+            gate_notes += gate.check(ctxs[org])
+        except Exception as exc:  # noqa: BLE001
+            ctxs[org].error("gate", repr(exc))
+    gate_notes += gate.check_batch(list(ctxs.values()))
+    for org in orgs:
         ctx = ctxs[org]
         # Builderr's hiring family is shaped as a URL per signal: publish each verified NAV ad as one too.
         for job in ctx.claims_for("job_ad"):
@@ -293,10 +299,6 @@ async def run_batch(orgs: list[str], opt: Options) -> tuple[list[dict], dict]:
             if url and url not in {str(c.value) for c in ctx.claims_for("hiring_signal")}:
                 ctx.add_claim("hiring_signal", "hiring", url, [e for e in ctx.evidence if e.id in job.evidence_ids],
                               as_of=job.as_of, match=job.match, note="NAV job ad for this organisation number")
-        try:
-            gate_notes += gate.check(ctx)
-        except Exception as exc:  # noqa: BLE001
-            ctx.error("gate", repr(exc))
         if org in feed:
             try:
                 brreg.emit_change_claims(ctx, *feed[org])
