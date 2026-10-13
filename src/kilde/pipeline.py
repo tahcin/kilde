@@ -50,7 +50,7 @@ def git_commit() -> str | None:
 class Options:
     def __init__(self, *, max_requests: int, seconds: float, concurrency: int = 16, previous: dict[str, dict] | None = None,
                  run_id: str, out_dir: Path, cache_dir: str | None = None, modules: set[str] | None = None,
-                 checkpoint: Callable[[list[dict]], None] | None = None):
+                 checkpoint: Callable[[list[dict]], None] | None = None, bulk: str | None = None):
         self.max_requests = max_requests
         self.seconds = seconds
         self.concurrency = concurrency
@@ -60,6 +60,7 @@ class Options:
         self.cache_dir = cache_dir
         self.modules = modules
         self.checkpoint = checkpoint
+        self.bulk = bulk
 
 
 async def _step(ctx: CompanyContext, name: str, fn: Callable[[], Awaitable[None]], field: str, section: str,
@@ -122,37 +123,49 @@ async def run_batch(orgs: list[str], opt: Options) -> tuple[list[dict], dict]:
         except asyncio.TimeoutError:
             pass
 
-    per_company = opt.max_requests / max(1, len(orgs))
-    # Phase A: identity for everyone. Single lookups give one clean source URL per company; with a
-    # tight budget, fall back to batch lookups (one request per 100 organisations).
+    # Phase A, breadth first: identity for everyone (one request per 100 companies), then filed accounts
+    # for everyone, then roles, then workplaces. Under any request or time limit every company gets the
+    # most valuable registry facts before any company gets the less valuable ones.
     batch_records: dict[str, Any] = {}
-    if per_company < 15:
-        try:
-            batch_records = await brreg.fetch_entities_batch(f, orgs)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("batch entity lookup failed: %r", exc)
+    try:
+        batch_records = await brreg.fetch_entities_batch(f, orgs)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("batch entity lookup failed: %r", exc)
     sem = asyncio.Semaphore(opt.concurrency)
     phase_a_deadline = budget.started + opt.seconds * 0.45
 
-    async def phase_a(ctx: CompanyContext) -> None:
-        async with sem:
-            await _step(ctx, "registry", lambda: brreg.fetch_entity(f, ctx, batch_records.get(ctx.org)), "legal_name", "identity")
-            if not ctx.registry:
-                return
-            if ctx.facts.get("deleted"):
-                # A deleted entity's filed accounts stay public in Regnskapsregisteret; nothing else is fetched.
-                if want("financials"):
-                    await _step(ctx, "financials", lambda: accounts.fetch_accounts(f, ctx), "revenue", "financials")
-                return
-            if want("roles"):
-                await _step(ctx, "roles", lambda: brreg.fetch_roles(f, ctx), "ceo", "leadership")
-            if want("financials"):
-                if ctx.registry.get("sisteInnsendteAarsregnskap") or ctx.registry.get("organisasjonsform", {}).get("kode") in ("AS", "ASA"):
-                    await _step(ctx, "financials", lambda: accounts.fetch_accounts(f, ctx), "revenue", "financials")
-                else:
-                    ctx.mark("revenue", "financials", "not_applicable", note="No annual accounts filed for this entity type")
-            if want("locations"):
-                await _step(ctx, "locations", lambda: brreg.fetch_subunits(f, ctx), "registered_workplace", "locations")
+    async def each(fn) -> None:
+        async def one(ctx: CompanyContext) -> None:
+            async with sem:
+                await fn(ctx)
+        await asyncio.gather(*(one(c) for c in ctxs.values()))
+
+    async def identity(ctx: CompanyContext) -> None:
+        await _step(ctx, "registry", lambda: brreg.fetch_entity(f, ctx, batch_records.get(ctx.org)), "legal_name", "identity")
+        if not ctx.registry and opt.bulk:
+            bulk_identity(ctx, opt.bulk)
+
+    async def financials(ctx: CompanyContext) -> None:
+        if not ctx.registry or not want("financials"):
+            return
+        if ctx.facts.get("deleted") or ctx.registry.get("sisteInnsendteAarsregnskap") or \
+                ctx.registry.get("organisasjonsform", {}).get("kode") in ("AS", "ASA"):
+            # A deleted entity's filed accounts stay public in Regnskapsregisteret.
+            await _step(ctx, "financials", lambda: accounts.fetch_accounts(f, ctx), "revenue", "financials")
+        else:
+            ctx.mark("revenue", "financials", "not_applicable", note="No annual accounts filed for this entity type")
+
+    async def roles(ctx: CompanyContext) -> None:
+        if ctx.registry and not ctx.facts.get("deleted") and want("roles"):
+            await _step(ctx, "roles", lambda: brreg.fetch_roles(f, ctx), "ceo", "leadership")
+
+    async def locations(ctx: CompanyContext) -> None:
+        if ctx.registry and not ctx.facts.get("deleted") and want("locations"):
+            await _step(ctx, "locations", lambda: brreg.fetch_subunits(f, ctx), "registered_workplace", "locations")
+
+    async def phase_a_all() -> None:
+        for stage in (identity, financials, roles, locations):
+            await each(stage)
 
     # Batch-level preparation runs alongside phase A.
     async def prepare() -> None:
@@ -180,7 +193,7 @@ async def run_batch(orgs: list[str], opt: Options) -> tuple[list[dict], dict]:
             except Exception as exc:  # noqa: BLE001
                 log.warning("wikidata prepare failed: %r", exc)
 
-    await guarded(asyncio.gather(prepare(), *(phase_a(c) for c in ctxs.values())), phase_a_deadline)
+    await guarded(asyncio.gather(prepare(), phase_a_all()), phase_a_deadline)
 
     # Checkpoint: provisional envelopes (registry facts so far) are written now, so an external kill
     # later in the run still leaves one envelope per company. The final write replaces them.
@@ -314,6 +327,62 @@ async def run_batch(orgs: list[str], opt: Options) -> tuple[list[dict], dict]:
     return envelopes, report
 
 
+def bulk_identity(ctx: CompanyContext, path: str) -> None:
+    """Identity from Builderr's frozen Brønnøysund snapshot (`--bulk`) when the live API gave nothing.
+    Reads the CSV or JSON bulk download (optionally gzipped) and emits the registry facts from that row."""
+    import csv
+    import gzip
+    import hashlib
+    from .model import Snapshot
+
+    try:
+        opener = gzip.open if path.endswith(".gz") else open
+        with opener(path, "rt", encoding="utf-8-sig", newline="") as fh:
+            head = fh.read(1)
+            fh.seek(0)
+            row = None
+            if head == "[":
+                for rec in json.load(fh):
+                    if rec.get("organisasjonsnummer") == ctx.org:
+                        row = rec
+                        break
+                raw_line = json.dumps(row, ensure_ascii=False) if row else ""
+            else:
+                reader = csv.reader(fh)
+                header = next(reader)
+                for vals in reader:
+                    if vals and vals[0].strip('"') == ctx.org or (ctx.org in vals[:2]):
+                        flat = dict(zip(header, vals))
+                        row = {}
+                        for k, v in flat.items():
+                            if v == "":
+                                continue
+                            cur = row
+                            parts = k.split(".")
+                            for p in parts[:-1]:
+                                cur = cur.setdefault(p, {})
+                            cur[parts[-1]] = v
+                        raw_line = ",".join(vals)
+                        break
+    except Exception as exc:  # noqa: BLE001
+        ctx.error("registry", f"bulk snapshot unreadable: {exc!r}")
+        return
+    if not row:
+        return
+    if isinstance((row.get("forretningsadresse") or {}).get("adresse"), str):
+        row["forretningsadresse"]["adresse"] = [row["forretningsadresse"]["adresse"]]
+    if isinstance((row.get("postadresse") or {}).get("adresse"), str):
+        row["postadresse"]["adresse"] = [row["postadresse"]["adresse"]]
+    content = raw_line.encode("utf-8")
+    snap = Snapshot(url="https://data.brreg.no/enhetsregisteret/api/enheter/lastned/csv", final_url=path, status=200,
+                    retrieved_at=utc_now(), content=content, content_type="text/csv")
+    ctx.claims = [c for c in ctx.claims if not (c.field == "legal_name" and c.availability != "available")]
+    ctx.registry = row
+    ctx.module_states["registry"] = "available"
+    ctx.facts["identity_from_bulk"] = hashlib.sha256(content).hexdigest()
+    brreg.emit_entity_claims(ctx, snap, row)
+
+
 def _maybe_licensed(reg: dict) -> bool:
     """Finanstilsynet licences: finance, insurance, accounting, auditing, real-estate brokerage, debt collection."""
     codes = [(reg.get(k) or {}).get("kode", "") for k in ("naeringskode1", "naeringskode2", "naeringskode3")]
@@ -323,7 +392,8 @@ def _maybe_licensed(reg: dict) -> bool:
 def section_state(ctx: CompanyContext, section: str) -> str:
     states = [c.availability for c in ctx.claims if c.section == section]
     if not states:
-        return "not_available"
+        # Nothing was attempted for this section: say "failed" when identity itself could not be checked.
+        return "failed" if not ctx.registry and ctx.module_states.get("registry") in ("failed", "timeout") else "not_available"
     return min(states, key=STATE_RANK.index)
 
 

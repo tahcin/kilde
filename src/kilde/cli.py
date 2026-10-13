@@ -15,7 +15,7 @@ from . import __version__ as _v  # noqa: F401
 from .pipeline import Options, run_batch
 
 DEFAULT_REQUESTS_PER_COMPANY = 20  # Unstop: 2,000 requests per 100 companies
-DEFAULT_TIME_BUDGET = 45 * 60  # Unstop: 45 minutes
+DEFAULT_TIME_BUDGET = 30 * 60  # Unstop publishes 45 minutes; finish well inside it
 
 
 def read_organisations(path: str) -> list[str]:
@@ -118,9 +118,9 @@ def main(argv: list[str] | None = None) -> None:
     r.add_argument("--expected-count", type=int, default=None)
     r.add_argument("--previous", default=None, help="previous envelopes JSONL for refresh diffs")
     r.add_argument("--state-dir", default="state", help="keeps the latest envelopes so the next run diffs against them")
-    r.add_argument("--bulk", default=None, help="frozen Brreg snapshot (accepted for harness compatibility)")
+    r.add_argument("--bulk", default=None, help="frozen Brreg snapshot (CSV or JSON, optionally .gz); used for identity when the live API fails")
     r.add_argument("--max-requests", type=int, default=None, help="outbound HTTP request budget (default 20 per company)")
-    r.add_argument("--time-budget", type=float, default=None, help="seconds (default 2700)")
+    r.add_argument("--time-budget", type=float, default=None, help="seconds (default 1800)")
     r.add_argument("--concurrency", type=int, default=40)
     r.add_argument("--only", default=None, help="comma list of Kilde modules to run (debugging)")
     # Accepted for compatibility with the starter kit's command; Kilde schedules its own work.
@@ -151,6 +151,7 @@ def main(argv: list[str] | None = None) -> None:
     opt = Options(max_requests=max_requests, seconds=seconds, concurrency=args.concurrency, previous=previous,
                   run_id=run_id, out_dir=out_dir, cache_dir=os.environ.get("KILDE_CACHE_DIR"),
                   modules=set(args.only.split(",")) if args.only else None,
+                  bulk=args.bulk,
                   checkpoint=lambda envs: write_jsonl(out, envs + [invalid_envelope(r, run_id, envs[0]["run"]["started_at"] if envs else "") for r in INVALID]))
     envelopes, report = asyncio.run(run_batch(orgs, opt))
     envelopes += [invalid_envelope(r, run_id, report["started_at"]) for r in INVALID]

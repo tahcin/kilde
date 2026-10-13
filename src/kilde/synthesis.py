@@ -66,6 +66,10 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
 
     name = first(ctx, "legal_name")
     if not name:
+        if ctx.module_states.get("registry") in ("failed", "timeout"):
+            return {"text": "The registry could not be checked in this run (time, request budget or source error), "
+                            "so no facts were published.", "sentences": [],
+                    "unknowns": ["Identity not checked in this run; nothing else was attempted."]}
         return {"text": "No registry record was returned for this organisation number.", "sentences": [],
                 "unknowns": ["Identity could not be established, so no other facts were published."]}
     n = name.value
