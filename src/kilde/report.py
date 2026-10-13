@@ -934,7 +934,7 @@ function addBtn(c){var on=compare.indexOf(c.o)>=0;
   return '<button type="button" class="addc" data-add="'+c.o+'" aria-pressed="'+on+'" aria-label="'+(on?'Remove ':'Add ')+esc(dn(c.n))+(on?' from':' to')+' compare">'+(on?IC.check+'<span>Added</span>':IC.plus+'<span>Compare</span>')+'</button>';}
 function rowHtml(c){var r=latestFig(c,'revenue'),w=what(c),t=muni(c);
   return '<li class="crow"><a class="cl" href="#org-'+c.o+'"><span class="cn">'+esc(dn(c.n||c.o))+'</span><span class="cw">'+esc([w,t].filter(Boolean).join(' · ')||('Org. no. '+orgf(c.o)))+'</span></a>'+
-    '<span class="cr">'+(r?'<span class="num">'+short(r.v.amount)+' NOK</span><span class="cy">revenue '+esc(r.v.year)+'</span>':'<span class="cy">No revenue filed</span>')+'</span>'+
+    '<span class="cr">'+(r?'<span class="num">'+short(r.v.amount)+' NOK</span><span class="cy">revenue '+esc(r.v.year)+'</span>':'<span class="cy">'+(any(c,'revenue').some(function(x){return x.a==='failed';})?'Accounts not checked':'No revenue filed')+'</span>')+'</span>'+
     '<span class="tags">'+tags(c)+'</span>'+addBtn(c)+'</li>';}
 function drawList(){
   var list=$('list');if(!list)return;
