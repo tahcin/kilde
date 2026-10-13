@@ -91,3 +91,14 @@ def test_platform_default_structured_data_is_withheld():
     sd = [c for c in ctx.claims if c.field == "structured_data_organization"]
     assert sd[0].availability == "ambiguous" and sd[1].availability == "available"
     assert sd[1].value["sameAs"] == ["https://facebook.com/ferskentest"]
+
+
+def test_tidy_dedupes_and_strips_markup():
+    from kilde.connectors.website import canonical_social
+    ctx = ctx_with("https://www.awattest.no/", {"navn": "AWATTEST AS"},
+                   [("social_profile", canonical_social("facebook", "https://facebook.com/awattest")),
+                    ("social_profile", canonical_social("facebook", "https://www.facebook.com/awattest/")),
+                    ("website_description", "<p>Vi lager <b>gode</b> r&oslash;r.</p>")])
+    gate.tidy(ctx)
+    assert len([c for c in ctx.claims if c.field == "social_profile"]) == 1
+    assert [c.value for c in ctx.claims if c.field == "website_description"] == ["Vi lager gode rør."]

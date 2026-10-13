@@ -315,6 +315,8 @@ async def run_batch(orgs: list[str], opt: Options) -> tuple[list[dict], dict]:
         except Exception as exc:  # noqa: BLE001
             ctxs[org].error("gate", repr(exc))
     gate_notes += gate.check_batch(list(ctxs.values()))
+    for c in ctxs.values():
+        gate.tidy(c)
     for org in orgs:
         ctx = ctxs[org]
         # Builderr's hiring family is shaped as a URL per signal: publish each verified NAV ad as one too.

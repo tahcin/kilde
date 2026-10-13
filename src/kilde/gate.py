@@ -194,3 +194,24 @@ def check_batch(ctxs: list[CompanyContext]) -> list[str]:
                 c.note = "Withheld by the publication gate: the same profile appears for several companies in this batch"
                 notes.append(f"{ctx.org} social_profile: shared across companies ({value})")
     return notes
+
+
+def tidy(ctx: CompanyContext) -> None:
+    """Cosmetic hygiene after the gate: one claim per (field, value), and descriptions as plain text."""
+    import html as _html
+    seen = set()
+    keep = []
+    for c in ctx.claims:
+        if c.availability == "available":
+            if c.field == "website_description" and isinstance(c.value, str) and "<" in c.value:
+                text = re.sub(r"\s+", " ", _html.unescape(re.sub(r"<[^>]+>", " ", c.value))).strip()
+                if not text:
+                    c.availability, c.value, c.note = "not_available", None, "description was markup only"
+                else:
+                    c.value = text
+            key = (c.field, str(c.value).lower())
+            if c.availability == "available" and key in seen:
+                continue
+            seen.add(key)
+        keep.append(c)
+    ctx.claims[:] = keep
