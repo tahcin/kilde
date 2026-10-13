@@ -3,7 +3,9 @@
 `website_seeds.json.gz` maps an organisation number to candidate website domains. Each entry is a
 candidate only: the website connector proves identity on the live site before anything is published.
 Rebuild with `scripts/build_website_seeds.py`, then merge the Common Crawl candidates with
-`scripts/merge_cc_seeds.py` (re-runnable: it replaces every `commoncrawl` source each time).
+`scripts/merge_cc_seeds.py` (re-runnable: it replaces every `commoncrawl` source each time), Kilde's own crawl
+with `scripts/merge_crawl_seeds.py` (replaces every `crawl_*` source) and partial seed files such as the NAV
+employer homepages with `scripts/merge_seed_file.py` (adds, never removes). Run them in that order.
 
 | Source tag | Data | Licence and attribution |
 |---|---|---|
@@ -12,6 +14,7 @@ Rebuild with `scripts/build_website_seeds.py`, then merge the Common Crawl candi
 | `subunit` (and the phone/email keys used for matching) | Enhetsregisteret bulk files (`enheter`, `underenheter`), Brønnøysundregistrene | Norsk lisens for offentlige data (NLOD) 2.0, https://data.norge.no/nlod/no/2.0 |
 | `nav` | NAV `pam-stilling-feed`, field `ad_content.employer.homepage` | NAV API terms, https://arbeidsplassen.nav.no/vilkar-api |
 | `wikidata` | Wikidata P856 on items with P2333, queried through QLever | CC0 1.0 |
+| `crawl_orgnr`, `crawl_phone_email`, `crawl_signals` | Kilde's own crawl (user agent `KildeCacheBuilder/1.0`, robots.txt obeyed, one request at a time per host, no social networks, search engines or aggregators) of front, contact, about and privacy pages, matched against the Enhetsregisteret bulk files: our org number printed (`crawl_orgnr`), a registry phone or email unique to one entity printed (`crawl_phone_email`), or two independent signals such as legal name and street address (`crawl_signals`) | Pages remain subject to their owners' terms; only the domain and the tag are stored. Registry matching under NLOD 2.0 |
 | `commoncrawl`, `commoncrawl_domain` | Common Crawl CC-MAIN-2026-39: front, contact, about and privacy pages of Norwegian hosts that print an org number (`commoncrawl`), and host names that match a company name (`commoncrawl_domain`) | Common Crawl Terms of Use, https://commoncrawl.org/terms-of-use (see below) |
 
 Stored per org: registered domains (or a company-specific subdomain on a site builder) and the

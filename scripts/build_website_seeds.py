@@ -436,7 +436,8 @@ def from_wikidata(tsv: Path, reg: Registry, seeds: Seeds) -> dict:
     return {"pairs": n}
 
 
-def from_nav(cache_path: Path, states: list[Path], reg: Registry, seeds: Seeds, fetch: bool, sleep: float) -> dict:
+def from_nav(cache_path: Path, states: list[Path], reg: Registry, seeds: Seeds, fetch: bool, sleep: float,
+             workers: int = 8) -> dict:
     """employer.homepage from NAV feed entries of ads whose employer org number we know."""
     import httpx
 
@@ -459,35 +460,55 @@ def from_nav(cache_path: Path, states: list[Path], reg: Registry, seeds: Seeds, 
     todo = [u for u in sorted(ads) if u not in cache]
     log("nav ads", len(ads), "cached", len(cache), "to fetch", len(todo) if fetch else 0)
     if fetch and todo:
-        cl = httpx.Client(headers={"User-Agent": UA}, timeout=60)
-        tok = None
-        for i, u in enumerate(todo):
-            for attempt in range(4):
-                if tok is None:
+        import threading
+        from concurrent.futures import ThreadPoolExecutor
+
+        cl = httpx.Client(headers={"User-Agent": UA}, timeout=60,
+                          limits=httpx.Limits(max_connections=workers * 2, max_keepalive_connections=workers * 2))
+        lock = threading.Lock()
+        tok = {"v": None}
+        done = {"n": 0}
+
+        def token(force: bool = False) -> str | None:
+            with lock:
+                if force or tok["v"] is None:
                     m = re.search(r"eyJ[\w-]+\.[\w-]+\.[\w-]+", cl.get(f"{NAV_BASE}/api/publicToken").text)
-                    tok = m.group(0) if m else None
+                    tok["v"] = m.group(0) if m else None
+                return tok["v"]
+
+        def one(u: str) -> None:
+            for attempt in range(5):
                 try:
                     r = cl.get(f"{NAV_BASE}/api/v1/feedentry/{u}",
-                               headers={"Accept": "application/json", "Authorization": f"Bearer {tok}"})
+                               headers={"Accept": "application/json", "Authorization": f"Bearer {token()}"})
                 except httpx.HTTPError:
-                    time.sleep(5 * (attempt + 1))
+                    time.sleep(3 * (attempt + 1))
                     continue
                 if r.status_code == 401:
-                    tok = None
+                    token(force=True)
                     continue
                 if r.status_code in (429, 500, 502, 503, 504):
-                    time.sleep(10 * (attempt + 1))
+                    time.sleep(5 * (attempt + 1))
                     continue
                 if r.status_code == 200:
                     emp = ((r.json().get("ad_content") or {}).get("employer") or {})
-                    cache[u] = {"orgnr": emp.get("orgnr"), "homepage": (emp.get("homepage") or "").strip()}
+                    val = {"orgnr": emp.get("orgnr"), "homepage": (emp.get("homepage") or "").strip()}
                 elif r.status_code == 404:
-                    cache[u] = {"orgnr": None, "homepage": ""}
+                    val = {"orgnr": None, "homepage": ""}
+                else:
+                    return
+                with lock:
+                    cache[u] = val
+                    done["n"] += 1
+                    if done["n"] % 500 == 0:
+                        cache_path.write_text(json.dumps(cache))
+                        log("nav fetched", done["n"])
                 break
-            if i % 200 == 199:
-                cache_path.write_text(json.dumps(cache))
-                log("nav fetched", i + 1)
             time.sleep(sleep)
+
+        token()
+        with ThreadPoolExecutor(workers) as ex:
+            list(ex.map(one, todo))
         cache_path.write_text(json.dumps(cache))
     n = 0
     for u, org in ads.items():
@@ -550,7 +571,8 @@ def main() -> None:
     ap.add_argument("--overture-release", default="2026-09-23.1")
     ap.add_argument("--nav-state", type=Path, nargs="*", default=[])
     ap.add_argument("--no-nav-fetch", action="store_true")
-    ap.add_argument("--nav-sleep", type=float, default=0.3)
+    ap.add_argument("--nav-sleep", type=float, default=0.0)
+    ap.add_argument("--nav-workers", type=int, default=8)
     ap.add_argument("--out", type=Path, default=OUT)
     a = ap.parse_args()
     a.work.mkdir(parents=True, exist_ok=True)
@@ -563,7 +585,8 @@ def main() -> None:
     stats = {
         "subunit": from_subunits(reg, seeds),
         "wikidata": from_wikidata(a.work / "wikidata.tsv", reg, seeds),
-        "nav": from_nav(a.work / "nav_homepages.json", a.nav_state, reg, seeds, not a.no_nav_fetch, a.nav_sleep),
+        "nav": from_nav(a.work / "nav_homepages.json", a.nav_state, reg, seeds, not a.no_nav_fetch, a.nav_sleep,
+                        a.nav_workers),
         "overture": from_overture(a.work / f"overture_{a.overture_release}_no.parquet", a.overture_release, reg, seeds),
         "osm": from_osm(a.osm, reg, seeds),
     }

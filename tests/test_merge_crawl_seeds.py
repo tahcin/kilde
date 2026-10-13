@@ -117,3 +117,21 @@ def test_truncated_pages_file_is_read_up_to_the_last_complete_line(tmp_path):
     p.write_bytes(data[:-12])
     got = [r["final"] for r in M.read_jsonl_gz(p)]
     assert got[:1] == ["https://a.no/"]
+
+
+def test_partial_seed_file_is_added_with_the_same_filters_and_nothing_removed():
+    spec = importlib.util.spec_from_file_location("merge_seed_file", _SCRIPTS / "merge_seed_file.py")
+    S = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(S)
+    extra = {"seeds": {A: [{"domain": "www.Kornblom.no", "sources": ["nav"]}, {"domain": "facebook.com", "sources": ["nav"]}],
+                       D: [{"domain": "nordmann.no", "sources": ["nav"]}],
+                       C: [{"domain": "tindefjell.no", "sources": ["osm_phone"]}]}}
+    sel, dropped = S.select(extra, {"nav"}, uni(), key)
+    assert sel == {A: {"kornblom.no": {"nav"}}} and dropped == {"non_company_host": 1, "enk": 1}
+    doc = {"seeds": {A: [{"domain": "kornblom.no", "sources": ["crawl_orgnr"]}],
+                     E: [{"domain": "granli.no", "sources": ["nav"]}]}}
+    out, added = S.add(doc, sel)
+    assert out["seeds"] == {A: [{"domain": "kornblom.no", "sources": ["crawl_orgnr", "nav"]}],
+                            E: [{"domain": "granli.no", "sources": ["nav"]}]}
+    assert added == {"tag_added_to_existing_domain": 1}
+    assert S.add(out, sel)[0] == out

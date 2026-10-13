@@ -277,11 +277,35 @@ def repair(raw: str, span: str | None, content_type: str, anchor: tuple[str, Any
         if hits:
             short = [h for h in hits if len(h.strip()) <= MAX_SPAN]
             return _trim(short[0] if short else min(hits, key=len)), [], True
+        if legacy:
+            pieces = _legacy_pieces(raw, core)
+            if pieces:
+                return pieces[0], pieces[1:], True
         return core, [], False
     span, extra, exact = _repair(raw, span, content_type, anchor)
     if exact and span:
         span = _trim(span)
     return span, extra, exact
+
+
+def _legacy_pieces(raw: str, core: str) -> list[str] | None:
+    """On a page in a legacy charset a byte such as a non-breaking space inside the value cannot be quoted as
+    UTF-8. Find the value with such bytes allowed between its words and return the quotable pieces around
+    them (longest first); together they must hold the whole value."""
+    words = [w for w in re.split(r"\s+", core.strip()) if w]
+    if not words or len(core) > 200:
+        return None
+    gap = r"(?:\s|\ufffd|<[^>]{0,300}>|&[#a-zA-Z0-9]{1,10};)+"
+    try:
+        m = re.search(gap.join(_html_entities(w) for w in words), raw)
+    except re.error:
+        return None
+    if not m:
+        return None
+    pieces = [x.strip() for x in m.group(0).split("\ufffd") if x.strip()]
+    if not pieces or _core_text("".join(pieces)) != _core_text(m.group(0)) or not contains_core(" ".join(pieces), core):
+        return None
+    return sorted(pieces, key=lambda x: (-len(x), x))
 
 
 def _core_repair(raw: str, span: str, core: str, legacy: bool) -> str | None:

@@ -2120,3 +2120,13 @@ def test_crawl_seed_without_proof_on_the_live_site_publishes_nothing(monkeypatch
     ctx = ctx_for()
     run(FakeFetcher({"https://fjellbekk-sag.no/": (200, html("<h1>Fjellbekk Trevare</h1><p>Velkommen</p>"))}), ctx)
     assert not ctx.claims_for("official_website")  # the seed's crawl-time evidence is not re-used
+
+
+def test_legacy_charset_value_with_a_non_breaking_space_is_quoted_in_exact_pieces():
+    from kilde.spans import repair
+    raw_bytes = '<p><span>Lyngveien</span> 12\xa0 </span><span>9999 Testby</span></p>'.encode("latin-1")
+    raw = raw_bytes.decode("utf-8", "replace")
+    span, extra, exact = repair(raw, "Lyngveien 12 9999 Testby", "text/html", None, "Lyngveien 12 9999")
+    assert exact and all(x.encode() in raw_bytes for x in [span] + extra)
+    joined = " ".join([span] + extra)
+    assert "Lyngveien" in joined and "9999" in joined
