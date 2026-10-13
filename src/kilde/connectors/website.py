@@ -104,7 +104,19 @@ ORG_CONTEXT = re.compile(r"(org(?:anisasjons)?\.?\s*-?\s*n(?:r|o|ummer)\.?|organ
 NINE = re.compile(r"(?<![\d.,])(?:NO\s?)?([89]\d{2})[\s. ]?(\d{3})[\s. ]?(\d{3})(?:\s?MVA)?(?![\d,])")
 EMAIL = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 PHONE_TEXT = re.compile(r"(?<![\d])(?:\+|00)?(?:47[\s.\-\u00a0]?)?(?:\d[\s.\-\u00a0]?){7}\d(?![\s.\-\u00a0]?\d)")
-PHONE_LABEL = re.compile(r"(tlf|telefon|phone|mobil|tel\.?|ring oss|sentralbord)", re.I)
+PHONE_LABEL = re.compile(r"(?<![a-zæøå])(tlf|telefon|phone|mobil|mob|tel|ring oss|sentralbord)(?![a-zæøå])\.?|\+47",
+                         re.I)
+DATE_LIKE = re.compile(r"^\s*(\d{4}[.\-/]\d{1,2}[.\-/]\d{1,2}|\d{1,2}[.\-/]\d{1,2}[.\-/]\d{4})\s*$")
+
+
+def phone_shaped(raw: str) -> bool:
+    """A written number that looks like a phone, not a date: 8 digits together, or grouped 2-2-2-2, 3-2-3,
+    4-4, 3-3-2 or 2-3-3 (after an optional +47 or 0047)."""
+    t = re.sub(r"^\s*(\+|00)?47[\s.\-\u00a0]*", "", raw.strip())
+    if DATE_LIKE.match(t):
+        return False
+    groups = [len(g) for g in re.split(r"[\s.\-\u00a0]+", t) if g]
+    return groups in ([8], [2, 2, 2, 2], [3, 2, 3], [4, 4], [3, 3, 2], [2, 3, 3])
 PLACEHOLDER = re.compile(r"(?i)lorem ipsum|dolor sit amet|legg inn en (kort|beskrivelse)|gi en kort|skriv en kort|"
                          r"just another wordpress site|hello world!?|hei verden|sample page|eksempelside|"
                          r"this is an example page|dette er en eksempelside|your (company )?description here|"
@@ -124,7 +136,11 @@ SOCIAL = {
     "youtube": ("youtube.com",),
     "x": ("x.com", "twitter.com"),
     "tiktok": ("tiktok.com",),
+    "pinterest": ("pinterest.com", "no.pinterest.com", "pinterest.no"),
 }
+FB_RESERVED = {"me", "sharer", "sharer.php", "share", "share.php", "dialog", "plugins", "login", "login.php", "home",
+               "home.php", "groups", "watch", "events", "help", "policies", "privacy", "settings", "marketplace",
+               "gaming", "hashtag", "search", "photo.php", "story.php", "permalink.php", "notes", "fundraisers", "#"}
 SOCIAL_DROP = re.compile(r"sharer|/share|/intent|/dialog|/plugins|/hashtag|/watch|/embed|/results|/p/|/reel|"
                          r"/explore|/accounts|/login|/signup|/help|/policies|/privacy|/legal|/home$|/search|"
                          r"/shareArticle|/feed|/posts/|/photos|/events/|/i/|/status/|/video/|/tr\?|/tr$|/groups/",
@@ -520,6 +536,8 @@ def find_phone(page: Page, wanted: set[str], names: list[list[str]] | None = Non
         return None
     for m in PHONE_TEXT.finditer(page.text):
         d = re.sub(r"\D", "", m.group(0))
+        if not phone_shaped(m.group(0)):
+            continue
         if len(d) >= 8 and d[-8:] in wanted:
             if names is None or _phone_in_named_block(_element_for(page, m.group(0).strip()), page, names):
                 return _window(page.text, m.start(), m.end(), 25)
@@ -620,7 +638,7 @@ class Verdict:
 def judge(v: Verdict, org: str, e: dict, registry_host: str | None) -> None:
     """Decide the identity status of a candidate from the pages fetched so far."""
     pages = v.pages
-    v.others, v.method, v.proof = {}, None, []
+    v.others, v.method, v.proof, v.namesake = {}, None, [], None
     # (a) exact: our org number on any page
     for p in pages:
         span = find_orgnr(p, org)
@@ -1145,6 +1163,24 @@ def _is_section(url: str) -> bool:
     return bool(segs) and not (len(segs) == 1 and segs[0].lower() in LANG_SEG)
 
 
+_SEEDS: dict[str, list[dict]] | None = None
+SEEDS_PATH = __import__("pathlib").Path(__file__).resolve().parent.parent / "data" / "website_seeds.json.gz"
+
+
+def website_seeds() -> dict[str, list[dict]]:
+    """Open-data website candidates by org number (OSM, Overture, Brreg workplaces, NAV, Wikidata), loaded once
+    per process. Candidates only: they pass exactly the same proof, collision and exclusivity rules."""
+    global _SEEDS
+    if _SEEDS is None:
+        try:
+            import gzip
+            with gzip.open(SEEDS_PATH, "rt", encoding="utf-8") as fh:
+                _SEEDS = json.load(fh).get("seeds") or {}
+        except (OSError, ValueError):
+            _SEEDS = {}
+    return _SEEDS
+
+
 def candidates(ctx: CompanyContext) -> list[tuple[str, str, str | None]]:
     """(domain, source, start_url), in order: registry website, email domain, name-derived guesses."""
     e = ctx.registry or {}
@@ -1173,6 +1209,9 @@ def candidates(ctx: CompanyContext) -> list[tuple[str, str, str | None]]:
         d = em.rsplit("@", 1)[1]
         if d not in FREE_MAIL and not any(d.endswith("." + x) for x in FREE_MAIL):
             add(d, "email")
+    for seed in sorted(website_seeds().get(ctx.org) or [], key=lambda x: x.get("domain") or ""):
+        if seed.get("domain"):
+            add(seed["domain"], "seed:" + "+".join(sorted(seed.get("sources") or [])))
     for d in name_domains(e.get("navn") or "", e):
         add(d, "guess")
     return out
@@ -1223,6 +1262,8 @@ def clean_social(url: str) -> tuple[str, str] | None:
             return None
         segs = segs[:2]
     elif plat == "facebook":
+        if segs[0].lower() in FB_RESERVED or (segs[0].lower() == "pages" and not any(x.isdigit() for x in segs)):
+            return None  # theme placeholders and reserved paths (facebook.com/me resolves to the viewer)
         if segs[0] == "people" and len(segs) >= 3 and segs[2].isdigit():
             segs = segs[:3]
         elif segs[0] == "profile.php":
@@ -1242,6 +1283,10 @@ def clean_social(url: str) -> tuple[str, str] | None:
             segs = segs[:1]
         else:
             return None
+    elif plat == "pinterest":
+        if segs[0].lower() in ("pin", "ideas", "search", "today", "business", "login", "_") or len(segs) > 2:
+            return None
+        segs = segs[:1]
     elif plat == "tiktok":
         if not segs[0].startswith("@"):
             return None
@@ -1252,7 +1297,8 @@ def clean_social(url: str) -> tuple[str, str] | None:
     if segs[0] != "profile.php" and handle in PLACEHOLDER_HANDLES:
         return None
     canon_host = {"linkedin": "www.linkedin.com", "facebook": "www.facebook.com", "instagram": "www.instagram.com",
-                  "youtube": "www.youtube.com", "x": "x.com", "tiktok": "www.tiktok.com"}[plat]
+                  "youtube": "www.youtube.com", "x": "x.com", "tiktok": "www.tiktok.com",
+                  "pinterest": "www.pinterest.com"}[plat]
     return plat, urlunsplit(("https", canon_host, "/" + "/".join(segs), query, ""))
 
 
@@ -1662,7 +1708,7 @@ def collect_socials(pages: list[Page], words: list[str], domains: set[str], scop
         for a in links:
             raw = a.get("href") if a.name == "a" else a.get("data-href")
             c = clean_social(raw or "")
-            if not c or "profile.php" in c[1]:
+            if not c:
                 continue
             if not scope.accept(a, p):
                 dropped.append(c[1])
@@ -1682,7 +1728,7 @@ def collect_socials(pages: list[Page], words: list[str], domains: set[str], scop
             for s in (same if isinstance(same, list) else [same] if same else []):
                 if isinstance(s, str):
                     c = clean_social(s)
-                    if c and "profile.php" not in c[1] and not (scope.sisters and scope.names_sister(s)):
+                    if c and not (scope.sisters and scope.names_sister(s)):
                         found.setdefault(c[0], {}).setdefault(c[1], [p, json.dumps({"sameAs": s})[:300], True, True])
     keys = {re.sub(r"[^a-z0-9]", "", _translit(w)) for w in words if len(w) >= 4 and _translit(w) not in REGIONS
             and w not in GENERIC_WORDS and w not in FORM_NAME_WORDS}
@@ -1779,11 +1825,14 @@ def extract_contacts(pages: list[Page], domain: str, registry_phones: set[str] =
             if n:
                 put(phones, n, p, a["href"][:100], a)
         for m in PHONE_TEXT.finditer(p.text):
-            before = p.text[max(0, m.start() - 25):m.start()]
+            if not phone_shaped(m.group(0)):
+                continue  # a date such as 2024.03.06 is not a phone number
+            before = p.text[max(0, m.start() - 40):m.start()]
             if re.search(r"(\+|00)(?!47)\d{1,3}[\s.\-\u00a0]?$", before):
                 continue  # the rest of a foreign number written with its country code
             n = norm_phone(m.group(0))
-            labels = re.findall(r"(?i)tlf|telefon|phone|mobil|tel\b|ring oss|sentralbord|faks|fax|telefaks", before)
+            labels = re.findall(r"(?i)(?<![a-zæøå])(?:tlf|telefon|phone|mobil|mob|tel|ring oss|sentralbord|faks|fax|"
+                                r"telefaks)(?![a-zæøå])", before)
             if labels and re.fullmatch(r"(?i)faks|fax|telefaks", labels[-1]):
                 continue  # the nearest label says this is a fax number
             if n and PHONE_LABEL.search(before) and n not in phones and n not in skipped:
@@ -1795,7 +1844,9 @@ def extract_contacts(pages: list[Page], domain: str, registry_phones: set[str] =
             return True
         # a free-mail box (birifotklinikk@gmail.com) counts when its mailbox name is our distinctive name
         lq = re.sub(r"[^a-z0-9]", "", _translit(local))
-        return dom in FREE_MAIL and bool(name_key) and len(name_key) >= 6 and name_key in lq
+        site_key = re.sub(r"[^a-z0-9]", "", domain.split(".")[0])
+        return dom in FREE_MAIL and ((bool(name_key) and len(name_key) >= 6 and name_key in lq)
+                                     or (len(site_key) >= 6 and lq == site_key))
     own = [(a, ps) for a, ps in emails.items() if ours_mail(a)]
     generic = [x for x in own if x[0].split("@")[0] in GENERIC_MAILBOX]
     # personal mailboxes only when the site publishes no generic one, and then just one
@@ -1855,7 +1906,7 @@ def careers_link(pages: list[Page], domain: str, scope: Scope | None = None) -> 
             pu = urlsplit(u)
             if pu.scheme not in ("http", "https") or not same_site(host_of(u), domain):
                 continue
-            if pu.path in ("", "/") or not jobs_url(pu.path):
+            if pu.path in ("", "/") or not jobs_url(pu.path) or NOT_CAREERS.search(unquote(pu.path)):
                 continue
             if re.search(r"\.(pdf|jpe?g|png|docx?)$", pu.path, re.I):
                 continue
@@ -1906,6 +1957,7 @@ _MON = "|".join(sorted(MONTHS, key=len, reverse=True))
 DATE_PATTERNS = (
     (re.compile(r"(?<!\d)(20\d\d|19\d\d)-(\d\d)-(\d\d)(?!\d)"), lambda m: (m[1], m[2], m[3])),
     (re.compile(r"(?<![\d.])(\d{1,2})\.\s?(\d{1,2})\.\s?(20\d\d|19\d\d)(?!\d)"), lambda m: (m[3], m[2], m[1])),
+    (re.compile(r"(?<![\d.])(20\d\d|19\d\d)\.(\d{2})\.(\d{2})(?![\d.])"), lambda m: (m[1], m[2], m[3])),
     (re.compile(rf"(?<!\d)(\d{{1,2}})\.?\s+({_MON})\.?\s+(20\d\d|19\d\d)(?!\d)", re.I),
      lambda m: (m[3], MONTHS[m[2].lower()], m[1])),
     (re.compile(rf"\b({_MON})\.?\s+(\d{{1,2}}),?\s+(20\d\d|19\d\d)(?!\d)", re.I),
@@ -2130,13 +2182,29 @@ async def prepare_scope(sp: _Spend, ctx: CompanyContext, v: Verdict) -> Scope:
                 continue  # the company's own alternate domain
             other_mail.add(dom)
     codeclared = await _codeclared(sp, ctx, home)
-    if codeclared and v.method == "orgnr_on_page" and not others:
-        codeclared = {}  # the site prints our org number and no other: it speaks for us
+    if codeclared and v.method == "orgnr_on_page" and not others and _orgnr_in_operator_position(v, ctx.org):
+        alltext = " ".join(p.text for p in v.pages)
+        if not any((rx := _full_name_rx(n)) and rx.search(alltext) for n in codeclared.values()):
+            codeclared = {}  # our org number in an operator position, and the other declarant is never named
     e = ctx.registry or {}
     a = e.get("forretningsadresse") or {}
     srx = _street_regex(([x for x in a.get("adresse") or [] if x] or [""])[-1]) if a.get("adresse") else None
     addr = (srx, a["postnummer"]) if srx and a.get("postnummer") else None
     return Scope(ctx.org, words, others, sisters, dominant, v.cross, v.path_scoped, other_mail, codeclared, addr)
+
+
+def _orgnr_in_operator_position(v: Verdict, org: str) -> bool:
+    """Our org number sits in the footer, header, contact or imprint block, or on a contact, about or privacy page."""
+    for p in v.pages:
+        if not find_orgnr(p, org):
+            continue
+        path = unquote(urlsplit(p.url).path)
+        if OPERATOR_PAGE.search(path) or re.search(r"(?i)personvern|privacy", path):
+            return True
+        g = f"{org[:3]}[\\s.\u00a0]?{org[3:6]}[\\s.\u00a0]?{org[6:]}"
+        if re.search(g, _operator_text(p)):
+            return True
+    return False
 
 
 _HJEM_CACHE: dict[str, list[dict]] = {}
@@ -2269,7 +2337,7 @@ def emit_site(ctx: CompanyContext, v: Verdict, scope: Scope | None = None) -> li
 
 # ---------------------------------------------------------------- canonical values (Builderr's shapes)
 SOCIAL_HOSTS = {"linkedin": "linkedin.com", "facebook": "facebook.com", "instagram": "instagram.com",
-                "youtube": "youtube.com", "x": "x.com", "tiktok": "tiktok.com"}
+                "youtube": "youtube.com", "x": "x.com", "tiktok": "tiktok.com", "pinterest": "pinterest.com"}
 
 
 class CanonicalSocial(str):
@@ -2299,6 +2367,9 @@ class CanonicalSocial(str):
 def canonical_social(platform: str, url: str) -> CanonicalSocial:
     p = urlsplit(url)
     value = (SOCIAL_HOSTS[platform] + p.path.rstrip("/")).lower()
+    ids = [v for k, v in parse_qsl(p.query) if k == "id" and v.isdigit()]
+    if p.path.endswith("profile.php") and ids:
+        value = f"facebook.com/profile.php?id={ids[0]}"
     return CanonicalSocial(value, platform, url)
 
 
@@ -2411,10 +2482,37 @@ def article_datetime(page: Page) -> tuple[str, str] | None:
     return None
 
 
+def inline_news(page: Page) -> list[dict]:
+    """Dated items listed on a page without links of their own: a short standalone date next to a heading
+    (e.g. <p class="datetime">2024.07.04</p><h5>title</h5>). The item URL is the page with a fragment."""
+    out, seen = [], set()
+    for node in page.soup.find_all(string=True):
+        text = re.sub(r"\s+", " ", str(node)).strip()
+        if not text or len(text) > 40 or not any(rx.search(text) for rx, _ in DATE_PATTERNS):
+            continue
+        block = node.parent.parent if node.parent is not None else None
+        if block is None or len(block.get_text(" ", strip=True)) > 1500:
+            continue
+        heads = block.find_all(re.compile(r"^h[2-6]$"))
+        if len(heads) != 1:
+            continue
+        found = find_date(node.parent)
+        title = _clean(heads[0].get_text(" ", strip=True), 200)
+        if not found or not title or len(title) < 8 or (title, found[0]) in seen:
+            continue
+        seen.add((title, found[0]))
+        slug = re.sub(r"[^a-z0-9]+", "-", _translit(title)).strip("-")[:60]
+        out.append({"title": title, "url": page.url.split("#")[0] + "#" + slug, "datetime": found[0],
+                    "title_span": title, "date_span": found[1], "inline": True})
+    return out
+
+
 def _news_ok(item: dict, floor: str, domain: str) -> bool:
     day = item["datetime"][:10]
     today = datetime.now(timezone.utc).date().isoformat()
     path = urlsplit(item["url"]).path
+    if item.get("inline"):
+        path = "/#inline"
     return (floor <= day <= today and same_site(host_of(item["url"]), domain) and path not in ("", "/")
             and not NOT_POST.search(path + "/") and not SAMPLE_POST.match(item["title"])
             and not PLACEHOLDER.search(item["title"]) and not PLACEHOLDER_SLUG.search(item["url"])
@@ -2441,12 +2539,25 @@ async def collect_dated_news(sp: "_Spend", ctx: CompanyContext, pages: list[Page
     floor = _date_floor(ctx)
     found: dict[str, tuple[dict, Snapshot, Page | None]] = {}
 
+    def clean_feed(items: list[dict]) -> list[dict]:
+        # a hacked site's feed full of spam is not company news: drop the whole feed
+        return [] if any(SPAM.search(it["title"]) for it in items) else items
+
     def keep(items: list[dict], snap: Snapshot) -> None:
         for it in items:
             it["url"] = urljoin(origin + "/", it["url"])
             if _news_ok(it, floor, domain) and it["url"] not in found:
                 found[it["url"]] = (it, snap, None)
 
+    if _is_wordpress(home) and sp.can(1):
+        try:  # WordPress: the REST list gives the newest 20 posts in one request
+            snap = await sp.get(origin + "/wp-json/wp/v2/posts?per_page=20&_fields=title,link,date_gmt")
+            if snap.status == 200:
+                keep(clean_feed(_wp_posts(snap.content.decode("utf-8", "replace"))), snap)
+        except (BudgetExhausted, _OutOfRequests):
+            raise
+        except Exception:
+            pass
     feeds: list[str] = []
     for p in pages:
         for ln in p.soup.find_all("link", attrs={"type": FEED_TYPES}):
@@ -2457,11 +2568,7 @@ async def collect_dated_news(sp: "_Spend", ctx: CompanyContext, pages: list[Page
         feeds.append(origin + "/feed/")
     if not feeds and _is_wix(home):
         feeds.append(origin + "/blog-feed.xml")
-    def clean_feed(items: list[dict]) -> list[dict]:
-        # a hacked site's feed full of spam is not company news: drop the whole feed
-        return [] if any(SPAM.search(it["title"]) for it in items) else items
-
-    for feed in feeds[:2]:
+    for feed in ([] if found else feeds[:2]):
         if not sp.can(1):
             break
         try:
@@ -2471,18 +2578,20 @@ async def collect_dated_news(sp: "_Spend", ctx: CompanyContext, pages: list[Page
         except Exception:
             continue
         if snap.status == 200 and b"<" in snap.content[:300]:
-            keep(clean_feed(parse_feed(snap.content.decode("utf-8", "replace"))), snap)
+            items = clean_feed(parse_feed(snap.content.decode("utf-8", "replace")))
+            keep(items, snap)
+            # a WordPress feed holds 10 posts per page: read page 2 as well
+            if items and len(found) < limit and urlsplit(feed).path.rstrip("/").endswith("feed") and sp.can(1):
+                try:
+                    snap2 = await sp.get(feed + ("&" if "?" in feed else "?") + "paged=2")
+                    if snap2.status == 200:
+                        keep(clean_feed(parse_feed(snap2.content.decode("utf-8", "replace"))), snap2)
+                except (BudgetExhausted, _OutOfRequests):
+                    raise
+                except Exception:
+                    pass
         if found:
             break
-    if not found and _is_wordpress(home) and sp.can(1):
-        try:
-            snap = await sp.get(origin + "/wp-json/wp/v2/posts?per_page=20&_fields=title,link,date_gmt")
-            if snap.status == 200:
-                keep(clean_feed(_wp_posts(snap.content.decode("utf-8", "replace"))), snap)
-        except (BudgetExhausted, _OutOfRequests):
-            raise
-        except Exception:
-            pass
     if not found:
         listing = news_listing_link(pages, domain)
         probes = [listing] if listing else [origin + p for p in NEWS_PROBES]
@@ -2492,6 +2601,24 @@ async def collect_dated_news(sp: "_Spend", ctx: CompanyContext, pages: list[Page
             page, _st = await _fetch_page(sp, url)
             if not page or not same_site(page.host, domain) or urlsplit(page.url).path in ("", "/"):
                 continue
+            # a blog collection often has its own feed (Squarespace: <collection>?format=rss)
+            lfeeds = [urljoin(page.url, ln.get("href") or "") for ln in page.soup.find_all("link", attrs={"type": FEED_TYPES})]
+            lfeeds = [u for u in lfeeds if same_site(host_of(u), domain) and "comments" not in u]
+            if not lfeeds and b"squarespace" in page.snap.content.lower():
+                lfeeds = [page.url.split("?")[0] + "?format=rss"]
+            for lf in lfeeds[:1]:
+                if not sp.can(1):
+                    break
+                try:
+                    fs = await sp.get(lf)
+                    if fs.status == 200:
+                        keep(clean_feed(parse_feed(fs.content.decode("utf-8", "replace"))), fs)
+                except (BudgetExhausted, _OutOfRequests):
+                    raise
+                except Exception:
+                    pass
+            if found:
+                break
             listing_pages = [page]
             nxt = page.soup.find("a", attrs={"rel": "next"}, href=True) or page.soup.find(
                 "a", href=re.compile(r"(/page/2/?$|[?&]page=2$|/side/2/?$)"))
@@ -2518,6 +2645,11 @@ async def collect_dated_news(sp: "_Spend", ctx: CompanyContext, pages: list[Page
                     it.update(datetime=got[0], date_span=got[1], title_span=it["title"])
                     found[url] = (it, art.snap, None)
     if not found:
+        for p in pages[:1]:  # dated items listed on the front page itself
+            for it in inline_news(p):
+                if _news_ok(it, floor, domain) and it["url"] not in found:
+                    found[it["url"]] = (it, p.snap, None)
+    if not found:
         return
     if _activity_blocked(ctx, "dated_news"):
         return
@@ -2540,6 +2672,15 @@ ATS_POSTING = re.compile(r"(?i)(webcruiter\.no|jobbnorge\.no|recman\.(no|page)|t
                          r"easycruit\.com|jobylon\.com|reachmee\.com|varbi\.com|smartrecruiters\.com)")
 
 
+RECRUIT_TEXT = re.compile(r"(?i)ledige stillinger|ledig stilling|vi søker|vi ser etter|jobb hos oss|jobbe hos oss|karriere|"
+                          r"\bcareers?\b|vacanc|\bapply\b|søk nå|søk her|søknadsfrist|send (oss )?(en )?søknad|"
+                          r"open positions|join (our|the) team|stillingsannonse")
+NOT_CAREERS = re.compile(r"(?i)/(jobb-med-meg|cv|om-meg|portfolio|portefolje|min-cv|resume)(/|$)")
+PERSONAL_LETTER = re.compile(r"(?i)med vennlig hilsen|mitt cv|my cv|my resume|curriculum vitae")
+COMPANY_RECRUITING = re.compile(r"(?i)ledige stillinger|ledig stilling|vi søker|jobbe hos oss|jobb hos oss|\bcareers?\b|"
+                                r"vacanc|open positions|join (our|the) team")
+
+
 def _careers_page_ok(page: Page, domain: str, home: Page, probed: bool) -> bool:
     """A real careers page: on the verified domain, not the front page (or a copy of it served at another
     path), and with a jobs word in its path or heading; a probed page needs the jobs word in its heading."""
@@ -2547,6 +2688,12 @@ def _careers_page_ok(page: Page, domain: str, home: Page, probed: bool) -> bool:
     if not same_site(page.host, domain) or path in ("", "/") or is_parked(page):
         return False
     if page.snap.sha256 == home.snap.sha256 or page.text == home.text:
+        return False
+    if NOT_CAREERS.search(unquote(path)):
+        return False  # a person's own CV or portfolio page, not a company hiring
+    if PERSONAL_LETTER.search(page.text[:6000]) and not COMPANY_RECRUITING.search(page.text[:8000]):
+        return False  # a personal application letter, not a company hiring
+    if not RECRUIT_TEXT.search(page.text[:8000]) and not any(str(d.get("@type")) == "JobPosting" for d in page.jsonld):
         return False
     head = " ".join([page.soup.title.get_text(" ", strip=True) if page.soup.title else ""] +
                     [h.get_text(" ", strip=True) for h in page.soup.find_all(["h1", "h2"])[:3]])

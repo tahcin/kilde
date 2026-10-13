@@ -281,7 +281,7 @@ def test_partner_social_links_dropped_and_footer_id_kept():
     ctx = ctx_for(hjemmeside="fjellbekk.no")
     run(f, ctx)
     urls = sorted(str(c.value) for c in ctx.claims if c.field == "social_profile")
-    assert urls == ["instagram.com/fjellbekk.no"]  # profile.php links are never published
+    assert urls == ["facebook.com/profile.php?id=10001234", "instagram.com/fjellbekk.no"]
     assert "https://www.instagram.com/kafe_solsikke" in ctx.facts["website_social_dropped"]
 
 
@@ -1169,3 +1169,109 @@ def test_every_candidate_unreachable_after_dns_is_failed(monkeypatch):
     ctx = ctx_for(navn="FJELLBEKK TREVARE AS", hjemmeside="fjellbekk.no")
     claims = run(FakeFetcher({}), ctx)
     assert claims["official_website"].availability == "failed"
+
+
+# ---------------------------------------------------------------- round 5 audit fixes
+def test_date_is_never_a_phone():
+    """Sameiet Meto shape: '2024.03.06' after 'Telenor' was read as a phone number."""
+    assert not W.phone_shaped("2024.03.06") and not W.phone_shaped("06.03.2024") and not W.phone_shaped("2024-03-06")
+    assert W.phone_shaped("41 00 00 01") and W.phone_shaped("+47 410 00 001") and W.phone_shaped("41000001")
+    body = (f'<p>Orgnummer: {OURS}</p><div><p>Hjelp fra Telenor bredbånd og TV</p><p class="datetime">2024.03.06</p></div>')
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(_site(body=body), ctx)
+    assert not ctx.claims_for("site_contact_phone")
+
+
+def test_personal_cv_page_is_not_a_hiring_signal():
+    """Flow Studio shape: the owner's own open application linked as 'Jobb med meg'."""
+    body = f'<a href="/jobb-med-meg">Jobb med meg</a><footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>'
+    cv = html("<h1>Jobb med meg</h1><p>Åpen søknad. Mulige stillinger innen reiseliv. Med vennlig hilsen Kari</p>")
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(_site({"https://fjellbekk.no/jobb-med-meg": (200, cv)}, body=body), ctx)
+    assert not ctx.claims_for("hiring_signal")
+
+
+def test_facebook_placeholders_rejected_and_profile_id_canonical():
+    for u in ("https://www.facebook.com/me", "https://www.facebook.com/sharer/sharer.php?u=x", "https://facebook.com/home",
+              "https://www.facebook.com/groups/123", "https://www.facebook.com/pages/Fjellbekk"):
+        assert W.clean_social(u) is None, u
+    c = W.clean_social("https://www.facebook.com/profile.php?id=61575193973139&ref=x")
+    assert str(W.canonical_social(*c)) == "facebook.com/profile.php?id=61575193973139"
+    p = W.clean_social("https://no.pinterest.com/fjellbekk/")
+    assert str(W.canonical_social(*p)) == "pinterest.com/fjellbekk"
+
+
+def test_shared_registry_website_with_orgnr_on_privacy_page_and_other_never_named():
+    """Grafia shape: another company declares the site in Brreg; our org number is the privacy-page operator."""
+    body = '<h1>Fjellbekk</h1><a href="/personvern/">Personvern</a><a href="mailto:post@fjellbekk.no">x</a>'
+    priv = html(f"<p>Vi er Fjellbekk Trevare AS med org nr {OURS} og vår nettstedsadresse er https://fjellbekk.no</p>")
+    rows = [{"organisasjonsnummer": SISTER, "navn": "FJELLBEKK DESIGN AS", "hjemmeside": "www.fjellbekk.no"}]
+    pages = {"https://fjellbekk.no/": (200, html(body)), "https://fjellbekk.no/personvern/": (200, priv)}
+    pages.update(_hjem("fjellbekk.no", rows))
+    claims = run(FakeFetcher(pages), ctx_for(epostadresse="post@fjellbekk.no"))
+    assert claims["site_contact_email"].value == "post@fjellbekk.no"
+    # the same site, but the other declarant is named on it: derive nothing
+    W._HJEM_CACHE.clear()
+    body2 = body + "<footer>Design: Fjellbekk Design AS</footer>"
+    pages["https://fjellbekk.no/"] = (200, html(body2))
+    claims2 = run(FakeFetcher(pages), ctx_for(epostadresse="post@fjellbekk.no"))
+    assert claims2["site_contact_email"].availability == "ambiguous"
+
+
+def test_wordpress_rest_posts_first_and_feed_page_two():
+    wp = json.dumps([{"title": {"rendered": f"Sak nummer {i}"}, "link": f"https://fjellbekk.no/sak-{i}/",
+                      "date_gmt": f"2026-0{1 + i % 8}-1{i % 9}T10:00:00"} for i in range(12)])
+    body = f'<link href="/wp-content/a.css"><footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>'
+    f = _site({"https://fjellbekk.no/wp-json/wp/v2/posts?per_page=20&_fields=title,link,date_gmt": (200, wp, "application/json")},
+              body=body)
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(f, ctx)
+    assert len([c for c in ctx.claims if c.field == "dated_news"]) == 12
+
+
+def test_squarespace_blog_collection_feed():
+    body = f'<a href="/blog">Blog</a><footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>'
+    blog = html('<p>squarespace blog</p>')
+    rss = ('<rss><channel><item><title>Finn stødighet</title><link>https://fjellbekk.no/blog/finn</link>'
+           '<pubDate>Thu, 06 Nov 2025 09:00:00 +0000</pubDate></item></channel></rss>')
+    f = _site({"https://fjellbekk.no/blog": (200, blog), "https://fjellbekk.no/blog?format=rss": (200, rss, "application/rss+xml")},
+              body=body)
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(f, ctx)
+    assert [c.value for c in ctx.claims if c.field == "dated_news"] == ["Finn stødighet (2025-11-06T09:00:00+00:00)"]
+
+
+def test_front_page_news_without_links():
+    """Sameiet Meto shape: board news on the front page as a date line and a heading."""
+    body = (f'<p>Orgnummer: {OURS}</p>'
+            '<div class="news_description"><p class="datetime">2024.07.04</p><h5>Oppdatert informasjon til beboere</h5>'
+            '<p>Tekst</p></div>'
+            '<div class="news_description"><p class="datetime">2024.03.06</p><h5>Oppsummering styremøte 05.03.2024</h5></div>')
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(_site(body=body), ctx)
+    assert [c.value for c in ctx.claims if c.field == "dated_news"] == [
+        "Oppdatert informasjon til beboere (2024-07-04)", "Oppsummering styremøte 05.03.2024 (2024-03-06)"]
+
+
+def test_company_careers_page_inviting_open_applications_is_kept():
+    body = f'<a href="/ledige-stillinger">Ledige stillinger</a><footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>'
+    jobs = html("<h1>Ledige stillinger</h1><p>Ingen ledige stillinger nå, men send oss gjerne en åpen søknad.</p>")
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(_site({"https://fjellbekk.no/ledige-stillinger": (200, jobs)}, body=body), ctx)
+    assert [c.value for c in ctx.claims if c.field == "hiring_signal"] == ["https://fjellbekk.no/ledige-stillinger"]
+
+
+def test_open_data_seed_is_a_candidate_with_no_special_trust(monkeypatch):
+    monkeypatch.setattr(W, "_SEEDS", {OURS: [{"domain": "kvist-bygg.no", "sources": ["overture_phone"]},
+                                             {"domain": "annet.no", "sources": ["osm_orgnr"]}]})
+    ctx = ctx_for(navn="FJELLBEKK TREVARE AS")
+    cands = W.candidates(ctx)
+    assert ("annet.no", "seed:osm_orgnr", None) in cands and cands.index(("annet.no", "seed:osm_orgnr", None)) < 3
+    pages = {"https://kvist-bygg.no/": (200, html(f"<footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>")),
+             "https://annet.no/": (200, html("<h1>Fjellbekk Trevare</h1>"))}
+    claims = run(FakeFetcher(pages), ctx)
+    assert claims["official_website"].value == "kvist-bygg.no"  # proven by our org number, like any candidate
+    ctx2 = ctx_for(navn="FJELLBEKK TREVARE AS")
+    monkeypatch.setattr(W, "_SEEDS", {OURS: [{"domain": "annet.no", "sources": ["osm_orgnr"]}]})
+    run(FakeFetcher({"https://annet.no/": (200, html("<h1>Fjellbekk Trevare</h1>"))}), ctx2)
+    assert not ctx2.claims_for("official_website")  # a name alone never proves a seed
