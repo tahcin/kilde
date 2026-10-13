@@ -84,3 +84,29 @@ def test_size_budget_for_1500_companies(tmp_path):
     p = tmp_path / "big.html"
     write_report(envs, str(p), {"run_id": "big"})
     assert os.path.getsize(p) < 15 * 1024 * 1024
+
+
+def test_html_comment_in_quotes_keeps_json_valid(tmp_path):
+    envs = load()
+    envs[0]["evidence"][0]["claim_span"] = "<!-- footer --> Org. nr. 999 100 001"
+    p = tmp_path / "r.html"
+    write_report(envs, str(p), {})
+    html = p.read_text(encoding="utf-8")
+    assert "<!--" not in html.split('id="data">', 1)[1].split("</script>", 1)[0]
+    assert embedded(html, "data")["co"][0]["ev"][0][3].startswith("<!-- footer -->")
+
+
+def test_large_runs_embed_compressed_exact_data(tmp_path, monkeypatch):
+    import base64
+    import gzip
+
+    import kilde.report as report
+    plain = len(report._embed(build_data(load())).encode("utf-8"))
+    monkeypatch.setattr(report, "MAX_BYTES", plain - 1)  # just too big as plain JSON, so it is compressed
+    p = tmp_path / "r.html"
+    report.write_report(load(), str(p), {})
+    html = p.read_text(encoding="utf-8")
+    m = re.search(r'<script type="application/octet-stream" id="data" data-encoding="gzip\+base64">(.*?)</script>', html, re.S)
+    assert m
+    data = json.loads(gzip.decompress(base64.b64decode(m.group(1))))
+    assert data == json.loads(json.dumps(build_data(load())))

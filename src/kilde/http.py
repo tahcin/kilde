@@ -79,6 +79,8 @@ class Fetcher:
         self.per_host_limit = per_host
         # Documented open APIs with no published rate limit get slightly more parallelism.
         self.host_limits = {"data.brreg.no": 6}
+        # Slow but permitted sources get a longer read timeout (NAV's feed took up to 60 s on Oct 13).
+        self.host_timeouts = {"pam-stilling-feed.nav.no": 60.0}
         self.hosts: dict[str, asyncio.Semaphore] = {}
         self.robots: dict[str, Protego | None] = {}
         self.robots_locks: dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
@@ -186,7 +188,9 @@ class Fetcher:
             if attempt:
                 self.budget.take(urlsplit(url).netloc.lower())  # a retry is another outbound request
             try:
-                r = await self.client.get(url, headers=headers)
+                slow = self.host_timeouts.get(urlsplit(url).netloc.lower())
+                r = await self.client.get(url, headers=headers, timeout=slow) if slow else \
+                    await self.client.get(url, headers=headers)
                 if r.status_code in (429, 503) and attempt == 0:
                     await asyncio.sleep(min(float(r.headers.get("retry-after", "2") or 2), 5))
                     continue

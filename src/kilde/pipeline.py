@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 from typing import Any, Awaitable, Callable
 
-from . import __version__
+from . import __version__, gate
 from .connectors import accounts, brreg
 from .http import Blocked, Budget, BudgetExhausted, Fetcher
 from .model import SECTIONS, CompanyContext, utc_now
@@ -20,7 +20,8 @@ from .spans import MAX_SPAN, repair
 from .synthesis import summarise
 
 log = logging.getLogger("kilde")
-STEP_TIMEOUT = {"website": 25, "registry": 20, "jobs": 15, "report_copies": 10}
+COPIES_WINDOW = 28 * 60  # seconds; the endpoint asks for about 30 requests a minute
+STEP_TIMEOUT = {"website": 25, "registry": 20, "jobs": 90, "report_copies": 10}
 STATE_RANK = ["available", "ambiguous", "blocked", "not_available", "not_applicable", "failed"]
 
 
@@ -182,11 +183,11 @@ async def run_batch(orgs: list[str], opt: Options) -> tuple[list[dict], dict]:
                 await _step(ctx, "signature", lambda: brreg.fetch_signature(f, ctx), "signature_rule", "leadership")
 
     # The annual-report copy endpoint asks for about 30 requests a minute, so it runs as one
-    # paced background queue next to phase B and stops after 15 minutes instead of slowing the run.
+    # paced background queue next to phase B and stops after COPIES_WINDOW instead of slowing the run.
     async def copies_queue() -> None:
         if not want("report_copies"):
             return
-        stop = min(deadline_b, budget.started + 15 * 60)
+        stop = min(deadline_b, budget.started + COPIES_WINDOW)
         for ctx in ctxs.values():
             if time.monotonic() > stop - 3 or budget.remaining_requests() < 10:
                 break
@@ -202,8 +203,13 @@ async def run_batch(orgs: list[str], opt: Options) -> tuple[list[dict], dict]:
     completed_at = utc_now()
     commit = git_commit()
     snap_dir = opt.out_dir / "snapshots"
+    gate_notes: list[str] = []
     for org in orgs:
         ctx = ctxs[org]
+        try:
+            gate_notes += gate.check(ctx)
+        except Exception as exc:  # noqa: BLE001
+            ctx.error("gate", repr(exc))
         if org in feed:
             try:
                 brreg.emit_change_claims(ctx, *feed[org])
@@ -222,6 +228,7 @@ async def run_batch(orgs: list[str], opt: Options) -> tuple[list[dict], dict]:
         "run_id": opt.run_id, "agent": "Kilde", "version": __version__, "commit": commit,
         "started_at": started_at, "completed_at": completed_at, "expected_count": len(orgs),
         "emitted_envelopes": len(envelopes), "runtime_ms": int((time.monotonic() - t0) * 1000),
+        "publication_gate": {"withheld": len(gate_notes), "notes": gate_notes[:200]},
         "operations": {"requests": budget.used, "max_requests": opt.max_requests, "dns_lookups": budget.dns_lookups,
                        "cache_hits": budget.cache_hits, "by_host": dict(sorted(budget.by_host.items(), key=lambda x: -x[1])[:25]),
                        "third_party_cost_usd": 0.0, "llm_calls": 0, "time_budget_seconds": opt.seconds},
