@@ -1,6 +1,6 @@
 # 1,000 company profiles
 
-Produced on Oct 13, 2026 from a fresh clone of this repository at commit `557f0a5`, on 1,000 random companies from Builderr's public universe (seed 1000, none used during development):
+Produced on Oct 14, 2026 from a fresh clone of this repository at commit `94a2493`, on 1,000 random companies from Builderr's public universe (seed 1000, none used during development):
 
 ```bash
 uv run --frozen kilde run --organisations companies-1000.jsonl --output run1000/envelopes.jsonl --run-id profiles-1000 --expected-count 1000
@@ -14,13 +14,14 @@ uv run --frozen kilde run --organisations companies-1000.jsonl --output run1000/
 | `report.html` | the self-contained report for all 1,000 companies |
 | `snapshots.tar.gz` | the saved responses behind every quoted span |
 
-Result: 1,000 of 1,000 envelopes, validation passed, 8,916 outbound HTTP requests (about 9 per company), 12.5 minutes, $0.
+Result: 1,000 of 1,000 envelopes, validation passed, 13,233 outbound HTTP requests (about 13 per company), 22.5 minutes while three other runs shared the same connection, $0.
 
 | Fact family | Companies | Facts |
 |---|---|---|
-| Verified official website | 120 | 120 |
-| Social profiles | 51 | 108 |
-| Hiring signals (careers pages, postings, NAV ads) | 19 | 32 |
+| Verified official website | 98 | 98 |
+| Related website (page on a shared or group site, labelled) | 29 | 29 |
+| Social profiles | 55 | 113 |
+| Hiring signals (careers pages, postings, NAV ads) | 22 | 34 |
 | NAV job ads | 8 | 19 |
 | Dated news posts | 22 | 249 |
 | State aid awards (Støtteregisteret) | 94 | 578 |

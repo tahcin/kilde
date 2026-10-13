@@ -2,12 +2,12 @@
   "run_id": "profiles-1000",
   "agent": "Kilde",
   "version": "1.0.0",
-  "commit": "557f0a548a2cd6e9cfeaeded49817b9aff5e138b",
-  "started_at": "2026-10-13T14:54:30Z",
-  "completed_at": "2026-10-13T15:06:39Z",
+  "commit": "94a2493084ed775b7862ed363e30c88f661fcf06",
+  "started_at": "2026-10-13T17:31:49Z",
+  "completed_at": "2026-10-13T17:54:02Z",
   "expected_count": 1000,
   "emitted_envelopes": 1000,
-  "runtime_ms": 751121,
+  "runtime_ms": 1350348,
   "publication_gate": {
     "withheld": 4,
     "notes": [
@@ -17,43 +17,43 @@
       "931567306 social_profile: social handle 'company/radical-technologies-as' names another legal entity (sas)"
     ]
   },
-  "website_retries": 12,
+  "website_retries": 167,
   "company_runtime_ms": {
-    "p50": 12446,
-    "p95": 32259,
-    "max": 100110
+    "p50": 17902,
+    "p95": 51473,
+    "max": 130154
   },
   "operations": {
-    "requests": 8916,
+    "requests": 13233,
     "max_requests": 20000,
-    "dns_lookups": 12320,
+    "dns_lookups": 23038,
     "cache_hits": 0,
     "by_host": {
-      "data.brreg.no": 4499,
+      "data.brreg.no": 5588,
       "sgregister.dibk.no": 188,
       "api.finanstilsynet.no": 63,
       "api.gleif.org": 38,
       "pam-stilling-feed.nav.no": 23,
-      "styrerommet.no": 17,
+      "www.borettslaget.no": 23,
+      "hans-helseth.no": 19,
+      "msm.no": 19,
+      "byggevarervest.no": 18,
+      "vannmeisling.no": 18,
+      "puerfons.no": 18,
+      "www.sameiet.no": 17,
       "vestbo.no": 17,
-      "jeloyelektro.no": 15,
-      "rengo.no": 15,
-      "memotwins.no": 15,
-      "al-injaaz.no": 15,
-      "focussecurity.no": 15,
-      "takkforbilen.no": 15,
-      "fjolgsauna.no": 15,
-      "jolleutstyr.no": 15,
-      "puerfons.no": 14,
-      "radiosandefjord.no": 13,
-      "www.usbl.no": 13,
-      "stereoprod.no": 13,
-      "www.aktivsprinkler.no": 13,
-      "www.kafeoslo.no": 13,
-      "bstromnaes.no": 13,
-      "www.straumr.no": 13,
-      "trykkmann.no": 13,
-      "www.sorskaar.no": 13
+      "lienelektro.no": 17,
+      "www.datahjelposlo.no": 16,
+      "jeloyelektro.no": 16,
+      "www.kafeoslo.no": 16,
+      "rengo.no": 16,
+      "www.halob.no": 16,
+      "backout.no": 16,
+      "versiro.com": 16,
+      "emeliehudpleie.no": 16,
+      "al-injaaz.no": 16,
+      "focussecurity.no": 16,
+      "takkforbilen.no": 16
     },
     "third_party_cost_usd": 0.0,
     "llm_calls": 0,
@@ -70,17 +70,18 @@
     }
   },
   "inputs": {
-    "organisations": "/private/tmp/claude-502/-Users-naresh-Desktop-Personal-hackathons/0abf2698-3d46-4e38-922f-4e551a399902/scratchpad/final/companies-1000.jsonl",
+    "organisations": "companies-1000.jsonl",
     "bulk": null,
-    "previous_envelopes": 0
+    "previous_envelopes": 0,
+    "distinct_inputs": 1000
   },
   "coverage": {
     "identity": 1.0,
     "financials": 1.0,
     "leadership": 0.997,
     "locations": 0.752,
-    "web_presence": 0.12,
-    "hiring": 0.019,
+    "web_presence": 0.127,
+    "hiring": 0.022,
     "activity": 1.0
   }
 }

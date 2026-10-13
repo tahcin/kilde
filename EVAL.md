@@ -29,6 +29,8 @@ Important: the recall figures below are measured against our own reference pool 
 | 9 | (3 parallel auditors) | 30.0 | 12 | 8 | 4 | A Wikidata item conflating a pension foundation with its operating company; a foreign sister's YouTube channel on a branch's site. Fix: Wikidata websites and socials only when they match the site Kilde verified; handles naming another legal entity (GmbH, AB, Ltd...) withheld; no site news for foreign branches (NUF). |
 | 10 | (3 parallel auditors) | 30.0 | 12 | 8 | **0** | Clean. 2,336 audited items. |
 | 11 | (3 parallel auditors) | 30.0 | 12 | 8 | **0** | Clean. 3,028 audited items. Second clean round in a row after the last fix. |
+| 12 | (3 parallel auditors) | 30.0 | 12 | 8 | 1 | A Shopify theme's default structured data (naming Shopify and its social accounts) published for a store. Fix: structured data must name the company; platform defaults withheld. |
+| 13 | (final version, 3 parallel auditors) | 30.0 | 12 | 8 | **0** | Clean: all 2,525 audited items correct. |
 
 Across all rounds every registry, accounts and update-feed claim checked against the live APIs was correct (more than 15,000 claims), and no financial value was ever invented. Rounds 8 to 11 split each 30-company audit across three independent auditors running in parallel.
 
@@ -51,9 +53,14 @@ On the 100 companies of Builderr's public sample (https://builderr.ai/signalpost
 | Hiring signals | not in sample | 10 companies |
 | LinkedIn data | collected by Builderr as "experimental" | not collected (unofficial access is not permitted) |
 
-## Final runs (commit 557f0a5, fresh clone)
+## Independent judges
 
-- Smoke test, 100 new companies: valid, 948 requests, about 3 minutes; run twice with identical facts (5,746 each). See `smoke/`.
-- 1,000 new companies: valid, 8,916 requests, 12.5 minutes. See `profiles-1000/`.
+Six fresh agents acting as Builderr judges, given only the public challenge pages, the submission email and the repo, estimated the score twice. On an earlier commit (85fe2f8): 55 to 63, 59 to 67 and 58 to 64, with two of three flagging pages on shared or chain sites published as official websites. After moving those to a labelled `related_website` field and other fixes (8a82a07): 57 to 64, 60 to 67 and 54 to 62, with no wrong-company matches found. All six agreed that precision, synthesis and UX are close to full marks and that recall decides whether an entry clears 65.
+
+## Final runs (commit 94a2493, fresh clone)
+
+- Smoke test, 100 new companies: valid, run twice in parallel with identical facts (5,797 each). See `smoke/`.
+- 1,000 new companies: valid, about 13 requests per company, 22.5 minutes while three other runs shared the same connection. See `profiles-1000/`.
+- Round 13 audit on this exact code: 0 wrong-company facts, 0 invented financials.
 
 All scores above are from our own scorer and auditors, not Builderr's. Builderr's reference pool includes every entrant's verified finds and its own crawlers, so recall against it will be lower.

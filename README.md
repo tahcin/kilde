@@ -40,8 +40,8 @@ Options: `--previous <envelopes.jsonl>` (refresh against an earlier run), `--sta
 ## Results
 
 - [`smoke/`](smoke/): the 100-company smoke test Builderr asks for, produced from a clean clone with the command above, with the HTML report, every saved snapshot, and a second run showing identical facts.
-- [`profiles-1000/`](profiles-1000/): 1,000 company profiles from a clean clone (12.5 minutes, about 9 requests per company, $0).
-- [EVAL.md](EVAL.md): eleven audited evaluation rounds on fresh random samples, the determinism drill, and a benchmark against Builderr's own 100-company sample.
+- [`profiles-1000/`](profiles-1000/): 1,000 company profiles from a clean clone (about 13 requests per company, $0).
+- [EVAL.md](EVAL.md): thirteen audited evaluation rounds on fresh random samples, independent judge reviews, the determinism drill, and a benchmark against Builderr's own 100-company sample.
 
 ## Envelope
 
