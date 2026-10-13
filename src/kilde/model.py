@@ -104,6 +104,7 @@ class CompanyContext:
         self.evidence: list[Evidence] = []
         self.snapshots: dict[str, Snapshot] = {}  # evidence id -> snapshot to persist
         self.anchors: dict[str, tuple[str, Any]] = {}  # evidence id -> JSON pair naming the record
+        self.cores: dict[str, str] = {}  # evidence id -> the value its quoted span must contain
         self.errors: list[dict[str, Any]] = []
         self.registry: dict[str, Any] | None = None  # raw Enhetsregisteret record
         self.facts: dict[str, Any] = {}  # scratch values shared between connectors
@@ -116,7 +117,7 @@ class CompanyContext:
     def add_evidence(self, snap: Snapshot | None, *, source_url: str | None = None, source_class: str,
                      span: str | None = None, effective_date: str | None = None, method: str,
                      licence: str | None = None, note: str | None = None,
-                     anchor: tuple[str, Any] | None = None) -> Evidence:
+                     anchor: tuple[str, Any] | None = None, core: str | None = None) -> Evidence:
         self._ev += 1
         eid = f"e{self._ev}"
         ev = Evidence(
@@ -140,6 +141,8 @@ class CompanyContext:
             self.snapshots[eid] = snap
         if anchor is not None:
             self.anchors[eid] = anchor
+        if core:
+            self.cores[eid] = core
         return ev
 
     def add_claim(self, field: str, section: str, value: Any, evidence: list[Evidence] | Evidence | None, *,

@@ -77,6 +77,7 @@ async def _step(ctx: CompanyContext, name: str, fn: Callable[[], Awaitable[None]
         for ev in ctx.evidence[n_evidence:]:
             ctx.snapshots.pop(ev.id, None)
             ctx.anchors.pop(ev.id, None)
+            ctx.cores.pop(ev.id, None)
         del ctx.claims[n_claims:]
         del ctx.evidence[n_evidence:]
         ctx.module_states[name] = "timeout"
@@ -453,7 +454,8 @@ def assemble(ctx: CompanyContext, opt: Options, started_at: str, completed_at: s
             p.write_bytes(snap.content)
         ev.snapshot_path = str(rel)
         raw = snap.content.decode("utf-8", errors="replace")
-        span, extra, exact = repair(raw, ev.claim_span, snap.content_type, ctx.anchors.get(ev.id))
+        span, extra, exact = repair(raw, ev.claim_span, snap.content_type, ctx.anchors.get(ev.id),
+                                   ctx.cores.get(ev.id))
         ev.claim_span = clip_span(span)
         ev.span_context = [x[:MAX_SPAN] for x in extra] or None
         ev.span_exact = exact

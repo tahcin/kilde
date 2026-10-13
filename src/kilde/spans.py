@@ -8,6 +8,8 @@ module turns that description into exact raw substrings:
   record named by an optional anchor such as `("id", 7124721)`.
 - HTML and XML: the span's words are matched across tags, whitespace and entities, and the raw
   slice is returned.
+- A core (the value a proof rests on: a name, phone, email, address or org number) must survive in the
+  returned span: a shrunken window that lost it is never quoted (no "Skip to content" for a name proof).
 """
 from __future__ import annotations
 
@@ -163,7 +165,32 @@ def _html_entities(word: str) -> str:
     return "".join(out)
 
 
-def text_span(raw: str, span: str) -> str | None:
+def _core_text(s: str) -> str:
+    """Lower-case letters and digits only, after decoding entities and dropping tags."""
+    import html as _html
+    s = _html.unescape(re.sub(r"<[^>]*>", " ", s or ""))
+    return re.sub(r"[^0-9a-z\u00c0-\u024f]", "", s.lower())
+
+
+def contains_core(hit: str | None, core: str | None, legacy: bool = False) -> bool:
+    """True when a quoted span holds the core value it is evidence for. Tags, entities, case, spacing and
+    punctuation are ignored (+47 22 33 44 55 holds 22334455). On a page in a legacy charset (legacy=True)
+    the saved text has no readable non-ASCII letters, so there the longest ASCII part of the core must be
+    present instead."""
+    if not core:
+        return True
+    if not hit:
+        return False
+    h, c = _core_text(hit), _core_text(core)
+    if c and c in h:
+        return True
+    if legacy and not core.isascii():
+        parts = [x for x in (_core_text(x) for x in re.split(r"[^\x20-\x7e]+", core)) if len(x) >= 3]
+        return bool(parts) and max(parts, key=len) in h
+    return False
+
+
+def text_span(raw: str, span: str, core: str | None = None, legacy: bool = False) -> str | None:
     tokens = _TOKEN.findall(span)
     if not tokens:
         return None
@@ -182,7 +209,7 @@ def text_span(raw: str, span: str) -> str | None:
                 m = re.search(pat, raw)
             except re.error:
                 continue
-            if m and len(m.group(0)) <= 2 * MAX_SPAN:
+            if m and len(m.group(0)) <= 2 * MAX_SPAN and contains_core(m.group(0), core, legacy):
                 return m.group(0)
     return None
 
@@ -239,12 +266,31 @@ def _trim(span: str) -> str:
     return span.strip() or span
 
 
-def repair(raw: str, span: str | None, content_type: str, anchor: tuple[str, Any] | None = None) -> tuple[str | None, list[str], bool]:
-    """Returns (claim_span, extra exact spans, exact?)."""
+def repair(raw: str, span: str | None, content_type: str, anchor: tuple[str, Any] | None = None,
+           core: str | None = None) -> tuple[str | None, list[str], bool]:
+    """Returns (claim_span, extra exact spans, exact?). With a core, the exact span must contain it: the
+    window is tried first, then the core alone; if neither can be quoted, the core is returned as a
+    non-exact description rather than a quote of unrelated text."""
+    if core and span and "json" not in content_type and raw.lstrip()[:1] not in ("{", "["):
+        legacy = "\ufffd" in raw  # saved bytes were not UTF-8 (the page's text was decoded with replacements)
+        hits = [h for h in (_core_repair(raw, span, core, legacy), _core_repair(raw, core, core, legacy)) if h]
+        if hits:
+            short = [h for h in hits if len(h.strip()) <= MAX_SPAN]
+            return _trim(short[0] if short else min(hits, key=len)), [], True
+        return core, [], False
     span, extra, exact = _repair(raw, span, content_type, anchor)
     if exact and span:
         span = _trim(span)
     return span, extra, exact
+
+
+def _core_repair(raw: str, span: str, core: str, legacy: bool) -> str | None:
+    if span in raw and contains_core(span, core, legacy):
+        return span
+    for hit in (attribute_span(raw, span), text_span(raw, span, core, legacy), encoded_span(raw, span)):
+        if hit and contains_core(hit, core, legacy):
+            return hit
+    return None
 
 
 def clip(span: str | None) -> str | None:

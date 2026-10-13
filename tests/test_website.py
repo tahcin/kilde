@@ -2031,3 +2031,72 @@ def test_redirect_to_a_locale_page_of_the_registry_email_domain_stays_cross():
     f = FakeFetcher({"https://fjb.no/no": (200, html(body))}, redirects={"https://fjellbekk.no/": "https://fjb.no/no"})
     claims = run(f, ctx_for(hjemmeside="fjellbekk.no", epostadresse="post@fjb.no"))
     assert claims["official_website"].availability != "available"
+
+
+# ---------------------------------------------------------------- v2: proof spans hold the matched value
+def _assembled_spans(ctx, claim):
+    """Spans as the pipeline publishes them (exact-span repair at assembly, with each evidence's core)."""
+    from kilde.spans import repair
+    out = []
+    for ev in ctx.evidence:
+        if ev.id in claim.evidence_ids:
+            snap = ctx.snapshots[ev.id]
+            span, _, exact = repair(snap.content.decode("utf-8", "replace"), ev.claim_span, snap.content_type,
+                                    ctx.anchors.get(ev.id), ctx.cores.get(ev.id))
+            out.append((span, exact, ctx.cores.get(ev.id)))
+    return out
+
+
+def test_phone_proof_span_contains_the_number_not_nearby_navigation():
+    pad = "y" * 320  # long attributes on both sides: no multi-word window around the number survives
+    body = (f'<footer><a class="skip-link" href="#main">Skip to content</a><div class="bar" data-x="{pad}">'
+            f'<span>41000001</span></div><div class="brand" data-x="{pad}">Fjellbekk Trevare AS</div></footer>')
+    f = FakeFetcher({"https://fjellbekktrevare.no/": (200, html(body))})
+    ctx = ctx_for(telefon="41000001")
+    site = run(f, ctx)["official_website"]
+    assert site.match["method"] == "phone_and_name"
+    got = _assembled_spans(ctx, site)
+    assert [c for _, _, c in got] == ["41000001", "Fjellbekk Trevare"]
+    for span, exact, core in got:
+        assert exact and core.lower() in span.lower(), span
+
+
+def test_name_and_address_proof_spans_contain_name_and_address():
+    pad = "z" * 320
+    body = (f'<p>Hopp til innhold</p><nav data-x="{pad}">Meny Hjem Om oss</nav><h2>Fjellbekk Trevare AS</h2>'
+            f'<p data-x="{pad}">Lyngveien 12 B,</p><p>9999 Testby</p>')
+    f = FakeFetcher({"https://fjellbekktrevare.no/": (200, html(body, title="Velkommen"))})
+    ctx = ctx_for()
+    site = run(f, ctx)["official_website"]
+    assert site.match["method"] == "address_and_name"
+    from kilde.spans import contains_core
+    for span, exact, core in _assembled_spans(ctx, site):
+        assert core and exact and contains_core(span, core), (span, core)
+    cores = [c for _, _, c in _assembled_spans(ctx, site)]
+    assert "9999" in cores[0] and "Lyngveien" in cores[0]
+
+
+def test_contains_core_ignores_markup_spacing_case_and_entities():
+    from kilde.spans import contains_core
+    assert contains_core('<span>+47&nbsp;41 00</span> <b>00 01</b>', "+47 41 00 00 01")
+    assert contains_core("FJELLBEKK&#160;Trevare AS", "Fjellbekk Trevare")
+    assert not contains_core("Skip to content", "41000001")
+    assert not contains_core("Fjellbekk", "Fjellbekk Trevare")
+    # a page saved in a legacy charset: only the ASCII part of a non-ASCII core can be quoted
+    assert contains_core("rlegger Testby", "Rørlegger Testby", legacy=True)
+    assert not contains_core("rlegger Testby", "Rørlegger Testby")
+
+
+def test_repair_with_core_never_quotes_a_window_without_it():
+    from kilde.spans import repair
+    pad = "q" * 320
+    raw = (f'<html><body><a>Skip to content</a><div data-x="{pad}"><span>41000001</span></div>'
+           f'<div data-x="{pad}">post@x.no</div></body></html>')
+    window = "Skip to content 41000001 post@x.no"
+    old, _, _ = repair(raw, window, "text/html")
+    assert "41000001" not in old  # the failure mode: a shrunken window without the value
+    span, _, exact = repair(raw, window, "text/html", None, "41000001")
+    assert exact and span == "41000001"
+    # a core the page does not hold verbatim is described, never replaced by unrelated text
+    span, _, exact = repair(raw, window, "text/html", None, "Fjellbekk Trevare")
+    assert span == "Fjellbekk Trevare" and not exact

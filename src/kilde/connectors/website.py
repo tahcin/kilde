@@ -33,6 +33,7 @@ import dns.resolver
 from bs4 import BeautifulSoup
 
 from ..http import Blocked, BudgetExhausted, Fetcher
+from ..spans import contains_core
 from ..templates import is_template_url, template_post
 from ..model import COMPANY_OWNED, CompanyContext, Evidence, Snapshot
 
@@ -413,6 +414,27 @@ def _in_hostname(text: str, a: int, b: int) -> bool:
     return before.endswith(("www.", "@", "/", "://", ".")) or (a > 0 and text[a - 1] == "@")
 
 
+def _match_core(span: str, words: list[str]) -> str | None:
+    """The name as the span writes it (the text a name proof's quote must contain)."""
+    rx = name_regex(words)
+    if not rx:
+        return None
+    ms = list(rx.finditer(span))
+    m = next((x for x in ms if not _in_hostname(span, x.start(), x.end())), ms[0] if ms else None)
+    return m.group(0).strip() if m else None
+
+
+def _phone_core(span: str, wanted: set[str]) -> str | None:
+    """The registry phone number as the span writes it (or the tel: link itself)."""
+    if span.lower().startswith("tel:"):
+        return span
+    for m in PHONE_TEXT.finditer(span):
+        d = re.sub(r"\D", "", m.group(0))
+        if len(d) >= 8 and d[-8:] in wanted:
+            return m.group(0).strip()
+    return None
+
+
 def _window(text: str, a: int, b: int, pad: int) -> str:
     s = max(0, a - pad)
     e = min(len(text), b + pad)
@@ -601,6 +623,12 @@ def _street_regex(street: str) -> re.Pattern | None:
 
 
 def find_address(page: Page, e: dict) -> str | None:
+    return find_address_core(page, e)[0]
+
+
+def find_address_core(page: Page, e: dict) -> tuple[str | None, str | None]:
+    """(span, core): the span shows the registered street address and postcode; the core is the street,
+    number and postcode as the page writes them, which the quoted span must contain."""
     for key in ("forretningsadresse", "beliggenhetsadresse"):
         a = e.get(key) or {}
         lines = [x for x in a.get("adresse") or [] if x]
@@ -614,8 +642,9 @@ def find_address(page: Page, e: dict) -> str | None:
             tail = page.text[m.end():m.end() + 80]
             pm = re.search(r"(?<!\d)" + re.escape(pn) + r"(?!\d)", tail)
             if pm:
-                return page.text[max(0, m.start() - 10):m.end() + pm.end() + 20].strip()
-    return None
+                return (page.text[max(0, m.start() - 10):m.end() + pm.end() + 20].strip(),
+                        page.text[m.start():m.end() + pm.end()].strip())
+    return None, None
 
 
 def is_parked(page: Page) -> bool:
@@ -668,7 +697,7 @@ class Verdict:
     method: str | None = None
     detail: str | None = None
     pages: list[Page] = field(default_factory=list)
-    proof: list[tuple[Page, str]] = field(default_factory=list)  # (page, span)
+    proof: list[tuple[Page, str, str | None]] = field(default_factory=list)  # (page, span, value the span must contain)
     others: dict[str, tuple[Page, str]] = field(default_factory=dict)
     final_url: str | None = None
     variant: list[str] | None = None  # set when the name matched only through a shortened name variant
@@ -702,7 +731,7 @@ def judge(v: Verdict, org: str, e: dict, registry_host: str | None) -> None:
                 return
             v.status, v.method = "proven", "orgnr_on_page"
             v.detail = f"organisation number printed on {p.url}"
-            v.proof = [(p, span)]
+            v.proof = [(p, span, org)]
             v.others = others
             return
     for p in pages:
@@ -721,7 +750,7 @@ def judge(v: Verdict, org: str, e: dict, registry_host: str | None) -> None:
     while lead < len(full) - 1 and len(full[lead]) == 1:
         lead += 1
     conflict_words = full[lead:]
-    name_span = name_page = conflict = None
+    name_span = name_page = conflict = name_core = None
     v.variant = None
     for words in variants:
         for p in pages:
@@ -731,6 +760,7 @@ def judge(v: Verdict, org: str, e: dict, registry_host: str | None) -> None:
                 v.variant = words if words != full and words != full[lead:] else None
             conflict = conflict or c
         if name_span:
+            name_core = _match_core(name_span, words)
             break
     if not name_span:
         v.status = "no_match"
@@ -744,7 +774,7 @@ def judge(v: Verdict, org: str, e: dict, registry_host: str | None) -> None:
     if registry_host and v.source == "registry" and same_site(final, registry_host):
         v.status, v.method = "proven", "registry_website_and_name"
         v.detail = f"registry lists {registry_host}; legal name shown on the site"
-        v.proof = [(name_page, name_span)]
+        v.proof = [(name_page, name_span, name_core)]
         return
     # (c) phone and name; address and name
     wanted = _digits_phones(e)
@@ -753,7 +783,7 @@ def judge(v: Verdict, org: str, e: dict, registry_host: str | None) -> None:
         if s:
             v.status, v.method = "proven", "phone_and_name"
             v.detail = "registry phone number and legal name shown on the site"
-            v.proof = [(p, s), (name_page, name_span)]
+            v.proof = [(p, s, _phone_core(s, wanted)), (name_page, name_span, name_core)]
             return
     reg_email = (e.get("epostadresse") or "").strip().lower()
     if "@" in reg_email:
@@ -766,14 +796,15 @@ def judge(v: Verdict, org: str, e: dict, registry_host: str | None) -> None:
             if hit:
                 v.status, v.method = "proven", "email_and_name"
                 v.detail = "registry email address and legal name shown on the site"
-                v.proof = [(p, hit), (name_page, name_span)]
+                v.proof = [(p, hit, hit if hit.lower().startswith("mailto:") else reg_email),
+                           (name_page, name_span, name_core)]
                 return
     for p in pages:
-        s = find_address(p, e)
+        s, core = find_address_core(p, e)
         if s:
             v.status, v.method = "proven", "address_and_name"
             v.detail = "registered street address, postcode and legal name shown on the site"
-            v.proof = [(p, s), (name_page, name_span)]
+            v.proof = [(p, s, core), (name_page, name_span, name_core)]
             return
     v.status = "name_only"
     v.detail = "legal name shown, but no org number, registry phone or address"
@@ -1428,7 +1459,7 @@ def bytes_exact(snap: Snapshot | None, span: str | None, prefer: str = "") -> st
     if not runs:
         return span
     if prefer:
-        hit = [r for r in runs if prefer in re.sub(r"\D", "", r) or prefer in r]
+        hit = [r for r in runs if prefer in re.sub(r"\D", "", r) or prefer in r or contains_core(r, prefer, True)]
         if hit:
             return max(hit, key=len)
     return max(runs, key=len)
@@ -2934,9 +2965,9 @@ def emit_site(ctx: CompanyContext, v: Verdict, scope: Scope | None = None) -> li
     domain = bare(home.host)
     scope = scope or Scope(ctx.org, name_words((ctx.registry or {}).get("navn") or ""))
     url = canonical_url(home)
-    proof_evs = [ctx.add_evidence(p.snap, source_class=COMPANY_OWNED, span=bytes_exact(p.snap, s, ctx.org),
-                                  method=METHOD, licence=LICENCE)
-                 for p, s in v.proof]
+    proof_evs = [ctx.add_evidence(p.snap, source_class=COMPANY_OWNED, span=bytes_exact(p.snap, s, core or ctx.org),
+                                  method=METHOD, licence=LICENCE, core=core)
+                 for p, s, core in v.proof]
     conf = 0.99 if v.method == "orgnr_on_page" else 0.9
     m = {"method": v.method, "detail": v.detail or ""}
     if scope.shared:
