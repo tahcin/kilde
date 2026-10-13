@@ -106,6 +106,7 @@ def check(ctx: CompanyContext) -> list[str]:
             withhold(c, f"foreign domain .{tld} for a Norwegian-registered company (possibly a foreign sister company)")
         return notes
     own_forms = {fold(t) for t in re.findall(r"[\wæøå]+", reg.get("navn", "").lower())}
+    label_alnum = re.sub(r"[^a-z0-9]", "", label)
     # 3. Social profiles from the site must name the company: the handle carries a distinctive token of
     #    the legal name or the site's domain label, or is a pure numeric ID. Site builders and agencies
     #    leave their own profiles in templates (a Surftown-built site linked Surftown's profiles).
@@ -114,7 +115,6 @@ def check(ctx: CompanyContext) -> list[str]:
             continue
         handle = fold(str(c.value).split("/", 1)[1] if "/" in str(c.value) else str(c.value))
         handle_alnum = re.sub(r"[^a-z0-9]", "", handle)
-        label_alnum = re.sub(r"[^a-z0-9]", "", label)
         numeric_id = bool(re.search(r"(profile\.php\?id=\d+|channel/uc[\w-]{10,}|/\d{6,}$|-\d{9,}$)", handle))
         named = any(re.sub(r"[^a-z0-9]", "", t) in handle_alnum for t in tokens if len(t) >= 4) or \
             (len(label_alnum) >= 3 and label_alnum in handle_alnum) or \
@@ -128,13 +128,33 @@ def check(ctx: CompanyContext) -> list[str]:
         if forms - own_forms:
             withhold(c, f"social handle '{handle}' names another legal entity ({', '.join(sorted(forms - own_forms))})")
 
-    # 4. Norwegian branches of foreign companies (NUF) usually publish on a group site: no site news or pages.
+    # 4. Structured data (JSON-LD Organization) must describe this company: platform defaults such as a
+    #    Shopify theme's own Organization block (name "Shopify", Shopify's social accounts) are withheld.
+    for c in derived:
+        if c.field != "structured_data_organization" or c.availability != "available":
+            continue
+        v = c.value if isinstance(c.value, dict) else {}
+        name = fold(str(v.get("name") or ""))
+        name_alnum = re.sub(r"[^a-z0-9]", "", name)
+        named = bool(name_alnum) and (any(re.sub(r"[^a-z0-9]", "", t) in name_alnum for t in tokens if len(t) >= 4)
+                                      or (len(label_alnum) >= 3 and label_alnum in name_alnum))
+        if not named:
+            withhold(c, f"structured data names '{v.get('name')}', not this company (theme or platform default)")
+            continue
+        same = v.get("sameAs")
+        if isinstance(same, list):
+            keep = [u for u in same if any(re.sub(r"[^a-z0-9]", "", t) in re.sub(r"[^a-z0-9]", "", fold(str(u)))
+                                         for t in tokens if len(t) >= 4) or label_alnum in re.sub(r"[^a-z0-9]", "", fold(str(u)))]
+            if len(keep) != len(same):
+                c.value = {**v, "sameAs": keep}
+
+    # 5. Norwegian branches of foreign companies (NUF) usually publish on a group site: no site news or pages.
     if (reg.get("organisasjonsform") or {}).get("kode") == "NUF":
         for c in derived:
             if c.availability == "available" and c.field in ("dated_news", "site_page_updated", "site_news"):
                 withhold(c, "branch of a foreign company: site news usually belongs to the wider group")
 
-    # 5. Contacts must match the site domain or the registry.
+    # 6. Contacts must match the site domain or the registry.
     reg_phones = {_digits(reg.get(k))[-8:] for k in ("telefon", "mobil") if reg.get(k)}
     for c in derived:
         if c.availability != "available":

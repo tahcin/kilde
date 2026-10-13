@@ -81,3 +81,13 @@ def test_handle_naming_a_foreign_sister_entity_is_withheld():
                     ("social_profile", canonical_social("facebook", "https://www.facebook.com/hobarttestnorge"))])
     gate.check(ctx)
     assert [c.availability for c in ctx.claims if c.field == "social_profile"] == ["ambiguous", "available"]
+
+
+def test_platform_default_structured_data_is_withheld():
+    ctx = ctx_with("https://www.ferskentest.no/", {"navn": "FERSKENTEST AS"},
+                   [("structured_data_organization", {"name": "Shopify", "sameAs": ["https://twitter.com/shopify"]}),
+                    ("structured_data_organization", {"name": "Ferskentest", "sameAs": ["https://facebook.com/ferskentest", "https://twitter.com/shopify"]})])
+    gate.check(ctx)
+    sd = [c for c in ctx.claims if c.field == "structured_data_organization"]
+    assert sd[0].availability == "ambiguous" and sd[1].availability == "available"
+    assert sd[1].value["sameAs"] == ["https://facebook.com/ferskentest"]
