@@ -61,7 +61,7 @@ def value_of(row: dict) -> dict:
          "granting_authority": row.get("Navn støttegiver"), "scheme": row.get("Tilknyttet støtteordning"),
          "purpose": row.get("Formål"), "instrument": row.get("Støtteinstrument"),
          "category": row.get("Statsstøttekategori"), "award_number": row.get(COL_NR),
-         "url": RECORD.format(nr=row.get(COL_NR))}
+         "page_url": RECORD.format(nr=row.get(COL_NR))}
     return {k: x for k, x in v.items() if x}
 
 
@@ -113,21 +113,22 @@ def _emit(ctx: CompanyContext, batch: dict | None) -> None:
     for date, rid, unit, ln, row in rows[:MAX_AWARDS]:
         num = row[COL_ORG]
         url = RECORD.format(nr=row[COL_NR])
-        snap = Snapshot(url=url, final_url=url, status=200, retrieved_at=batch["retrieved_at"],
+        snap = Snapshot(url=CSV_URL, final_url=CSV_URL, status=200, retrieved_at=batch["retrieved_at"],
                         content=(batch["header"] + "\n" + ln).encode("utf-8"), content_type="text/csv")
         start = ln.find(f'"{num}"')
         span = ln[start:start + R.MAX_SPAN] if start >= 0 else ln[:R.MAX_SPAN]
         ev = [ctx.add_evidence(snap, source_class=OFFICIAL_REGISTER_OTHER, method=METHOD, licence=LICENCE, span=span,
                                effective_date=date or None,
-                               note=(f"Header and row for award {row[COL_NR]} from {CSV_URL}"
-                                     + (f" (file sha256 {batch['file_sha256']})" if batch.get("file_sha256") else "")
-                                     + ", converted from UTF-16 to UTF-8, otherwise verbatim"))]
+                               note=R.extract_note(batch["retrieved_at"], url,
+                                                   f"header and row of award {row[COL_NR]}, UTF-16 converted to UTF-8"
+                                                   + (f"; file sha256 {batch['file_sha256']}" if batch.get("file_sha256") else "")))]
         if unit:
             uln = batch["units"][unit]
             usnap = R.record_snapshot(f"{BRREG}/underenheter/{unit}", uln, batch["units_at"])
             ev.append(ctx.add_evidence(usnap, source_class=OFFICIAL_REGISTRY, method="brreg_underenhet_v1",
                                        licence=BRREG_LICENCE, span=R.head_span(uln),
-                                       note="Enhetsregisteret underenhet record (identifying keys only), stored as one JSON line"))
+                                       note=R.extract_note(batch["units_at"], f"{R.BRREG_HUMAN}{unit}",
+                                                           "Enhetsregisteret underenhet, identifying keys only")))
             m = {"method": "organisasjonsnummer_stottemottaker_underenhet_of_orgnr",
                  "detail": f"Recipient {unit} is an Enhetsregisteret underenhet with overordnetEnhet {org}"}
         else:

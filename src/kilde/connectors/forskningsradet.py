@@ -40,8 +40,8 @@ SF_BASE = "https://www.forskningsradet.no"
 SF_HIST = "https://www.forskningsradet.no/siteassets/skattefunn/tall/skattefunn-innsendte-soknader-2002-2024.xlsx"
 RCN_CSV = "https://raw.githubusercontent.com/Forskningsradet/open-data/main/datasets/soknader2/dataset.csv"
 RCN_HUMAN = "https://github.com/Forskningsradet/open-data/tree/main/datasets/soknader2"
-LIC_SF = ("Norges forskningsråd, SkatteFUNN application list published for download at "
-          "https://www.forskningsradet.no/skattefunn/suksesshistorier/ (no licence stated)")
+LIC_SF = ("No licence stated; public information published by Norges forskningsråd (SkatteFUNN application "
+          "list, https://www.forskningsradet.no/skattefunn/suksesshistorier/)")
 LIC_RCN = "NLOD 2.0, Norges forskningsråd open data (Søknader - versjon 2)"
 METHOD = "forskningsradet_projects_v1"
 MAX_PROJECTS = int(os.environ.get("KILDE_RCN_MAX", "8"))
@@ -192,14 +192,14 @@ def _value(rid: str, rec: dict, source_url: str) -> tuple[dict, str | None]:
                  "title": rec.get("Prosjekttittel"), "decision_date": decided,
                  "period": _period(rec.get("Fra-år") or rec.get("Prosjektets fra-år"),
                                    rec.get("Til-år") or rec.get("Prosjektets til-år")),
-                 "source_file": source_url}
+                 "source_file": source_url, "page_url": SF_PAGE}
         return {k: v for k, v in value.items() if v}, decided
     value = {"scheme": "Research Council of Norway funding", "status": "funded" if rec.get("prosjektfase") == "Bevilgning"
              else "funded, completed", "project_number": rec.get("prosjektnummer"), "title": rec.get("prosjekttittel"),
              "period": _period(rec.get("prosjektstart"), rec.get("prosjektslutt")), "programme": rec.get("aktivitet"),
              "application_type": rec.get("soknadstype"),
              "awarded_nok": int(rec["tildelt_belop"]) if (rec.get("tildelt_belop") or "").isdigit() else None,
-             "source_file": source_url}
+             "source_file": source_url, "page_url": RCN_HUMAN}
     return {k: v for k, v in value.items() if v}, None
 
 
@@ -235,14 +235,15 @@ def _emit(ctx: CompanyContext, batch: dict | None) -> None:
         ln = batch["records"][rid]
         value, decided = _value(rid, rec, url)
         col = "Organisasjonsnr" if kind == "SFW" else ("Organisasjonsnummer" if kind == "SF" else "organisasjonsnummer")
-        snap = R.record_snapshot(url, ln, src.get("retrieved_at") or batch["built_at"])
+        at = src.get("retrieved_at") or batch["built_at"]
+        snap = R.record_snapshot(url, ln, at)
         ev = ctx.add_evidence(
             snap, source_class=OPEN_DATA, method=METHOD, licence=LIC_RCN if kind == "RCN" else LIC_SF,
             span=R.span_with(ln, must=f'"{col}":"{org}"'), effective_date=decided,
-            note=(f"Row for project {value.get('project_number')} from {url}"
-                  + (f" (file sha256 {src['sha256']})" if src.get("sha256") else "")
-                  + ", stored as one JSON line with the file's own column names"
-                  + ("; Excel serial dates written as ISO dates" if kind != "RCN" else "")))
+            note=R.extract_note(at, value["page_url"],
+                                f"row for project {value.get('project_number')}, the file's own column names"
+                                + ("; Excel serial dates written as ISO dates" if kind != "RCN" else "")
+                                + (f"; file sha256 {src['sha256']}" if src.get("sha256") else "")))
         m = {"method": f"{col.lower()}_equals_orgnr", "detail": f"Column {col} '{org}' equals {org}"}
         ctx.add_claim("research_project", "activity", value, ev, as_of=decided or (value.get("period") or "")[:4] or None,
                       match=m, note=(f"{len(items)} projects in total; newest {MAX_PROJECTS} shown"

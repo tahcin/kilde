@@ -159,17 +159,20 @@ def _emit(ctx: CompanyContext, batch: dict | None) -> None:
                                                                              row.get("poststed")) if x),
                  "date": date, "grade": int(grade) if grade.isdigit() else grade, "result": GRADES.get(grade),
                  "visit": VISIT.get(row.get("tilsynsbesoektype")), "inspections_on_file": len(rows),
-                 "place_organisation_number": num, "url": f"{SITE}{page}" if page else SITE}
+                 "place_organisation_number": num, "page_url": f"{SITE}{page}" if page else SITE}
         ev = [ctx.add_evidence(snap, source_class=OPEN_DATA, method=METHOD, licence=LICENCE, span=raw[:R.MAX_SPAN],
                                effective_date=date,
-                               note=(f"Header and the {len(rows)} rows for place {obj} cut verbatim from {CSV_URL}, "
-                                     f"downloaded this run"))]
+                               note=R.extract_note(batch["retrieved_at"], value["page_url"],
+                                                   f"header and the {len(rows)} rows for place {obj}, downloaded this run",
+                                                   kind="export"))]
         if how == "underenhet":
             uln = batch["units"][num]
             usnap = R.record_snapshot(f"{BRREG}/underenheter/{num}", uln, batch["unit_at"].get(num) or batch["retrieved_at"])
             ev.append(ctx.add_evidence(usnap, source_class=OFFICIAL_REGISTRY, method="brreg_underenhet_v1",
                                        licence=BRREG_LICENCE, span=R.head_span(uln),
-                                       note="Enhetsregisteret underenhet record (identifying keys only), stored as one JSON line"))
+                                       note=R.extract_note(batch["unit_at"].get(num) or batch["retrieved_at"],
+                                                           f"{R.BRREG_HUMAN}{num}",
+                                                           "Enhetsregisteret underenhet, identifying keys only")))
             m = {"method": "orgnummer_underenhet_of_orgnr",
                  "detail": f"Smilefjes orgnummer {num} is an Enhetsregisteret underenhet with overordnetEnhet {org}"}
         else:

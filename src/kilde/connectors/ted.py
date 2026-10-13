@@ -199,22 +199,23 @@ def _emit(ctx: CompanyContext, batch: dict | None) -> None:
     won = _newest(hit.get("won", []), records, MAX_WON)
     for pub, rec in won:
         ln = records[pub]
-        snap = R.record_snapshot(HUMAN.format(pub=pub), ln, retrieved.get(pub, batch["built_at"]))
+        at = retrieved.get(pub, batch["built_at"])
+        snap = R.record_snapshot(API, ln, at)
         idx = _ids(rec.get("winner-identifier")).index(org)
         raw_id = rec["winner-identifier"][idx]
         names = (rec.get("organisation-name-tenderer") or {})
         value = {"notice": pub, "date": _date(rec), "notice_type": NOTICE_TYPES.get(rec.get("notice-type"), rec.get("notice-type")),
                  "title": _text(rec.get("title-proc")), "buyer": _text(rec.get("buyer-name")),
                  "buyer_organisation_number": next(iter(_ids(rec.get("organisation-identifier-buyer"))), None),
-                 "url": HUMAN.format(pub=pub)}
+                 "page_url": HUMAN.format(pub=pub)}
         if rec.get("result-value-notice"):
             value["notice_total_value"] = rec["result-value-notice"]
             if rec.get("result-value-cur-notice"):
                 value["currency"] = rec["result-value-cur-notice"]
         ev = ctx.add_evidence(snap, source_class=OPEN_DATA, method=METHOD, licence=LICENCE,
                               span=R.span_with(ln, must=f'"{raw_id}"'), effective_date=_date(rec),
-                              note=(f"TED notice {pub} as returned by the TED Search API v3 ({API}, POST, query "
-                                    f"publication-number={pub}); stored as one JSON line"))
+                              note=R.extract_note(at, HUMAN.format(pub=pub),
+                                                  f"TED Search API v3 (POST, notice {pub})"))
         m = {"method": "winner_identifier_equals_orgnr",
              "detail": f"TED eForms winner-identifier[{idx}] '{raw_id}' (winner-country NOR) equals {org}"}
         ctx.add_claim("public_contract_award", "activity", value, ev, as_of=_date(rec), match=m)
@@ -222,13 +223,15 @@ def _emit(ctx: CompanyContext, batch: dict | None) -> None:
     for pub, rec in bought:
         ln = records[pub]
         raw_id = next(i for i in rec["organisation-identifier-buyer"] if str(i).replace(" ", "") == org)
-        snap = R.record_snapshot(HUMAN.format(pub=pub), ln, retrieved.get(pub, batch["built_at"]))
+        at = retrieved.get(pub, batch["built_at"])
+        snap = R.record_snapshot(API, ln, at)
         value = {"notice": pub, "date": _date(rec), "notice_type": NOTICE_TYPES.get(rec.get("notice-type"), rec.get("notice-type")),
-                 "title": _text(rec.get("title-proc")), "role": "buyer", "url": HUMAN.format(pub=pub)}
+                 "title": _text(rec.get("title-proc")), "role": "buyer", "page_url": HUMAN.format(pub=pub)}
         ev = ctx.add_evidence(snap, source_class=OPEN_DATA, method=METHOD, licence=LICENCE,
                               span=R.span_with(ln, start_key="organisation-identifier-buyer", must=f'"{raw_id}"'),
                               effective_date=_date(rec),
-                              note=f"TED notice {pub} via the TED Search API v3 ({API}, POST); stored as one JSON line")
+                              note=R.extract_note(at, HUMAN.format(pub=pub),
+                                                  f"TED Search API v3 (POST, notice {pub})"))
         m = {"method": "organisation_identifier_buyer_equals_orgnr",
              "detail": f"TED eForms organisation-identifier-buyer '{raw_id}' (buyer-country NOR) equals {org}"}
         ctx.add_claim("procurement_notice", "activity", value, ev, as_of=_date(rec), match=m)

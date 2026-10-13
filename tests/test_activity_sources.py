@@ -279,7 +279,7 @@ def test_smilefjes_through_underenhet_and_direct(tmp_path):
     assert set(got) == {"Testkafe", "Testkiosk"}
     kafe = got["Testkafe"]
     assert kafe.value["date"] == "2026-06-12" and kafe.value["grade"] == 0 and kafe.value["inspections_on_file"] == 2
-    assert kafe.value["url"] == "https://smilefjes.mattilsynet.no/spisested/oslo/testkafe.ZA1/"
+    assert kafe.value["page_url"] == "https://smilefjes.mattilsynet.no/spisested/oslo/testkafe.ZA1/"
     assert kafe.match["method"] == "orgnummer_underenhet_of_orgnr" and len(kafe.evidence_ids) == 2
     assert got["Testkiosk"].match["method"] == "orgnummer_equals_orgnr"
     assert_evidence_exact(ctx)
@@ -402,7 +402,7 @@ def test_stotteregisteret_direct_and_workplace(tmp_path):
     v = got["1"].value
     assert (v["date"], v["amount"], v["currency"], v["granting_authority"], v["scheme"]) == \
         ("31.12.2025", "5525360,56", "NOK", "SKATTEETATEN", "Ordning 1000000420")
-    assert v["url"] == "https://stotte.brreg.no/nb/oppslag/stoettetildeling/1" and got["1"].as_of == "2025-12-31"
+    assert v["page_url"] == "https://stotte.brreg.no/nb/oppslag/stoettetildeling/1" and got["1"].as_of == "2025-12-31"
     assert got["1"].match["method"] == "organisasjonsnummer_stottemottaker_equals_orgnr"
     assert got["2"].match["method"].endswith("underenhet_of_orgnr") and len(got["2"].evidence_ids) == 2
     assert_evidence_exact(ctx)
@@ -415,3 +415,25 @@ def test_stotteregisteret_absent_and_no_cache(tmp_path):
     assert [c.availability for c in ctx.claims] == ["not_available"]
     with pytest.raises(RuntimeError):
         run(st.prepare_stotteregisteret(None, [ORG], cache_path=str(tmp_path / "missing.json.gz")))
+
+
+def test_cached_extracts_cite_the_export_not_the_human_page(tmp_path):
+    batch = run(st.prepare_stotteregisteret(None, [ORG], cache_path=st_cache(tmp_path)))
+    ctx = CompanyContext(ORG)
+    run(st.fetch_stotteregisteret(None, ctx, batch))
+    ev = ctx.evidence[0]
+    assert ev.source_url == st.CSV_URL
+    assert ev.note.startswith("extract from the cached export of 2026-10-13; human page: https://stotte.brreg.no/")
+    path = ted_cache(tmp_path, [notice("2-2026", "2026-03-01Z", winners=[ORG])])
+    f = fetcher({"api.ted.europa.eu": (200, {"notices": []})})
+    tb = run(ted.prepare_ted(f, [ORG], cache_path=path))
+    ctx = CompanyContext(ORG)
+    run(ted.fetch_ted(f, ctx, tb))
+    (c,) = available(ctx, "public_contract_award")
+    assert ctx.evidence[0].source_url == ted.API and c.value["page_url"].endswith("/2-2026")
+    assert "human page: https://ted.europa.eu/en/notice/-/detail/2-2026" in ctx.evidence[0].note
+    rb = run(forskningsradet.prepare_forskningsradet(None, [ORG], cache_path=rcn_cache(tmp_path), refresh=False))
+    ctx = CompanyContext(ORG)
+    run(forskningsradet.fetch_forskningsradet(None, ctx, rb))
+    assert all(e.source_url in (forskningsradet.SF_HIST, forskningsradet.RCN_CSV) for e in ctx.evidence)
+    assert all(c.value["page_url"] for c in available(ctx, "research_project"))

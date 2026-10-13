@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 from ..http import Fetcher
 from ..model import Snapshot, utc_now
 
+BRREG_HUMAN = "https://virksomhet.brreg.no/oppslag/underenheter/"
 DATA_DIR = Path(__file__).resolve().parents[1] / "data"
 MAX_SPAN = 400
 
@@ -24,6 +25,13 @@ MAX_SPAN = 400
 def line(obj: dict) -> str:
     """Canonical record line: compact, key order as given (important keys first)."""
     return json.dumps(obj, ensure_ascii=False, separators=(",", ":"))
+
+
+def extract_note(retrieved_at: str, page_url: str, detail: str | None = None, *, kind: str = "cached export") -> str:
+    """Evidence note for a row cut from a bulk file or API response: `source_url` is that file or endpoint,
+    the human record page is named here."""
+    note = f"extract from the {kind} of {(retrieved_at or '')[:10]}; human page: {page_url}"
+    return note + (f" ({detail})" if detail else "")
 
 
 def record_snapshot(url: str, record_line: str, retrieved_at: str) -> Snapshot:
