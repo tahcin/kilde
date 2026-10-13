@@ -5,6 +5,7 @@ labelled as the company's own words. Unknowns are listed explicitly.
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from .model import Claim, CompanyContext
@@ -33,6 +34,23 @@ def clip(text: str, n: int = 220) -> str:
         return text
     cut = text[:n].rsplit(" ", 1)[0].rstrip(",;:")
     return cut + " ..."
+
+
+def quoted(text: str) -> str:
+    """A closing quotation that ends its sentence: a full stop follows the quote unless the quoted text
+    already ends with one (or with ! ? or an ellipsis)."""
+    return f'"{text}"' + ("" if re.search(r"[.!?]$", text) else ".")
+
+
+def join_and(items: list[str]) -> str:
+    """'A', 'A and B', 'A, B and C'."""
+    items = [str(x) for x in items]
+    return items[0] if len(items) == 1 else ", ".join(items[:-1]) + " and " + items[-1] if items else ""
+
+
+def no_em_dash(text: str) -> str:
+    """Em dashes from quoted page text become en dashes (house style: no em dashes in Kilde's own prose)."""
+    return text.replace("\u2014", "\u2013")
 
 
 def money(amount: Any, cur: str | None) -> str:
@@ -93,7 +111,10 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
         if ind:
             from .codes import code_name
             en = code_name("nace_en", ind.value.get("code"))
-            text += f", in the industry \"{en or ind.value['name']}\" ({ind.value['code']})"
+            if str(ind.value.get("code")) == "00.000":  # Brreg's "Uoppgitt": no industry given
+                text += f", with no industry stated in the registry (code {ind.value['code']})"
+            else:
+                text += f", in the industry \"{en or ind.value['name']}\" ({ind.value['code']})"
         say(text + ".", name, form, muni, reg, ind, first(ctx, "incorporation_date") if reg else None)
 
     status = first(ctx, "legal_status")
@@ -105,9 +126,9 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
     desc = first(ctx, "website_description")
     purpose = first(ctx, "statutory_purpose") or first(ctx, "registered_activity")
     if desc:
-        say(f"Its own website describes it as: \"{clip(desc.value)}\"", desc)
+        say(f"Its own website describes it as: {quoted(clip(desc.value))}", desc)
     elif purpose:
-        say(f"Its registered purpose is: \"{clip(purpose.value)}\"", purpose)
+        say(f"Its registered purpose is: {quoted(clip(purpose.value))}", purpose)
 
     emp = first(ctx, "employees_registered")
     if emp:
@@ -164,7 +185,8 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
     if wp:
         munis = sorted({c.value.get("municipality", "").title() for c in wp if c.value.get("municipality")})
         say(f"It has {len(wp)} registered workplace{'s' if len(wp) != 1 else ''}"
-            + (f" in {', '.join(munis[:5])}" if munis else "") + ".", *wp[:5])
+            + (f" in {join_and(munis[:5] + ([f'{len(munis) - 5} other municipalit' + ('y' if len(munis) == 6 else 'ies')] if len(munis) > 5 else []))}"
+               if munis else "") + ".", *wp[:5])
 
     site = first(ctx, "official_website")
     if site:
@@ -184,7 +206,7 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
             "wikidata": "Wikidata (matched on the organisation number) lists its profiles on"}
     for src, items in by_source.items():
         names = sorted({PLATFORM.get(c.value.get("platform", ""), c.value.get("platform", "")) for c in items})
-        say(f"{lead[src]} {', '.join(names)}.", *items)
+        say(f"{lead[src]} {join_and(names)}.", *items)
     lei = first(ctx, "lei")
     if lei:
         reg = (lei.value.get("registration_status") or "").upper()
@@ -274,4 +296,6 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
         reason = marks[0].note if marks and marks[0].note else None
         state = marks[0].availability if marks else "not_available"
         unknowns.append(f"{words}: {state.replace('_', ' ')}" + (f" ({reason})." if reason else "."))
-    return {"text": " ".join(s["text"] for s in S), "sentences": S, "unknowns": unknowns}
+    for s in S:
+        s["text"] = no_em_dash(s["text"])
+    return {"text": " ".join(s["text"] for s in S), "sentences": S, "unknowns": [no_em_dash(u) for u in unknowns]}
