@@ -33,6 +33,7 @@ KNOWN_SOURCES = {
     "api.finanstilsynet.no": ("Finanstilsynet licence register", "open API"),
     "www.wikidata.org": ("Wikidata", "CC0"),
     "qlever.cs.uni-freiburg.de": ("Wikidata via QLever", "CC0"),
+    "qlever.dev": ("Wikidata via QLever", "CC0"),
 }
 
 
@@ -339,7 +340,7 @@ p{margin:0}
 /* layout */
 .layout{display:grid;grid-template-columns:340px minmax(0,1fr)}
 .side{border-right:1px solid var(--line);display:flex;flex-direction:column;min-width:0}
-@media (min-width:901px){.side{position:sticky;top:0;height:100vh;align-self:start}}
+@media (min-width:901px){.side{position:sticky;top:0;height:100vh;align-self:start;overflow:hidden}}
 .tools{padding:16px 16px 12px;border-bottom:1px solid var(--line)}
 .search{position:relative}
 .search .ic{position:absolute;left:11px;top:11px;color:var(--muted);pointer-events:none}
@@ -365,7 +366,7 @@ select:hover{border-color:var(--line)}
 .legend{display:flex;flex-wrap:wrap;gap:4px 14px;margin-top:12px;color:var(--muted);font-size:12.5px}
 .legend span{display:inline-flex;align-items:center;gap:5px}
 
-.list{list-style:none;margin:0;padding:0;overflow:auto;flex:1;overscroll-behavior:contain}
+.list{list-style:none;margin:0;padding:0;overflow:auto;flex:1;min-height:0;overscroll-behavior:contain}
 .row{display:grid;grid-template-columns:minmax(0,1fr) auto 22px;align-items:center;gap:0 10px;padding:0 12px 0 0;border-bottom:1px solid var(--line2);transition:background-color .12s}
 .row:hover{background:var(--hover)}
 .row.cur{background:var(--sel)}

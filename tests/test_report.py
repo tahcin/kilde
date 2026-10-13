@@ -110,3 +110,11 @@ def test_large_runs_embed_compressed_exact_data(tmp_path, monkeypatch):
     assert m
     data = json.loads(gzip.decompress(base64.b64decode(m.group(1))))
     assert data == json.loads(json.dumps(build_data(load())))
+
+
+def test_sidebar_list_scrolls_inside_the_sidebar():
+    # Without min-height:0 the list overflows the sticky sidebar and stretches the page.
+    from kilde import report
+    import inspect
+    css = inspect.getsource(report)
+    assert "overflow:auto;flex:1;min-height:0" in css
