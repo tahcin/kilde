@@ -21,6 +21,10 @@ from .synthesis import summarise
 
 log = logging.getLogger("kilde")
 COPIES_WINDOW = 28 * 60  # seconds; the endpoint asks for about 30 requests a minute
+# Open registers keyed by organisation number, each with a batch prepare and a per-company emit.
+OPEN_SOURCES = [("ted", "public_contract_award", "activity"), ("smilefjes", "food_inspection", "activity"),
+                ("forskningsradet", "research_project", "activity"), ("stotteregisteret", "state_aid_award", "activity"),
+                ("dibk", "approval_sentral_godkjenning", "identity")]
 STEP_TIMEOUT = {"website": 60, "registry": 20, "jobs": 90, "report_copies": 10}
 STATE_RANK = ["available", "ambiguous", "blocked", "not_available", "not_applicable", "failed"]
 
@@ -104,6 +108,7 @@ async def run_batch(orgs: list[str], opt: Options) -> tuple[list[dict], dict]:
     gleif = _optional("gleif")
     fin = _optional("finanstilsynet")
     wiki = _optional("wikidata")
+    open_mods = {name: m for name, _f, _s in OPEN_SOURCES if (m := _optional(name))}
     batch_info: dict[str, Any] = {}
 
     async def guarded(coro: Awaitable[None], deadline: float) -> None:
@@ -158,6 +163,14 @@ async def run_batch(orgs: list[str], opt: Options) -> tuple[list[dict], dict]:
                 batch_info["gleif"] = await gleif.prepare_gleif(f, orgs)
             except Exception as exc:  # noqa: BLE001
                 log.warning("gleif prepare failed: %r", exc)
+        for name, _field, _section in OPEN_SOURCES:
+            mod = open_mods.get(name)
+            if mod and want(name):
+                try:
+                    batch_info[name] = await getattr(mod, f"prepare_{name}")(f, orgs)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("%s prepare failed: %r", name, exc)
+                    batch_info[f"{name}_error"] = repr(exc)
         if wiki and want("wikidata"):
             try:
                 batch_info["wikidata"] = await wiki.prepare_wikidata(f, orgs)
@@ -188,6 +201,14 @@ async def run_batch(orgs: list[str], opt: Options) -> tuple[list[dict], dict]:
             if wiki and batch_info.get("wikidata", {}).get(ctx.org):
                 await _step(ctx, "wikidata", lambda: wiki.fetch_wikidata(f, ctx, batch_info["wikidata"]),
                             "wikidata_item", "identity")
+            for name, field, section in OPEN_SOURCES:
+                mod = open_mods.get(name)
+                if not mod or not want(name):
+                    continue
+                if name == "dibk" and not mod.likely_construction(ctx.registry):
+                    continue
+                fetch = getattr(mod, f"fetch_{name}")
+                await _step(ctx, name, lambda fetch=fetch, name=name: fetch(f, ctx, batch_info.get(name)), field, section)
             if want("signature") and budget.remaining_requests() > 3 * len(orgs) * 0.2:
                 await _step(ctx, "signature", lambda: brreg.fetch_signature(f, ctx), "signature_rule", "leadership")
 

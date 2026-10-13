@@ -209,6 +209,27 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
         say(f"Its website lists {len(news)} dated news post{'s' if len(news) != 1 else ''}; the newest, \"{clip(title, 120)}\", "
             f"is from {news[0].as_of}.", *news[:3])
 
+    awards = sorted(ctx.claims_for("public_contract_award"), key=lambda c: c.as_of or "", reverse=True)
+    if awards:
+        say(f"TED, the EU procurement journal, lists {len(awards)} contract award{'s' if len(awards) != 1 else ''} won with its "
+            f"organisation number, the latest on {awards[0].as_of}.", *awards[:3])
+    tenders = ctx.claims_for("procurement_notice")
+    if tenders:
+        say(f"As a buyer it has published {len(tenders)} procurement notice{'s' if len(tenders) != 1 else ''} on TED.", *tenders[:3])
+    projects = sorted(ctx.claims_for("research_project"), key=lambda c: c.as_of or "", reverse=True)
+    if projects:
+        say(f"The Research Council of Norway lists {len(projects)} funded or approved R&D project{'s' if len(projects) != 1 else ''} "
+            f"for it (including SkatteFUNN), the latest \"{clip(str((projects[0].value or {}).get('title', '')), 100)}\".", *projects[:3])
+    inspections = sorted(ctx.claims_for("food_inspection"), key=lambda c: c.as_of or "", reverse=True)
+    if inspections:
+        say(f"Mattilsynet has published {len(inspections)} food safety inspection{'s' if len(inspections) != 1 else ''} of its "
+            f"premises, the latest on {inspections[0].as_of}.", *inspections[:3])
+    approval = first(ctx, "approval_sentral_godkjenning")
+    if approval:
+        v = approval.value or {}
+        say(f"It holds a central approval for construction work from DiBK"
+            + (f", valid until {v.get('valid_to')}" if v.get("valid_to") else "") + ".", approval)
+
     reg_changes = ctx.claims_for("registry_change")
     if reg_changes:
         latest = max(reg_changes, key=lambda c: c.value.get("date") or "")
