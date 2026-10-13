@@ -275,6 +275,7 @@ async def run_batch(orgs: list[str], opt: Options) -> tuple[list[dict], dict]:
             n_ev = len(ctx.evidence)
             ctx.claims[:] = [c for c in ctx.claims if not (c.section == "web_presence" and c.availability == "failed")]
             ctx.module_states.pop("website", None)
+            ctx.facts["website_retry"] = True  # the second attempt gets a larger per-site request cap
             try:
                 await _step(ctx, "website", lambda: website.fetch_website(f, ctx), "official_website", "web_presence", timeout=120)
             except asyncio.CancelledError:

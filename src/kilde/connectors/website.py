@@ -40,7 +40,8 @@ EXTRACT = "website_extract_v1"
 LICENCE = "company-owned page; robots.txt allowed"
 SECTION = "web_presence"
 
-MAX_REQUESTS = 10         # HTTP requests per company, robots.txt and Brreg name checks included
+MAX_REQUESTS = 12         # HTTP requests per company, robots.txt and Brreg name checks included
+RETRY_CAP = 20            # cap on the pipeline's second, unhurried attempt
 VERIFIED_CAP = 16         # raised cap once a site is proven and exclusive (news and careers)
 STEP_BUDGET = 6           # requests each for dated news and hiring on a verified exclusive site
 RELATED_STRICT = False    # True: every non-exclusive site becomes related_website; False (default): a company's own domain that only names other companies stays official, with nothing derived
@@ -768,7 +769,7 @@ class _Spend:
 
     def __init__(self, f: Fetcher, ctx: CompanyContext):
         self.f, self.ctx, self.used = f, ctx, 0
-        self.cap = MAX_REQUESTS
+        self.cap = RETRY_CAP if ctx.facts.get("website_retry") else MAX_REQUESTS
         self.dns: dict[str, bool] = {}
 
     def can(self, n: int = 1) -> bool:
@@ -3411,7 +3412,10 @@ async def fetch_website(f: Fetcher, ctx: CompanyContext) -> None:
         return
     unchecked = cands[len(verdicts):] + [(v.domain, v.source, None) for v in verdicts if v.status == "skipped_budget"]
     run_short = f.budget.remaining_requests() <= RESERVE + 2 or f.budget.remaining_seconds() < 10
-    declared_left = [d for d, src, _ in unchecked if src in ("registry", "email") or src.startswith("seed:")]
+    # Weak candidates (domain-name matches from Common Crawl's host list) are hints, not declarations:
+    # leaving them unchecked does not turn the result into a failure.
+    declared_left = [d for d, src, _ in unchecked if src in ("registry", "email")
+                     or (src.startswith("seed:") and src != "seed:commoncrawl_domain")]
     if budget_note == "budget_exhausted" or (budget_note and unchecked) or any(v.status == "skipped_budget" for v in verdicts):
         ctx.mark("official_website", SECTION, "failed",
                  note="budget_exhausted: not checked " + ", ".join(d for d, _s, _u in unchecked[:5]))
