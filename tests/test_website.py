@@ -30,6 +30,8 @@ class FakeFetcher:
         self.disallow = set(disallow)
         self.redirects = redirects or {}
         self.calls: list[str] = []
+        self.known_hosts = {W.bare(urlsplit(u).hostname or "") for u in list(pages) + list(self.redirects)} | {
+            W.bare(urlsplit(u).hostname or "") for u in list(self.redirects.values()) + list(self.disallow)}
 
     async def get(self, url, *, headers=None, robots=False, cacheable=True, reserve=0):
         p = urlsplit(url)
@@ -54,7 +56,12 @@ class FakeFetcher:
 @pytest.fixture(autouse=True)
 def offline_dns(monkeypatch):
     async def yes(*a, **k):
-        return True
+        f = a[0] if a else None
+        host = a[1] if len(a) > 1 else ""
+        known = getattr(f, "known_hosts", None)
+        if known is None or not host:
+            return True
+        return W.bare(host) in known  # like DNS: only hosts the fake web actually serves resolve
 
     async def tls_only(host, port=443):
         return port == 443
@@ -910,9 +917,14 @@ def test_contact_address_on_another_organisations_domain_makes_site_not_exclusiv
     f = FakeFetcher({"https://fjellbekk.no/": (200, html(body))})
     ctx = ctx_for(hjemmeside="fjellbekk.no")
     claims = run(f, ctx)
-    assert claims["related_website"].availability == "available"
+    # our own org number in the footer keeps the site ours; the other venue's contact only stops derived facts
+    assert claims["official_website"].value == "fjellbekk.no"
     assert claims["site_contact_email"].availability == "ambiguous"
-    assert "kvistmaison.no" in claims["related_website"].match["detail"]
+    assert "kvistmaison.no" in claims["official_website"].match["detail"]
+    # without our org number printed, the same page is a related website
+    f2 = FakeFetcher({"https://fjellbekk.no/": (200, html(body.replace(f"Org.nr {OURS}", "")))})
+    claims2 = run(f2, ctx_for(hjemmeside="fjellbekk.no"))
+    assert claims2["related_website"].availability == "available"
 
 
 # ---------------------------------------------------------------- reported families (Builderr's shapes)
@@ -1152,7 +1164,9 @@ def test_lookup_failure_on_declared_domain_with_network_up_is_failed(monkeypatch
     import dns.exception
     _mock_dns(monkeypatch, lambda h: None if h == W.CANARY_HOST else dns.exception.Timeout())
     ctx = ctx_for(navn="FJELLBEKK TREVARE AS", hjemmeside="fjellbekk.no")
-    claims = run(FakeFetcher({}), ctx)
+    f = FakeFetcher({})
+    f.known_hosts = {"fjellbekk.no"}
+    claims = run(f, ctx)
     assert claims["official_website"].availability == "failed"
     assert claims["official_website"].note.startswith("the registry-declared domain")
 
@@ -1170,7 +1184,9 @@ def test_every_candidate_unreachable_after_dns_is_failed(monkeypatch):
         return False
     monkeypatch.setattr(W, "reachable", down)
     ctx = ctx_for(navn="FJELLBEKK TREVARE AS", hjemmeside="fjellbekk.no")
-    claims = run(FakeFetcher({}), ctx)
+    f = FakeFetcher({})
+    f.known_hosts = {"fjellbekk.no"}
+    claims = run(f, ctx)
     assert claims["official_website"].availability == "failed"
 
 
@@ -1589,3 +1605,83 @@ def test_copyright_owner_in_footer_makes_own_domain_a_related_website():
     claims = run(FakeFetcher({"https://fjellbekk.no/": (200, html(body)), url: resp}), ctx_for(hjemmeside="fjellbekk.no"))
     assert claims["official_website"].availability == "ambiguous"
     assert claims["related_website"].value["domain"] == "fjellbekk.no"
+
+
+# ---------------------------------------------------------------- judges' round 2 fixes
+def test_group_parent_keeps_its_registry_site_despite_staff_bodies_and_subsidiaries():
+    """Equinor shape: the parent's registry website names a subsidiary, its pension fund shares its address, and
+    contact addresses sit on group domains; the parent keeps its site and its careers page."""
+    body = ('<h1>Fjellbekk Trevare</h1><p>Fjellbekk Energi AS org.nr ' + OTHER + ' er vårt datterselskap.</p>'
+            '<p>Fjellbekk Pensjon (pensjonskasse) holder til i Lyngveien 12B, 9999 Testby.</p>'
+            '<footer><a href="mailto:post@fjellbekk-us.com">US office</a></footer>'
+            '<a href="/careers">Careers</a>')
+    tree = json.dumps({"organisasjonsnummer": OURS, "children": [{"organisasjonsnummer": OTHER, "children": []}]})
+    pages = {"https://fjellbekk.no/": (200, html(body)),
+             "https://fjellbekk.no/careers": (200, html("<h1>Careers</h1><p>Join our team</p>")),
+             f"https://data.brreg.no/enhetsregisteret/api/konsernstruktur/{OURS}": (200, tree, "application/json")}
+    claims = run(FakeFetcher(pages), ctx_for(navn="FJELLBEKK TREVARE ASA", hjemmeside="www.fjellbekk.no"))
+    assert claims["official_website"].value == "fjellbekk.no"
+    assert claims["hiring_signal"].value == "https://fjellbekk.no/careers"
+
+
+def test_post_no_mailbox_is_not_another_organisations_domain():
+    body = f'<footer>Fjellbekk Trevare AS · Org.nr {OURS} <a href="mailto:fjellbekk@post.no">fjellbekk@post.no</a></footer>'
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(_site(body=body), ctx)
+    assert ctx.facts["website_exclusive"] is True
+
+
+def test_foreign_group_number_beside_our_operator_orgnr_keeps_official():
+    """Nika Norge shape: our org number in the footer, and the Finnish parent's Y-tunnus on the same page."""
+    body = (f'<footer>Fjellbekk Trevare AS · Org.nr {OURS} · Kvist Oy, Y-tunnus 1234567-8</footer>'
+            '<a href="mailto:post@fjellbekk.no">x</a>')
+    claims = run(_site(body=body), ctx_for(hjemmeside="fjellbekk.no"))
+    assert claims["official_website"].value == "fjellbekk.no"
+    assert claims["site_contact_email"].availability == "ambiguous"
+
+
+def test_redirect_to_group_domain_locale_page_with_our_orgnr_is_official():
+    """Intility and Loomis shape: the registry domain redirects to /nb-no on a group domain that prints our org number."""
+    f = FakeFetcher({"https://kvistgroup.com/nb-no": (200, html(f"<footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>"))},
+                    redirects={"https://fjellbekk.no/": "https://kvistgroup.com/nb-no"})
+    claims = run(f, ctx_for(hjemmeside="fjellbekk.no"))
+    assert claims["official_website"].value == "kvistgroup.com"
+    assert "redirected from fjellbekk.no" in claims["official_website"].match["detail"]
+
+
+def test_http_403_only_candidate_is_blocked():
+    f = FakeFetcher({"https://fjellbekk.no/": (403, html("<h1>Forbidden</h1>"))})
+    claims = run(f, ctx_for(navn="QX AS", hjemmeside="fjellbekk.no"))
+    assert claims["official_website"].availability == "blocked"
+
+
+def test_cap_reached_with_unchecked_candidates_is_failed(monkeypatch):
+    monkeypatch.setattr(W, "MAX_REQUESTS", 2)
+    pages = {"https://fjellbekktrevare.no/": (200, html("<h1>Kvist</h1>")),
+             "https://fjellbekk-trevare.no/": (200, html("<h1>Kvist</h1>"))}
+    claims = run(FakeFetcher(pages), ctx_for())
+    assert claims["official_website"].availability == "failed"
+    assert claims["official_website"].note.startswith("budget_exhausted")
+
+
+def test_own_printed_orgnr_beats_sister_mentions_and_mail_services():
+    """Hava Omsorg and Selsbakkhøgda shapes: sisters named, a board mailbox on styrepost.no."""
+    body = (f'<footer>Fjellbekk Trevare AS · Org.nr {OURS} · Søsterselskaper: Kvist Omsorg AS, Lyng Omsorg AS '
+            '<a href="mailto:styret@styrepost.no">styret@styrepost.no</a></footer>')
+    claims = run(_site(body=body), ctx_for(hjemmeside="fjellbekk.no"))
+    assert claims["official_website"].value == "fjellbekk.no"
+
+
+def test_another_operator_org_number_still_makes_it_related():
+    body = f'<footer>Fjellbekk Trevare AS · Org.nr {OURS} · Drives av Kvist Drift AS, org.nr {OTHER}</footer>'
+    claims = run(_site(body=body), ctx_for(hjemmeside="fjellbekk.no"))
+    assert claims["official_website"].availability == "ambiguous"
+
+
+def test_rate_limited_candidate_is_a_transient_failure():
+    """Bergen Rubber shape: a 429 on a candidate must not become 'not available' (two runs must agree)."""
+    pages = {"https://fjellbekktrevare.no/": (429, html("Too many requests"))}
+    ctx = ctx_for()
+    claims = run(FakeFetcher(pages), ctx)
+    assert claims["official_website"].availability == "failed"
+    assert ctx.module_states["website"] == "timeout"

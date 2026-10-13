@@ -56,7 +56,8 @@ FREE_MAIL = {
     "epost.no", "chello.no", "bluecom.no", "ebnett.no", "hotmail.co.uk", "aol.com", "protonmail.com", "proton.me",
     "gmx.com", "gmx.net", "loqal.no", "netcom.no", "telenor.no", "nextgentel.no", "haugnett.no", "tdcadsl.no",
     "sensewave.com", "enivest.net", "tussa.com", "mimer.no", "kvamnet.no", "neasonline.no", "fiberbredband.no",
-    "vikenfiber.no", "skynet.be", "yandex.com", "mail.ru", "qq.com", "163.com", "web.de",
+    "vikenfiber.no", "skynet.be", "yandex.com", "mail.ru", "qq.com", "163.com", "web.de", "post.no", "posten.no",
+    "c2i.no", "bluezone.no", "styrepost.no", "styreweb.no", "styrerommet.no", "hotmail.se", "outlook.dk", "live.se", "icloud.no", "pm.me", "gmx.de", "ymail.com",
 }
 # Hosts that are platforms, not a company's own site.
 PLATFORM_HOSTS = ("facebook.com", "instagram.com", "linkedin.com", "twitter.com", "x.com", "youtube.com",
@@ -655,6 +656,7 @@ class Verdict:
     final_url: str | None = None
     variant: list[str] | None = None  # set when the name matched only through a shortened name variant
     namesake: tuple[str, str] | None = None  # another registered entity with our name (registry-declared site)
+    ignore_orgs: set = field(default_factory=set)  # our own group's org numbers, never "another company" here
     cross: bool = False         # redirected to another registered domain
     path_scoped: bool = False   # the site is one section of a host that serves others (chain or portal)
 
@@ -688,7 +690,8 @@ def judge(v: Verdict, org: str, e: dict, registry_host: str | None) -> None:
             return
     for p in pages:
         for num, s in other_orgnrs(p, org).items():
-            v.others.setdefault(num, (p, s))
+            if num not in v.ignore_orgs:
+                v.others.setdefault(num, (p, s))
     # (d) related: another org number and never ours
     if v.others:
         # Only a domain the registry itself points to can be "related"; a guessed domain is just someone else's.
@@ -771,11 +774,22 @@ class _Spend:
     def can(self, n: int = 1) -> bool:
         return self.used + n <= self.cap and self.f.budget.remaining_requests() > RESERVE + n
 
+    def can_registry(self) -> bool:
+        """Registry lookups (Brreg) are not site requests: only the run budget limits them."""
+        return self.f.budget.remaining_requests() > RESERVE + 1
+
     async def get(self, url: str, *, robots: bool = True, headers: dict | None = None) -> Snapshot:
         p = urlsplit(url)
         origin = f"{p.scheme}://{p.netloc}"
         before = self.f.budget.used
         new_robots = robots and origin not in self.f.robots
+        if (p.hostname or "") == "data.brreg.no":
+            if not self.can_registry():
+                raise _OutOfRequests()
+            try:
+                return await self.f.get(url, robots=robots, headers=headers, reserve=RESERVE)
+            finally:
+                self.ctx.requests += max(0, min(self.f.budget.used - before, 1))
         if not self.can(2 if new_robots else 1):
             raise _OutOfRequests()
         try:
@@ -867,6 +881,9 @@ async def reachable(host: str, port: int = 443) -> bool:
     return False
 
 
+STATUS_RANK = {"unreachable": 0, "no_dns": 0, "parked": 3, "blocked": 4, "http_429": 5, "http_503": 5}
+
+
 async def _fetch_page(sp: _Spend, url: str) -> tuple[Page | None, str]:
     try:
         snap = await sp.get(url)
@@ -876,7 +893,9 @@ async def _fetch_page(sp: _Spend, url: str) -> tuple[Page | None, str]:
         raise
     except Exception:
         return None, "unreachable"
-    if snap.status in (401, 403, 429):
+    if snap.status in (401, 403):
+        return None, "blocked"  # the site refuses our crawler: not absence
+    if snap.status == 429:
         return None, f"http_{snap.status}"
     if snap.status >= 400:
         return None, f"http_{snap.status}"
@@ -936,8 +955,8 @@ async def check_candidate(f: Fetcher, sp: _Spend, ctx: CompanyContext, v: Verdic
         if page:
             status = "parked"
             home_parked = page
-        elif status != "parked":
-            status = st
+        elif STATUS_RANK.get(st, 1) >= STATUS_RANK.get(status, 1):
+            status = st  # keep the most telling outcome across bare, www and http attempts
         if scheme == "https" and st in ("blocked", "unreachable") and h not in http_later:
             http_later.append(h)  # robots.txt or TLS failed on https; plain HTTP may still work
     if not home:
@@ -972,6 +991,12 @@ async def check_candidate(f: Fetcher, sp: _Spend, ctx: CompanyContext, v: Verdic
                     home = front
                     v.path_scoped = False
     judge(v, ctx.org, e, registry_host)
+    if v.status == "related" and v.source in ("registry", "email") and not v.cross:
+        # the registry's own site printing only our subsidiaries' org numbers is the group parent's site
+        group = await _group_members(sp, ctx)
+        if group and all(k in group for k in v.others):
+            v.ignore_orgs = set(group)
+            judge(v, ctx.org, e, registry_host)
     if v.cross and v.status == "name_only" and _is_front_or_about(home.url) and sp.can(1):
         # the redirect target names us on its front page: its linked privacy page may print our org number
         priv = [urljoin(home.url, a["href"]).split("#")[0] for a in home.soup.find_all("a", href=True)
@@ -1119,7 +1144,7 @@ async def _check_collision(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> Non
     if rows is None:
         rows = []
         for path in ("enheter", "underenheter"):
-            if not sp.can(1):
+            if not sp.can_registry():
                 break
             try:
                 snap = await sp.get(f"https://data.brreg.no/enhetsregisteret/api/{path}?navn={query.replace(' ', '%20')}"
@@ -1140,7 +1165,7 @@ async def _check_collision(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> Non
         extra = _NAME_SEARCH.get(key2)
         if extra is None:
             extra = []
-            if sp.can(1):
+            if sp.can_registry():
                 try:
                     snap = await sp.get(f"https://data.brreg.no/enhetsregisteret/api/enheter?navn={longest}"
                                         f"&forretningsadresse.postnummer={pn}&size=50", robots=False,
@@ -1229,7 +1254,7 @@ async def _check_variant(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> None:
         v.detail = f"the site shows '{lab}', which is another registered company ({other[lab]})"
 
 
-LANG_SEG = {"no", "nb", "nn", "en", "se", "sv", "da", "de", "fi", "home", "hjem", "forside", "index.html", "index.php"}
+LANG_SEG = {"no", "nb", "nn", "en", "se", "sv", "da", "de", "fi", "home", "hjem", "forside", "index.html", "index.php", "nb-no", "no-no", "nn-no", "en-gb", "en-us", "en-no", "nb_no", "no_no", "norge", "norway", "nor", "sv-se", "da-dk", "fi-fi", "eng"}
 
 
 ABOUT_SEG = re.compile(r"^(om-?oss|om|about(-us)?|kontakt(-oss)?|contact(-us)?|firma|selskapet|company)$", re.I)
@@ -1520,6 +1545,7 @@ class Scope:
     other_mail: set[str] = field(default_factory=set)  # contact addresses on another organisation's domain
     codeclared: dict[str, str] = field(default_factory=dict)  # other org -> name, declaring the same website
     dominant_kind: dict[str, str] = field(default_factory=dict)  # dominant name -> operator, namesake or mention
+    ours_printed: bool = False  # our org number in an operator position, no other operator: the site is ours
     addr: tuple | None = None  # (street regex, postcode) of our registered address
 
     def __post_init__(self) -> None:
@@ -1770,10 +1796,10 @@ def other_company_names(pages: list[Page], words: list[str]) -> list[tuple[str, 
                 mention = m.group(0).strip()
                 positional = is_title or ctx_hit or op_page or (mention in optext)
                 operator = is_title or ctx_hit or (mention in ownertext)
-                score[key] = max(score.get(key, 0), 3 if operator else (2 if positional else 1))
+                score[key] = max(score.get(key, 0), 4 if (is_title or ctx_hit) else (3 if operator else (2 if positional else 1)))
         for k, v in score.items():
             best[k] = max(best.get(k, 0), v)
-    return [(k[0], k[1], best[k] >= 2, best[k] >= 3) for k in sorted(best, key=lambda k: -best[k])]
+    return [(k[0], k[1], best[k] >= 2, best[k] >= 3, best[k] >= 4) for k in sorted(best, key=lambda k: -best[k])]
 
 
 STAFF_BODIES = re.compile(r"(?i)bedriftsklubb|bedriftsidrettslag|bil(klubb)?\b|velferd|personalforening|fagforening|"
@@ -1808,10 +1834,11 @@ async def confirm_dominant(sp: "_Spend", ctx: CompanyContext, names: list[tuple]
     kinds = {} if kinds is None else kinds
     for lab, suffix, positional, *rest in ordered:
         operator = bool(rest and rest[0])
+        stated = bool(len(rest) > 1 and rest[1])
         if suffix in FOREIGN_SUFFIX:
             if positional or set(lab.split()) & ours:
                 out[f"{lab} {suffix}"] = "foreign"
-                kinds[f"{lab} {suffix}"] = "operator" if operator else "mention"
+                kinds[f"{lab} {suffix}"] = "stated" if stated else ("operator" if operator else "mention")
             continue
         if limit <= 0:
             break
@@ -1824,7 +1851,9 @@ async def confirm_dominant(sp: "_Spend", ctx: CompanyContext, names: list[tuple]
         if positional or tie:
             key = f"{lab} {suffix}"
             out[key] = got[lab]
-            if operator:
+            if stated:
+                kinds[key] = "stated"  # named as the site's operator, owner or controller, or in the page title
+            elif operator:
                 kinds[key] = "operator"
             elif tie and tie != "shares our distinctive name words":
                 kinds[key] = "namesake"  # shares our address, phone or email domain
@@ -1841,7 +1870,7 @@ async def confirm_sisters(sp: "_Spend", ctx: CompanyContext, labels: list[str], 
     for lab in labels[:limit]:
         hits = _SISTER_CACHE.get(lab)
         if hits is None:
-            if not sp.can(1):
+            if not sp.can_registry():
                 break
             try:
                 snap = await sp.get(f"{BRREG_SEARCH}?navn={lab.replace(' ', '%20')}&size=20", robots=False,
@@ -2442,26 +2471,81 @@ async def prepare_scope(sp: _Spend, ctx: CompanyContext, v: Verdict) -> Scope:
             if label == site_label or any(t in label for t in own_tokens):
                 continue  # the company's own alternate domain
             other_mail.add(dom)
-    group = await _group_members(sp, ctx) if (others or dominant or sisters) else set()
-    if group and _orgnr_in_operator_position(v, ctx.org):
-        # We are the group's parent and our org number is in an operator position: our own subsidiaries on
-        # the site do not take it away from us (they do lose it). Foreign or outside numbers still count.
-        others = {k: x for k, x in others.items() if k not in group}
-        dominant = {k: x for k, x in dominant.items() if x not in group and k in positional_names}
-        sisters = {k: x for k, x in sisters.items() if x not in group}
-        ctx.facts["website_group_parent"] = sorted(group)[:20]
     codeclared = await _codeclared(sp, ctx, home)
     if codeclared and v.method == "orgnr_on_page" and not others and _orgnr_in_operator_position(v, ctx.org):
         alltext = " ".join(p.text for p in v.pages)
         if not any((rx := _full_name_rx(n)) and rx.search(alltext) for n in codeclared.values()):
             codeclared = {}  # our org number in an operator position, and the other declarant is never named
+    reg_host = bare(host_of((ctx.registry or {}).get("hjemmeside") or ""))
+    own_proof = (not (v.cross or v.path_scoped)) and (
+        _orgnr_in_operator_position(v, ctx.org) or (reg_host and same_site(bare(home.host), reg_host)))
+    blockers = others or dominant or sisters or codeclared or other_mail
+    group = await _group_members(sp, ctx) if (blockers and own_proof) else set()
+    if group:
+        # We are the group's parent, on our own registry-declared or org-number-proven domain: our subsidiaries,
+        # our staff bodies (pension fund, sports and staff clubs) and group mailboxes on other domains do not take
+        # the site away from us. They do not get it either: a subsidiary still sees a related website.
+        def ours_or_staff(org: str, name: str) -> bool:
+            return org in group or bool(STAFF_BODIES.search(name or ""))
+        others = {k: x for k, x in others.items() if k not in group}
+        sisters = {k: x for k, x in sisters.items() if not ours_or_staff(str(x), k)}
+        dominant = {k: x for k, x in dominant.items() if not ours_or_staff(str(x), k)
+                    and kinds.get(k) != "mention"}  # partners merely mentioned on the parent's own site
+        codeclared = {k: x for k, x in codeclared.items() if not ours_or_staff(k, x)}
+        other_mail = set()
+        ctx.facts["website_group_parent"] = sorted(group)[:20]
+    if others and _orgnr_in_operator_position(v, ctx.org) and all(not re.fullmatch(r"\d{9}", k) for k in others):
+        # only foreign VAT or company numbers (a foreign parent or group) beside our own operator-position org
+        # number: the site stays ours, but nothing is derived from it
+        for k in list(others):
+            dominant[f"foreign group number {k}"] = "foreign"
+            kinds[f"foreign group number {k}"] = "mention"
+        others = {}
+    ours_printed = False
+    if not (v.cross or v.path_scoped) and _orgnr_in_operator_position(v, ctx.org):
+        # Our own org number in an operator position makes the site ours, unless another Norwegian org number
+        # is also in an operator position or another company is the stated operator. Other mentions,
+        # namesakes and group members elsewhere do not override it; they only stop facts being derived.
+        op_others = {k for k in others if re.fullmatch(r"\d{9}", k) and _num_in_operator_position(v, k)}
+        full = re.sub(r"[^a-z0-9]", "", _translit("".join(w for w in words if w not in GENERIC_WORDS)))
+        if len(full) >= 6 and full in re.sub(r"[^a-z0-9]", "", bare(home.host).split(".")[0]):
+            # on a domain named after us, a registry-confirmed sister's number beside ours is a group footer
+            op_others -= {str(x) for x in sisters.values()}
+        stated = [k for k in dominant if kinds.get(k) == "stated"]
+        if not op_others and not stated and not codeclared:
+            ours_printed = True
+            for k, x in list(others.items()):
+                dominant[f"org number {k}"] = k
+                kinds[f"org number {k}"] = "mention"
+            for k, x in list(sisters.items()):
+                dominant[k] = x
+                kinds[k] = "mention"
+            for d in sorted(other_mail):
+                dominant[f"contact on {d}"] = d
+                kinds[f"contact on {d}"] = "mention"
+            for k in dominant:
+                kinds[k] = "mention"
+            others, sisters, other_mail = {}, {}, set()
     e = ctx.registry or {}
     a = e.get("forretningsadresse") or {}
     srx = _street_regex(([x for x in a.get("adresse") or [] if x] or [""])[-1]) if a.get("adresse") else None
     addr = (srx, a["postnummer"]) if srx and a.get("postnummer") else None
     sc = Scope(ctx.org, words, others, sisters, dominant, v.cross, v.path_scoped, other_mail, codeclared, addr)
     sc.dominant_kind = kinds
+    sc.ours_printed = ours_printed
     return sc
+
+
+def _num_in_operator_position(v: Verdict, num: str) -> bool:
+    """Another org number printed in the footer, header, contact or imprint block, or on an operator page."""
+    g = f"{num[:3]}[\\s.\u00a0]?{num[3:6]}[\\s.\u00a0]?{num[6:]}"
+    for p in v.pages:
+        if not re.search(g, p.text):
+            continue
+        path = unquote(urlsplit(p.url).path)
+        if OPERATOR_PAGE.search(path) or re.search(r"(?i)personvern|privacy", path) or re.search(g, _operator_text(p)):
+            return True
+    return False
 
 
 def _orgnr_in_operator_position(v: Verdict, org: str) -> bool:
@@ -2487,7 +2571,7 @@ async def _group_members(sp: "_Spend", ctx: CompanyContext) -> set[str]:
     if ctx.org in _GROUP_CACHE:
         return _GROUP_CACHE[ctx.org]
     members: set[str] = set()
-    if sp.can(1):
+    if sp.can_registry():
         try:
             snap = await sp.get(f"https://data.brreg.no/enhetsregisteret/api/konsernstruktur/{ctx.org}", robots=False,
                                 headers={"Accept": "application/json"})
@@ -2516,7 +2600,7 @@ async def _codeclared(sp: "_Spend", ctx: CompanyContext, home: Page) -> dict[str
     rows = _HJEM_CACHE.get(host)
     if rows is None:
         rows = []
-        if sp.can(1):
+        if sp.can_registry():
             try:
                 snap = await sp.get(f"https://data.brreg.no/enhetsregisteret/api/enheter?hjemmeside={host}&size=20",
                                     robots=False, headers={"Accept": "application/json"})
@@ -2563,7 +2647,7 @@ def emit_site(ctx: CompanyContext, v: Verdict, scope: Scope | None = None) -> li
     # a redirect, a section page, a co-declaring company or another org number make it a related website.
     own_domain_only = (not RELATED_STRICT and not (v.cross or v.path_scoped or scope.others or scope.codeclared
                                                    or scope.sisters or scope.other_mail)
-                       and all(scope.dominant_kind.get(k) == "mention" for k in scope.dominant))
+                       and all(scope.dominant_kind.get(k) == "mention" for k in scope.dominant)) or scope.ours_printed
     if not scope.exclusive and own_domain_only:
         # the company's own domain, non-exclusive only because other companies are named on it: the site is the
         # company's, but nothing is derived from it
@@ -3328,7 +3412,7 @@ async def fetch_website(f: Fetcher, ctx: CompanyContext) -> None:
     unchecked = cands[len(verdicts):] + [(v.domain, v.source, None) for v in verdicts if v.status == "skipped_budget"]
     run_short = f.budget.remaining_requests() <= RESERVE + 2 or f.budget.remaining_seconds() < 10
     declared_left = [d for d, src, _ in unchecked if src in ("registry", "email") or src.startswith("seed:")]
-    if budget_note == "budget_exhausted" or (budget_note and (run_short or declared_left)):
+    if budget_note == "budget_exhausted" or (budget_note and unchecked) or any(v.status == "skipped_budget" for v in verdicts):
         ctx.mark("official_website", SECTION, "failed",
                  note="budget_exhausted: not checked " + ", ".join(d for d, _s, _u in unchecked[:5]))
         ctx.module_states["website"] = "failed"
@@ -3337,6 +3421,15 @@ async def fetch_website(f: Fetcher, ctx: CompanyContext) -> None:
     # Absence is claimed only from definitive answers. A failed DNS lookup, or a site that resolved but
     # could not be reached on every candidate, is a failure (transient: the retry pass tries again).
     answered = [v for v in verdicts if v.status not in ("no_dns", "dns_error", "duplicate", "not_checked")]
+    limited = [v for v in verdicts if v.status in ("http_429", "http_503")]
+    if limited:
+        # a rate-limited or temporarily unavailable candidate (after honouring Retry-After) may be the site:
+        # a transient failure for the retry pass, never absence, so two runs agree
+        ctx.mark("official_website", SECTION, "failed",
+                 note="transient: " + ", ".join(f"{v.domain} ({v.status})" for v in limited[:4]) + " answered "
+                      "rate-limited or unavailable; checked: " + ", ".join(f"{v.domain} ({v.status})" for v in verdicts[:6]))
+        ctx.module_states["website"] = "timeout"
+        return
     errors = [v for v in verdicts if v.status in TRANSIENT]
     transient = False
     if errors and not any(v.status in ("name_only", "related", "ambiguous") for v in verdicts):
@@ -3385,7 +3478,8 @@ async def fetch_website(f: Fetcher, ctx: CompanyContext) -> None:
     if budget_note:
         note += f"; stopped early: {budget_note}"
     ambiguous = [v for v in verdicts if v.status in ("name_only", "related", "ambiguous")]
-    blocked = [v for v in verdicts if v.status == "blocked" and v.source == "registry"]
+    looked = [v for v in verdicts if v.status not in ("no_dns", "duplicate")]
+    blocked = [v for v in verdicts if v.status == "blocked" and (v.source == "registry" or looked == [v])]
     if ambiguous:
         names = ", ".join(f"{v.final_url or v.domain} ({v.status})" for v in ambiguous[:3])
         ctx.mark("official_website", SECTION, "ambiguous", note=f"{note}. Unproven candidates: {names}")
