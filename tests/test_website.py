@@ -69,6 +69,7 @@ def offline_dns(monkeypatch):
     monkeypatch.setattr(W, "reachable", tls_only)
     W._SISTER_CACHE.clear()
     W._NAME_SEARCH.clear()
+    W._LEGAL_SEARCH.clear()
     W._ROW_CACHE.clear()
     W._HJEM_CACHE.clear()
     W._GROUP_CACHE.clear()
@@ -2130,3 +2131,119 @@ def test_legacy_charset_value_with_a_non_breaking_space_is_quoted_in_exact_piece
     assert exact and all(x.encode() in raw_bytes for x in [span] + extra)
     joined = " ".join([span] + extra)
     assert "Lyngveien" in joined and "9999" in joined
+
+
+# ---------------------------------------------------------------- exact legal name, unique in the registry
+def _legal_search(rows_main=(), rows_sub=(), query="fjellbekk%20trevare"):
+    out = {}
+    for path, rows in (("enheter", rows_main), ("underenheter", rows_sub)):
+        out[f"https://data.brreg.no/enhetsregisteret/api/{path}?navn={query}&size=50"] = (
+            200, json.dumps({"_embedded": {path: list(rows)}}), "application/json")
+    return out
+
+
+LEGAL_SITE = html("<h1>Snekkerverksted</h1><p>Vi lager kjøkken på mål.</p>"
+                  "<footer>© 2025 Fjellbekk Trevare AS · 9999 Testby</footer>", title="Fjellbekk Trevare AS | Kjøkken")
+
+
+def _legal_run(body=LEGAL_SITE, host="https://fjellbekktrevare.no/", search=None, **rec):
+    pages = {host: (200, body)}
+    pages.update(_legal_search() if search is None else search)
+    ctx = ctx_for(**rec)
+    run(FakeFetcher(pages), ctx)
+    return ctx
+
+
+def test_exact_legal_name_unique_in_registry_with_post_town_proves_the_site():
+    ctx = _legal_run()
+    site = ctx.claims_for("official_website")
+    assert site and site[0].value == "fjellbekktrevare.no" and site[0].match["method"] == "legal_name_unique"
+    spans = [e.claim_span for e in ctx.evidence if e.id in site[0].evidence_ids]
+    assert any("Fjellbekk Trevare AS" in s for s in spans) and any("Testby" in s for s in spans)
+
+
+def test_legal_name_proof_rejected_when_another_entity_carries_the_whole_name():
+    for rows_main, rows_sub in (
+            ([{"organisasjonsnummer": OTHER, "navn": "FJELLBEKK TREVARE HOLDING AS"}], []),   # holding or eiendom pair
+            ([{"organisasjonsnummer": OTHER, "navn": "FJELLBEKK TREVARE AS"}], []),           # same name, another town
+            ([{"organisasjonsnummer": OTHER, "navn": "FJELLBEKK-TREVARE AS"}], []),           # hyphen variant
+            ([{"organisasjonsnummer": OTHER, "navn": "FJELLBEKK TREVARE", "slettedato": "2019-01-01"}], []),  # deleted
+            ([], [{"organisasjonsnummer": "999000061", "navn": "BYGG AS AVD FJELLBEKK TREVARE",
+                   "overordnetEnhet": THIRD}])):                                          # another company's workplace
+        W._LEGAL_SEARCH.clear()
+        W._NAME_SEARCH.clear()
+        ctx = _legal_run(search=_legal_search(rows_main, rows_sub))
+        assert not ctx.claims_for("official_website"), rows_main or rows_sub
+
+
+def test_legal_name_proof_ignores_our_own_workplaces_and_shorter_names():
+    ctx = _legal_run(search=_legal_search([{"organisasjonsnummer": OTHER, "navn": "FJELLBEKK AS"}],
+                                          [{"organisasjonsnummer": "999000061", "navn": "FJELLBEKK TREVARE AS AVD NORD",
+                                            "overordnetEnhet": OURS}]))
+    assert ctx.claims_for("official_website")[0].match["method"] == "legal_name_unique"
+
+
+def test_legal_name_proof_fails_closed_without_a_registry_search():
+    ctx = _legal_run(search={})
+    assert not ctx.claims_for("official_website")
+
+
+def test_legal_name_proof_needs_the_town_or_a_role_holder():
+    body = html("<h1>Snekkerverksted</h1><footer>© 2025 Fjellbekk Trevare AS · Daglig leder Kari Nordmann</footer>")
+    ctx = _legal_run(body=body)
+    assert not ctx.claims_for("official_website")
+    W._LEGAL_SEARCH.clear()
+    pages = {"https://fjellbekktrevare.no/": (200, body)}
+    pages.update(_legal_search())
+    ctx = ctx_for()
+    ev = ctx.add_evidence(None, source_url="https://data.brreg.no/enhetsregisteret/api/enheter/999000002/roller",
+                          source_class="official_registry", span="x", method="t")
+    ctx.add_claim("ceo", "leadership", {"role": "Daglig leder", "role_code": "DAGL", "name": "Kari Anne Nordmann"}, ev)
+    run(FakeFetcher(pages), ctx)
+    site = ctx.claims_for("official_website")
+    assert site and site[0].match["method"] == "legal_name_unique"
+    assert any("Kari Nordmann" in e.claim_span for e in ctx.evidence if e.id in site[0].evidence_ids)
+
+
+def test_short_town_name_counts_only_after_a_post_code():
+    ctx = _legal_run(body=html("<footer>Fjellbekk Trevare AS. Vi har kunder i Moss.</footer>"),
+                     forretningsadresse={"adresse": ["Lyngveien 12B"], "postnummer": "1599", "poststed": "MOSS"})
+    assert not ctx.claims_for("official_website")
+    W._LEGAL_SEARCH.clear()
+    ctx = _legal_run(body=html("<footer>Fjellbekk Trevare AS, Postboks 4, 1501 Moss</footer>"),
+                     forretningsadresse={"adresse": ["Lyngveien 12B"], "postnummer": "1599", "poststed": "MOSS"})
+    assert ctx.claims_for("official_website")[0].match["method"] == "legal_name_unique"
+
+
+def test_legal_name_proof_needs_the_whole_name_as_the_domain():
+    for host in ("https://fjellbekk.no/", "https://fjellbekktrevare.se/", "https://trevare.fjellbekk.no/"):
+        W._LEGAL_SEARCH.clear()
+        ctx = _legal_run(host=host)
+        assert not ctx.claims_for("official_website"), host
+
+
+def test_legal_name_proof_needs_the_legal_form_in_capitals():
+    for footer in ("Kjøkken fra Fjellbekk Trevare as part of our range. 9999 Testby",   # English 'as'
+                   "Fjellbekk Trevare A/S · 9999 Testby",                               # Danish form
+                   "Fjellbekk Trevare · 9999 Testby"):                                  # trade name only
+        W._LEGAL_SEARCH.clear()
+        ctx = _legal_run(body=html(f"<footer>{footer}</footer>"))
+        assert not ctx.claims_for("official_website"), footer
+
+
+def test_legal_name_proof_rejects_sister_names_and_other_operators():
+    for footer in ("Fjellbekk Trevare AS er eid av Fjellbekk Gruppen AS · 9999 Testby",
+                   "Fjellbekk Trevare AS · 9999 Testby · Nettstedet eies av Testby Bygg AS"):
+        W._LEGAL_SEARCH.clear()
+        ctx = _legal_run(body=html(f"<footer>{footer}</footer>"))
+        assert not ctx.claims_for("official_website"), footer
+    W._LEGAL_SEARCH.clear()
+    ctx = _legal_run(body=html("<footer>© Fjellbekk Trevare AS · 9999 Testby · Nettside levert av Webby AS</footer>"))
+    assert ctx.claims_for("official_website")[0].match["method"] == "legal_name_unique"  # an agency credit is fine
+
+
+def test_legal_name_proof_only_for_limited_companies():
+    for form, name in (("NUF", "FJELLBEKK TREVARE AS"), ("SAM", "FJELLBEKK TREVARE AS"), ("ENK", "FJELLBEKK TREVARE AS")):
+        W._LEGAL_SEARCH.clear()
+        ctx = _legal_run(navn=name, organisasjonsform={"kode": form})
+        assert not ctx.claims_for("official_website"), form

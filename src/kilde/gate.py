@@ -60,16 +60,56 @@ def _digits(s: str) -> str:
     return re.sub(r"\D", "", s or "")
 
 
+def _alnum(s: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", fold(s))
+
+
+def legal_name_site_problem(ctx: CompanyContext, site) -> str | None:
+    """An official website proven only by the exact legal name (legal_name_unique) must still fit the registry:
+    an AS or ASA, a registered domain that is exactly the legal name, and a proof span that quotes the name
+    followed by its legal form in capitals. Returns the reason when it does not."""
+    reg = ctx.registry or {}
+    form = ((reg.get("organisasjonsform") or {}).get("kode") or "").upper()
+    if form not in ("AS", "ASA"):
+        return f"legal-name proof used for legal form {form or 'unknown'}"
+    words = re.findall(r"[\wæøåÆØÅ]+", (reg.get("navn") or "").lower().replace("&", " og "))
+    while words and words[-1] in ("as", "asa"):
+        words.pop()
+    if not words:
+        return "no registered name to compare"
+    alt = str.maketrans({"æ": "ae", "ø": "oe", "å": "aa"})
+    variants = [words, [w for w in words if w not in ("og", "and")]]
+    names = {_alnum(t) for ws in variants for t in ("".join(ws), "".join(ws).translate(alt))}
+    label = _alnum(registered_domain(str(site.value)).split(".")[0])
+    if label not in names:
+        return f"domain {registered_domain(str(site.value))} is not the legal name"
+    spans = [e.claim_span or "" for e in ctx.evidence if e.id in site.evidence_ids]
+    quoted = {_alnum(" ".join(ws)) + form.lower() for ws in variants}
+    if not any(re.search(r"(?<![A-Za-z])" + form + r"(?![A-Za-z/])", s) and any(q in _alnum(s) for q in quoted)
+               for s in spans):
+        return "the proof does not quote the legal name with its legal form"
+    return None
+
+
 def check(ctx: CompanyContext) -> list[str]:
     """Withhold derived web facts that fail consistency checks. Returns notes for the run report."""
     reg = ctx.registry or {}
     sites = ctx.claims_for("official_website")
+    notes: list[str] = []
+    if sites and (sites[0].match or {}).get("method") == "legal_name_unique":
+        why = legal_name_site_problem(ctx, sites[0])
+        if why:
+            for c in ctx.claims:
+                if c.field in ("official_website", "official_website_url") and c.availability == "available":
+                    c.availability, c.value, c.confidence = "ambiguous", None, 0.0
+                    c.note = f"Withheld by the publication gate: {why}"
+            notes.append(f"{ctx.org} official_website: {why}")
+            sites = []
     derived = [c for c in ctx.claims if c.field in DERIVED and c.availability == "available"
                and (c.match or {}).get("method") != "registry_declared"
                and (c.match or {}).get("method") != "employer_orgnr"]
     if not derived:
-        return []
-    notes: list[str] = []
+        return notes
 
     def withhold(c, why: str) -> None:
         c.availability = "ambiguous"

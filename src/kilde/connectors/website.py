@@ -25,7 +25,7 @@ import unicodedata
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Any
-from urllib.parse import parse_qsl, unquote, urlencode, urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urljoin, urlsplit, urlunsplit
 
 import dns.asyncresolver
 import dns.exception
@@ -1108,6 +1108,7 @@ async def check_candidate(f: Fetcher, sp: _Spend, ctx: CompanyContext, v: Verdic
                     break
     await _check_variant(sp, ctx, v)
     await _check_collision(sp, ctx, v)
+    await _check_legal_name_unique(sp, ctx, v)
 
 
 def _declared_host(e: dict, host: str) -> bool:
@@ -1326,6 +1327,185 @@ async def _check_variant(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> None:
     if lab in other:
         v.status, v.method = "name_only", None
         v.detail = f"the site shows '{lab}', which is another registered company ({other[lab]})"
+
+
+# ---------------------------------------------------------------- exact legal name, unique in the registry
+# A site that shows only our name (no org number, registry phone or address) is accepted when every one of these
+# holds: the company is an AS or ASA; the exact registered legal name with its upper-case legal form ("Fishlab AS")
+# is printed on the site; the site's own domain is exactly that name (fishlab.no); no other legal name sharing our
+# distinctive words, and no other company in an operator position (title, owner or copyright line), is on the
+# site; the site shows the registered post town or municipality, or a current role holder's full name; and a
+# registry name search (main units and sub-units, active or not, original spelling) finds no other entity whose
+# name contains all of ours ('Fishlab Holding AS', a second 'Fishlab AS' elsewhere, another company's workplace).
+LEGAL_UNIQUE_FORMS = {"AS": "AS", "ASA": "ASA"}
+LEGAL_UNIQUE_TLDS = {"no", "com", "net", "org", "io", "as", "eu", "biz", "info"}
+_LEGAL_SEARCH: dict[str, list[dict] | None] = {}
+_CREDIT_LEAD = re.compile(r"^(nettside|nettsted|nettbutikk|hjemmeside|utviklet|levert|laget|designet|design|webdesign|"
+                          r"drevet|driftet|powered|made|built|hosted|hosting|produsert|publisert|tema|theme)\s+(av|by|med|with|fra)\b")
+
+
+def _legal_name_rx(name: str, form: str) -> re.Pattern | None:
+    """The registered name followed by its legal form written in capitals ('Fishlab AS', 'FISHLAB AS'); the
+    lower-case English word 'as' after a name ('Faceless as part of') and a Danish 'A/S' never match."""
+    suffix = LEGAL_UNIQUE_FORMS.get(form)
+    words = name_words(name)
+    rx = name_regex(words) if words and suffix else None
+    if not rx:
+        return None
+    body = r"[\s\-.]*".join(_word_rx(w) for w in words)
+    return re.compile(r"(?<![0-9a-zæøåA-ZÆØÅ])(?i:" + body + r")[  ]+" + suffix + r"(?![0-9a-zæøåA-ZÆØÅ/&])")
+
+
+def _label_is_name(host: str, name: str) -> bool:
+    """The site's registered domain is the whole legal name and nothing else (fishlab.no, luva-prosjekt.no)."""
+    parts = bare(host).split(".")
+    if len(parts) != 2 or parts[1] not in LEGAL_UNIQUE_TLDS:
+        return False
+    label = re.sub(r"[^a-z0-9]", "", parts[0])
+    words = name_words(name)
+    options = {"".join(v) for ws in (words, [w for w in words if w not in ("og", "and")]) for v in _ascii_variants(ws)}
+    return bool(label) and label in options
+
+
+def _legal_span(pages: list[Page], name: str, form: str) -> tuple[Page, str, str] | None:
+    rx = _legal_name_rx(name, form)
+    if not rx:
+        return None
+    for p in pages:
+        for m in rx.finditer(p.text):
+            if not _in_hostname(p.text, m.start(), m.end()):
+                return p, _window(p.text, m.start(), m.end(), 40), m.group(0).strip()
+    return None
+
+
+def _credit_only(pages: list[Page], other: str) -> bool:
+    """Every mention of the other company follows a web agency credit ('Nettside levert av Webby AS')."""
+    rx = name_regex(other.split())
+    hits = [(p.text, m) for p in pages for m in rx.finditer(p.text)] if rx else []
+    return bool(hits) and all(CREDIT.search(t[max(0, m.start() - 40):m.start()]) for t, m in hits)
+
+
+def _role_people(ctx: CompanyContext) -> list[str]:
+    """Current role holders who are people (full names), from the registry roles read earlier in the run."""
+    out = []
+    for c in ctx.claims:
+        v = c.value
+        if c.section == "leadership" and c.availability == "available" and isinstance(v, dict) \
+                and v.get("name") and not v.get("organisation_number") and len(str(v["name"]).split()) >= 2:
+            if v["name"] not in out:
+                out.append(v["name"])
+    return out
+
+
+def _corroborator(pages: list[Page], ctx: CompanyContext, name: str) -> tuple[Page, str, str] | None:
+    """The registered post town or municipality (as a capitalised place name, after a post code when it is a
+    short word such as 'Oslo'), or a current role holder's first and last name, somewhere on the site. Our own
+    name is masked first, so a place inside the legal name does not count."""
+    e = ctx.registry or {}
+    addr = e.get("forretningsadresse") or e.get("beliggenhetsadresse") or {}
+    places = sorted({x.strip() for x in (addr.get("poststed"), addr.get("kommune")) if x and x.strip()}, key=lambda x: (-len(x), x))
+    our_rx = name_regex(name_words(name))
+    people = _role_people(ctx)
+    for p in pages:
+        text = our_rx.sub(lambda m: " " * len(m.group(0)), p.text) if our_rx else p.text
+        for place in places:
+            body = r"\s+".join(re.escape(w) for w in place.split())
+            for m in re.finditer(r"(?<![\wæøåÆØÅ@./-])(\d{4}[  ]+)?(" + body + r")(?![\wæøåÆØÅ])", text, re.I):
+                word = m.group(2)
+                if not word[:1].isupper() or _in_hostname(text, m.start(2), m.end(2)):
+                    continue
+                if len(place) >= 5 or m.group(1):
+                    return p, _window(p.text, m.start(), m.end(), 40), p.text[m.start():m.end()].strip()
+        for person in people:
+            ws = person.split()
+            rx = re.compile(r"(?<![\wæøåÆØÅ])" + re.escape(ws[0]) + r"(?:[  ]+[\wæøåÆØÅ.\-]+){0,2}?[  ]+"
+                            + re.escape(ws[-1]) + r"(?![\wæøåÆØÅ])", re.I)
+            m = rx.search(text)
+            if m:
+                return p, _window(p.text, m.start(), m.end(), 40), p.text[m.start():m.end()].strip()
+    return None
+
+
+def legal_name_unique_page(v: Verdict, ctx: CompanyContext) -> tuple[tuple, tuple] | None:
+    """The page-side checks of the legal_name_unique proof: (legal-name proof, corroborator proof), or None."""
+    e = ctx.registry or {}
+    name = e.get("navn") or ""
+    form = ((e.get("organisasjonsform") or {}).get("kode") or "").upper()
+    if v.status != "name_only" or not (v.detail or "").startswith("legal name shown, but no org number") or \
+            v.cross or v.path_scoped or v.others or v.namesake or v.variant or v.source == "guess_short" or \
+            form not in LEGAL_UNIQUE_FORMS or not v.pages or not _label_is_name(v.pages[0].host, name):
+        return None
+    legal = _legal_span(v.pages, name, form)
+    if not legal:
+        return None
+    words = name_words(name)
+    ours = {_translit(w) for w in words}
+    distinct = {w for w in ours if len(w) >= 3 and w not in GENERIC_WORDS and not w.isdigit()} or ours
+    for other, _suffix, _positional, operator, _strong in other_company_names(v.pages, words):
+        ws = set(other.split())
+        if ws & distinct:
+            return None  # a sister, parent or namesake with our words ('Eurotec Entreprenør AS' on eurotec.no)
+        if operator and not _CREDIT_LEAD.match(other) and not _credit_only(v.pages, other):
+            return None  # another company runs or owns the site
+    corr = _corroborator(v.pages, ctx, name)
+    return (legal, corr) if corr else None
+
+
+async def _legal_namesakes(sp: "_Spend", ctx: CompanyContext) -> list[str] | None:
+    """Other registered entities (main units and other companies' sub-units, deleted ones included) whose name
+    contains every word of our legal name. None when the registry search could not be read (never a pass)."""
+    e = ctx.registry or {}
+    words = [w for w in name_words(e.get("navn") or "") if w not in FORM_NAME_WORDS]
+    if not words:
+        return None
+    query = " ".join(words)
+    ours = {_translit(w) for w in words}
+    found: list[str] = []
+    for path in ("enheter", "underenheter"):
+        key = f"{path}:{query}"
+        rows = _LEGAL_SEARCH.get(key)
+        if key not in _LEGAL_SEARCH:
+            rows = None
+            if sp.can_registry():
+                try:
+                    snap = await sp.get(f"https://data.brreg.no/enhetsregisteret/api/{path}?navn="
+                                        f"{quote(query)}&size=50", robots=False, headers={"Accept": "application/json"})
+                    if snap.status == 200:
+                        rows = (snap.json().get("_embedded") or {}).get(path) or []
+                except (BudgetExhausted, _OutOfRequests):
+                    raise
+                except Exception:
+                    rows = None
+            if rows is not None:
+                _LEGAL_SEARCH[key] = rows  # a failed search is not remembered, so the retry pass asks again
+        if rows is None:
+            return None
+        for r in rows:
+            org = r.get("organisasjonsnummer")
+            if org == ctx.org or r.get("overordnetEnhet") == ctx.org:
+                continue
+            theirs = {_translit(w) for w in name_words(r.get("navn") or "") if w not in FORM_NAME_WORDS}
+            if ours <= theirs:
+                found.append(f"{r.get('navn')} ({org})")
+    return found
+
+
+async def _check_legal_name_unique(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> None:
+    """Upgrade a name-only candidate to proven (legal_name_unique) when every page and registry check holds."""
+    got = legal_name_unique_page(v, ctx)
+    if not got:
+        return
+    namesakes = await _legal_namesakes(sp, ctx)
+    if namesakes is None:
+        return
+    if namesakes:
+        v.detail = f"{v.detail}; another registered entity carries our whole name: {namesakes[0]}"
+        return
+    (lp, lspan, lcore), (cp, cspan, ccore) = got
+    v.status, v.method = "proven", "legal_name_unique"
+    v.detail = (f"the exact registered legal name '{lcore}' is on the site, its domain is that name, no other registered "
+                f"entity carries the name, and the site shows '{ccore}' from the registry")
+    v.proof = [(lp, lspan, lcore), (cp, cspan, ccore)]
 
 
 LANG_SEG = {"no", "nb", "nn", "en", "se", "sv", "da", "de", "fi", "home", "hjem", "forside", "index.html", "index.php", "nb-no", "no-no", "nn-no", "en-gb", "en-us", "en-no", "nb_no", "no_no", "norge", "norway", "nor", "sv-se", "da-dk", "fi-fi", "eng"}

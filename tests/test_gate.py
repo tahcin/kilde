@@ -124,3 +124,34 @@ def test_bare_numeric_facebook_page_id_passes_and_glued_own_form_is_ours():
     gate.check(ctx)
     got = {str(c.value): c.availability for c in ctx.claims if c.field == "social_profile" and c.value}
     assert got == {"facebook.com/100087098506924": "available", "facebook.com/fjelltoppasa": "available"}
+
+
+def _legal_ctx(site: str, span: str, registry: dict) -> CompanyContext:
+    ctx = CompanyContext("999999999")
+    ctx.registry = registry
+    s = Snapshot(url=site, final_url=site, status=200, retrieved_at="2026-10-13T08:00:00Z", content=b"x", content_type="text/html")
+    ev = ctx.add_evidence(s, source_class="company_owned", span=span, method="t")
+    ctx.add_claim("official_website", "web_presence", site.split("//")[1].strip("/"), ev, match={"method": "legal_name_unique"})
+    ctx.add_claim("social_profile", "web_presence", "facebook.com/fjelltopproer", ev, match={"method": "site_link"})
+    return ctx
+
+
+def test_legal_name_site_kept_when_domain_and_span_fit_the_registry():
+    reg = {"navn": "FJELLTOPP RØR AS", "organisasjonsform": {"kode": "AS"}}
+    for site in ("https://fjelltopprør.no/", "https://fjelltopproer.no/", "https://fjelltopp-ror.no/"):
+        ctx = _legal_ctx(site, "© 2025 Fjelltopp Rør AS · 9999 Testby", reg)
+        gate.check(ctx)
+        assert ctx.claims_for("official_website"), site
+
+
+def test_legal_name_site_withheld_when_it_does_not_fit_the_registry():
+    reg = {"navn": "FJELLTOPP RØR AS", "organisasjonsform": {"kode": "AS"}}
+    for site, span, registry in (
+            ("https://fjelltopp.no/", "Fjelltopp Rør AS", reg),                                   # domain is part of the name
+            ("https://fjelltopproer.no/", "Fjelltopp Rør as part of", reg),                       # no legal form in capitals
+            ("https://fjelltopproer.no/", "Fjelltopp Rør", reg),                                  # trade name only
+            ("https://fjelltopproer.no/", "Fjelltopp Rør AS", {**reg, "organisasjonsform": {"kode": "NUF"}})):
+        ctx = _legal_ctx(site, span, registry)
+        gate.check(ctx)
+        assert not ctx.claims_for("official_website"), (site, span)
+        assert all(c.availability != "available" for c in ctx.claims), (site, span)
