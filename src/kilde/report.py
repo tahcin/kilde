@@ -1320,7 +1320,7 @@ function cardChanged(co){
   if(co.ch.length)a.push(co.ch.length+' differences since the previous Kilde run.');
   var news=av(co,'dated_news').sort(function(x,y){return (y.d||'').localeCompare(x.d||'');});
   var ntitle=function(c){return String(c.v).replace(/\s*\([^()]*\)\s*$/,'');};
-  if(news.length){a.push((news.length===1?'Its website has one dated news post':'Its website has '+news.length+' dated news posts')+'; the latest, "'+esc(ntitle(news[0]))+'", is from '+dfmt(news[0].d)+'.');cls.push(news[0]);}
+  if(news.length){a.push((news.length===1?'Kilde collected one dated news post from its website':'Kilde collected '+news.length+' dated news posts from its website')+'; the latest, "'+esc(ntitle(news[0]))+'", is from '+dfmt(news[0].d)+'.');cls.push(news[0]);}
   var det=regs.slice(0,6).map(function(c){return drow(co,dfmt(c.d),render('registry_change',c.v),[c]);}).join('')+
     co.ch.map(function(ch){var cl=ch.current_claim_id?ix(co)[ch.current_claim_id]:null;
       return drow(co,ch.detected_at?dfmt(ch.detected_at):'Since last run',esc(label(ch.field))+': '+esc(String(ch.type||'change').replace(/_/g,' ')),cl?[cl]:[]);}).join('')+

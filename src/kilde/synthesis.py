@@ -215,8 +215,8 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
     news = sorted(ctx.claims_for("dated_news"), key=lambda c: c.as_of or "", reverse=True)
     if news:
         title = str(news[0].value).rsplit(" (", 1)[0]
-        say(f"Its website lists {len(news)} dated news post{'s' if len(news) != 1 else ''}; the newest, \"{clip(title, 120)}\", "
-            f"is from {news[0].as_of}.", *news[:3])
+        say(f"Kilde collected {len(news)} dated news post{'s' if len(news) != 1 else ''} from its website; the newest, "
+            f"\"{clip(title, 120)}\", is from {news[0].as_of}.", *news[:3])
 
     awards = sorted(ctx.claims_for("public_contract_award"), key=lambda c: c.as_of or "", reverse=True)
     if awards:
