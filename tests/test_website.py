@@ -1108,3 +1108,64 @@ def test_biri_shape_free_mail_address_phone_and_people_profile():
     assert claims["site_contact_email"].value == "fjellbekktrevare@gmail.com"
     assert claims["site_contact_phone"].value == "+4741000001"
     assert claims["social_profile"].value == "facebook.com/people/fjellbekk-trevare-as/100083089938875"
+
+
+# ---------------------------------------------------------------- outages are failures, not absence
+def _mock_dns(monkeypatch, exc_for):
+    import dns.resolver
+
+    async def fake(host, rtype, lifetime=None):
+        exc = exc_for(host)
+        if exc is None:
+            return [1]
+        raise exc
+    monkeypatch.setattr(W.dns.asyncresolver, "resolve", fake)
+    monkeypatch.setattr(W, "resolves", _real_resolves)
+    W._DNS_SEM = None
+    W._CANARY.clear()
+
+
+def test_nxdomain_is_absence(monkeypatch):
+    import dns.resolver
+    _mock_dns(monkeypatch, lambda h: None if h == W.CANARY_HOST else dns.resolver.NXDOMAIN())
+    ctx = ctx_for(navn="FJELLBEKK TREVARE AS")
+    claims = run(FakeFetcher({}), ctx)
+    assert claims["official_website"].availability == "not_available"
+
+
+@pytest.mark.parametrize("make_exc", [lambda: __import__("dns.exception").exception.Timeout(),
+                                      lambda: __import__("dns.resolver").resolver.NoNameservers(),
+                                      lambda: OSError("network is unreachable")])
+def test_resolver_failures_are_failed_not_absent(monkeypatch, make_exc):
+    _mock_dns(monkeypatch, lambda h: make_exc())
+    ctx = ctx_for(navn="FJELLBEKK TREVARE AS")
+    claims = run(FakeFetcher({}), ctx)
+    assert claims["official_website"].availability == "failed"
+    assert "network unavailable" in claims["official_website"].note
+    assert ctx.module_states["website"] == "timeout"
+
+
+def test_lookup_failure_on_declared_domain_with_network_up_is_failed(monkeypatch):
+    import dns.exception
+    _mock_dns(monkeypatch, lambda h: None if h == W.CANARY_HOST else dns.exception.Timeout())
+    ctx = ctx_for(navn="FJELLBEKK TREVARE AS", hjemmeside="fjellbekk.no")
+    claims = run(FakeFetcher({}), ctx)
+    assert claims["official_website"].availability == "failed"
+    assert claims["official_website"].note.startswith("the registry-declared domain")
+
+
+def test_dead_guessed_domain_with_network_up_is_absence(monkeypatch):
+    import dns.exception
+    _mock_dns(monkeypatch, lambda h: None if h == W.CANARY_HOST else dns.exception.Timeout())
+    ctx = ctx_for(navn="FJELLBEKK TREVARE AS")
+    claims = run(FakeFetcher({}), ctx)
+    assert claims["official_website"].availability == "not_available"
+
+
+def test_every_candidate_unreachable_after_dns_is_failed(monkeypatch):
+    async def down(host, port=443):
+        return False
+    monkeypatch.setattr(W, "reachable", down)
+    ctx = ctx_for(navn="FJELLBEKK TREVARE AS", hjemmeside="fjellbekk.no")
+    claims = run(FakeFetcher({}), ctx)
+    assert claims["official_website"].availability == "failed"

@@ -745,7 +745,7 @@ class _OutOfRequests(Exception):
     pass
 
 
-async def _resolve(sp: "_Spend", f: Fetcher, host: str) -> bool:
+async def _resolve(sp: "_Spend", f: Fetcher, host: str) -> bool | None:
     if host not in sp.dns:
         sp.dns[host] = await resolves(f, host)
     return sp.dns[host]
@@ -755,30 +755,36 @@ _DNS_SEM: asyncio.Semaphore | None = None
 DNS_PARALLEL = 24
 
 
-async def resolves(f: Fetcher, host: str) -> bool:
-    """True when the host has an A or AAAA record. NXDOMAIN or no answer means False; a timeout is retried
-    once, so a busy resolver is not mistaken for a missing domain."""
+async def resolves(f: Fetcher, host: str) -> bool | None:
+    """True when the host has an A or AAAA record; False only on a genuine NXDOMAIN or an empty answer for both
+    record types; None when the lookup itself failed (timeout after one retry, SERVFAIL, no reachable name
+    server, network error), which is never read as absence."""
     global _DNS_SEM
     if _DNS_SEM is None:
         _DNS_SEM = asyncio.Semaphore(DNS_PARALLEL)
     async with _DNS_SEM:
+        failed = False
         for rtype in ("A", "AAAA"):
+            answered = False
             for attempt in range(2):
                 f.budget.dns_lookups += 1
                 try:
                     ans = await dns.asyncresolver.resolve(host, rtype, lifetime=DNS_TIMEOUT * (attempt + 1))
                     if len(ans):
                         return True
+                    answered = True
                     break
-                except (dns.resolver.NXDOMAIN, dns.resolver.NoNameservers):
+                except dns.resolver.NXDOMAIN:
                     return False
                 except dns.resolver.NoAnswer:
+                    answered = True
                     break
                 except (dns.exception.Timeout, OSError):
                     continue
-                except dns.exception.DNSException:
+                except (dns.resolver.NoNameservers, dns.exception.DNSException):
                     break
-    return False
+            failed = failed or not answered
+    return None if failed else False
 
 
 async def reachable(host: str, port: int = 443) -> bool:
@@ -831,7 +837,8 @@ async def check_candidate(f: Fetcher, sp: _Spend, ctx: CompanyContext, v: Verdic
     ok = await asyncio.gather(*[_resolve(sp, f, h) for h in hosts])
     live = [h for h, r in zip(hosts, ok) if r]
     if not live:
-        v.status = "no_dns"
+        # absence only when every lookup said NXDOMAIN or no answer; a failed lookup is not absence
+        v.status = "dns_error" if any(r is None for r in ok) else "no_dns"
         return
     # connect probes for every live host and port at once, so dead hosts cost one timeout, not four
     probe_keys = [(h, port) for h in live for port in (443, 80)]
@@ -2601,6 +2608,23 @@ async def collect_hiring(sp: "_Spend", ctx: CompanyContext, pages: list[Page], d
 
 
 # ---------------------------------------------------------------- entry point
+CANARY_HOST = "data.brreg.no"
+_CANARY: dict[str, Any] = {}
+TRANSIENT = {"dns_error", "unreachable", "http_500", "http_502", "http_503", "http_504", "http_429", "skipped_budget"}
+
+
+async def network_up(f: Fetcher) -> bool:
+    """Outage guard: resolve a host that is always there. Checked lazily on the first lookup or connection
+    failure, and remembered for a minute."""
+    import time as _time
+    now = _time.monotonic()
+    if _CANARY and now - _CANARY["at"] < 60:
+        return _CANARY["up"]
+    up = bool(await resolves(f, CANARY_HOST)) and await reachable(CANARY_HOST, 443)
+    _CANARY.update(at=now, up=up)
+    return up
+
+
 async def fetch_website(f: Fetcher, ctx: CompanyContext) -> None:
     e = ctx.registry or {}
     if not e or e.get("_gone") or ctx.facts.get("deleted"):
@@ -2665,6 +2689,28 @@ async def fetch_website(f: Fetcher, ctx: CompanyContext) -> None:
         ctx.mark("official_website", SECTION, "failed", note="budget_exhausted")
         ctx.module_states["website"] = "failed"
         return
+
+    # Absence is claimed only from definitive answers. A failed DNS lookup, or a site that resolved but
+    # could not be reached on every candidate, is a failure (transient: the retry pass tries again).
+    answered = [v for v in verdicts if v.status not in ("no_dns", "dns_error", "duplicate", "not_checked")]
+    errors = [v for v in verdicts if v.status in TRANSIENT]
+    transient = False
+    if errors and not any(v.status in ("name_only", "related", "ambiguous") for v in verdicts):
+        up = await network_up(f)
+        # With the network down nothing is absent. With it up, a declared domain (registry website or email)
+        # that cannot be looked up or reached is a failure too; a dead name-guessed domain is just not ours.
+        declared_err = [v for v in errors if v.source in ("registry", "email")]
+        all_failed = bool(answered) and all(v.status in TRANSIENT for v in answered) and \
+            any(v.source in ("registry", "email") for v in answered)
+        transient = (not up) or bool(declared_err) or all_failed
+        why = "network unavailable" if not up else (
+            "the registry-declared domain could not be looked up or reached" if declared_err
+            else "every candidate site resolved but could not be reached")
+        if transient:
+            ctx.mark("official_website", SECTION, "failed", note=f"{why}; checked: " +
+                     ", ".join(f"{v.domain} ({v.status})" for v in verdicts[:6]))
+            ctx.module_states["website"] = "timeout"  # transient: the pipeline's retry pass runs it again
+            return
 
     # Related sites: another organisation number printed, ours never.
     for v in verdicts:
