@@ -80,11 +80,15 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
         if muni:
             bits.append(f"based in {muni.value['name'].title()}")
         if reg:
-            bits.append(f"registered on {reg.value}")
+            inc = first(ctx, "incorporation_date")
+            if inc and str(inc.value) < str(reg.value):
+                bits.append(f"founded on {inc.value} and registered on {reg.value}")
+            else:
+                bits.append(f"registered on {reg.value}")
         text = " ".join(bits)
         if ind:
             text += f", in the industry \"{ind.value['name']}\" ({ind.value['code']})"
-        say(text + ".", name, form, muni, reg, ind)
+        say(text + ".", name, form, muni, reg, ind, first(ctx, "incorporation_date") if reg else None)
 
     status = first(ctx, "legal_status")
     if status and any(status.value.get(k) for k in ("konkurs", "underAvvikling", "underTvangsavviklingEllerTvangsopplosning")):
@@ -161,8 +165,9 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
         how = {"orgnr_on_page": "the site shows its organisation number",
                "registry_website_and_name": "the registry lists this site and it shows the company name",
                "phone_and_name": "the site shows the registered phone number and the company name",
-               "address_and_name": "the site shows the registered address and the company name"}.get((site.match or {}).get("method"), "identity checks")
-        say(f"Its website is {site.value} (verified because {how}).", site)
+               "address_and_name": "the site shows the registered address and the company name",
+               "registry_declared": "the company registered it with Brønnøysundregistrene"}.get((site.match or {}).get("method"))
+        say(f"Its website is {site.value}" + (f" (verified because {how})." if how else ", matched to the registry by Kilde's identity checks."), site)
     socials = ctx.claims_for("social_profile")
     by_source: dict[str, list[Claim]] = {}
     for c in socials:
