@@ -104,6 +104,12 @@ NINE = re.compile(r"(?<![\d.,])(?:NO\s?)?([89]\d{2})[\s. ]?(\d{3})[\s. ]?(\d{3
 EMAIL = re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}")
 PHONE_TEXT = re.compile(r"(?<![\d])(?:\+|00)?(?:47[\s.\-\u00a0]?)?(?:\d[\s.\-\u00a0]?){7}\d(?![\s.\-\u00a0]?\d)")
 PHONE_LABEL = re.compile(r"(tlf|telefon|phone|mobil|tel\.?|ring oss|sentralbord)", re.I)
+PLACEHOLDER = re.compile(r"(?i)lorem ipsum|dolor sit amet|legg inn en (kort|beskrivelse)|gi en kort|skriv en kort|"
+                         r"just another wordpress site|hello world!?|hei verden|sample page|eksempelside|"
+                         r"this is an example page|dette er en eksempelside|your (company )?description here|"
+                         r"add a (short )?description|edit this text|rediger denne teksten|velkommen til wordpress|"
+                         r"welcome to wordpress|coming soon|under construction|your site title|site tagline")
+PLACEHOLDER_SLUG = re.compile(r"(?i)/(hello-world|hei-verden|sample-page|eksempelside|lorem-ipsum)(/|$)")
 GENERIC_DESC = re.compile(r"just another wordpress site|^(home|hjem|forside)$|coming soon|kommer snart|"
                           r"^(?:my|min) (?:site|side)$", re.I)
 GENERIC_MAILBOX = ("post", "kontakt", "contact", "info", "firmapost", "mail", "hello", "hei", "office", "salg",
@@ -470,17 +476,57 @@ def _digits_phones(e: dict) -> set[str]:
     return out
 
 
-def find_phone(page: Page, wanted: set[str]) -> str | None:
+CONTACT_MARK = re.compile(r"(?i)contact|kontakt|footer|header|address|adresse|vcard|company-info|firmainfo|info-box")
+
+
+def _names_in(text: str, names: list[list[str]]) -> bool:
+    t = _translit(text)
+    for ws in names:
+        rx = name_regex(ws)
+        if rx and rx.search(text):
+            return True
+        toks = [_translit(w) for w in ws if len(w) >= 3 and w not in GENERIC_WORDS and w not in FORM_NAME_WORDS]
+        if toks and all(re.search(r"(?<![a-z0-9])" + re.escape(x) + r"(?![a-z0-9])", t) for x in toks):
+            return True
+    return False
+
+
+def _phone_in_named_block(el, page: Page, names: list[list[str]]) -> bool:
+    """The phone sits in a contact block, header or footer whose text also names us."""
+    on_contact_page = bool(INTERNAL_PRIORITY[0].search(urlsplit(page.url).path))
+    node = el.parent if el is not None and getattr(el, "name", None) is None else el
+    for _ in range(8):
+        if node is None or getattr(node, "name", None) in (None, "[document]", "html"):
+            break
+        marks = " ".join(node.get("class") or []) + " " + (node.get("id") or "")
+        is_block = node.name in ("footer", "header", "address") or bool(CONTACT_MARK.search(marks))
+        if node.name in ("body", "main"):
+            is_block = on_contact_page
+        if is_block:
+            txt = node.get_text(" ", strip=True)
+            if len(txt) <= 3000 and _names_in(txt, names):
+                return True
+        if node.name in ("body", "main"):
+            break
+        node = node.parent
+    return False
+
+
+def find_phone(page: Page, wanted: set[str], names: list[list[str]] | None = None) -> str | None:
+    """Span showing a registry phone number. With names, only a phone inside a contact block, header or footer
+    that also names us counts (a number in an arbitrary content block is not proof)."""
     if not wanted:
         return None
     for m in PHONE_TEXT.finditer(page.text):
         d = re.sub(r"\D", "", m.group(0))
         if len(d) >= 8 and d[-8:] in wanted:
-            return _window(page.text, m.start(), m.end(), 25)
+            if names is None or _phone_in_named_block(_element_for(page, m.group(0).strip()), page, names):
+                return _window(page.text, m.start(), m.end(), 25)
     for a in page.soup.find_all("a", href=re.compile(r"^tel:", re.I)):
         d = re.sub(r"\D", "", unquote(a["href"]))
         if len(d) >= 8 and d[-8:] in wanted:
-            return a["href"]
+            if names is None or _phone_in_named_block(a, page, names):
+                return a["href"]
     return None
 
 
@@ -559,13 +605,15 @@ class Verdict:
     others: dict[str, tuple[Page, str]] = field(default_factory=dict)
     final_url: str | None = None
     variant: list[str] | None = None  # set when the name matched only through a shortened name variant
+    namesake: tuple[str, str] | None = None  # another registered entity with our name (registry-declared site)
     cross: bool = False         # redirected to another registered domain
     path_scoped: bool = False   # the site is one section of a host that serves others (chain or portal)
 
     def summary(self) -> dict[str, Any]:
         return {"domain": self.domain, "source": self.source, "status": self.status, "method": self.method,
                 "final_url": self.final_url, "other_orgnrs": sorted(self.others)[:5] or None,
-                "cross_domain_redirect": self.cross or None, "section_of_host": self.path_scoped or None}
+                "cross_domain_redirect": self.cross or None, "section_of_host": self.path_scoped or None,
+                "detail": self.detail}
 
 
 def judge(v: Verdict, org: str, e: dict, registry_host: str | None) -> None:
@@ -632,7 +680,7 @@ def judge(v: Verdict, org: str, e: dict, registry_host: str | None) -> None:
     # (c) phone and name; address and name
     wanted = _digits_phones(e)
     for p in pages:
-        s = find_phone(p, wanted)
+        s = find_phone(p, wanted, variants)
         if s:
             v.status, v.method = "proven", "phone_and_name"
             v.detail = "registry phone number and legal name shown on the site"
@@ -838,7 +886,16 @@ async def check_candidate(f: Fetcher, sp: _Spend, ctx: CompanyContext, v: Verdic
     v.path_scoped = _is_section(home.url)
     judge(v, ctx.org, e, registry_host)
     await _check_variant(sp, ctx, v)
-    if v.cross and v.status == "proven" and v.method == "orgnr_on_page" and _is_front_or_about(home.url):
+    await _check_collision(sp, ctx, v)
+    label = re.sub(r"[^a-z0-9]", "", bare(home.host).split(".")[0])
+    name_in_domain = any(t in label for t in _core_tokens(e.get("navn") or "")
+                         if len(t) >= 4 and t not in GENERIC_WORDS and t not in REGIONS)
+    strong_target = v.method == "orgnr_on_page" or (
+        # without our org number, the target must show both registry phone and registry address, and its own
+        # domain must carry our name (a portal such as idrettsskolene.no for several schools does not)
+        v.method in ("phone_and_name", "address_and_name") and name_in_domain
+        and bool(find_phone(home, _digits_phones(e))) and bool(find_address(home, e)))
+    if v.cross and v.status == "proven" and strong_target and _is_front_or_about(home.url):
         # The domain redirects to a brand site whose front or about page prints our org number: treat the
         # target domain as ours, read its front page, and let the exclusivity test judge the whole site.
         v.cross, v.path_scoped = False, False
@@ -864,12 +921,178 @@ async def check_candidate(f: Fetcher, sp: _Spend, ctx: CompanyContext, v: Verdic
                 return
     judge(v, ctx.org, e, registry_host)
     await _check_variant(sp, ctx, v)
+    await _check_collision(sp, ctx, v)
 
 
 COMMON_NOUNS = {"forsikring", "bank", "sparebank", "kraft", "energi", "entreprenor", "tak", "maling", "frisor", "klinikk",
                 "tannlege", "lege", "butikk", "kafe", "restaurant", "hotell", "skole", "barnehage", "verksted", "rorlegger",
                 "elektriker", "snekker", "regnskap", "revisjon", "advokat", "eiendom", "bygg", "transport", "service",
                 "senter", "sport", "trafikkskole", "taxi", "bilverksted", "utleie", "salg", "marina", "camping"}
+
+
+INVOICE_MAIL = re.compile(r"(?i)poweroffice|tripletex|fiken|visma|ehf|24sevenoffice|uni-?economy|xledger|"
+                          r"conta|cloudflare|wpengine|invoice|faktura\.")
+NON_OPERATING = {"ESEK", "SAM", "BRL"}  # owners' sections, co-owned properties, housing co-ops
+_NAME_SEARCH: dict[str, list[dict]] = {}
+
+
+def _core_tokens(name: str) -> set[str]:
+    return {_translit(w) for w in name_words(name) if w not in FORM_NAME_WORDS and _translit(w) not in FORM_WORDS
+            and not w.isdigit() and len(w) >= 2}
+
+
+def _addr_key(r: dict) -> tuple[str, str] | None:
+    a = r.get("forretningsadresse") or r.get("beliggenhetsadresse") or {}
+    lines = [x for x in a.get("adresse") or [] if x]
+    if not lines or not a.get("postnummer"):
+        return None
+    return re.sub(r"[^a-z0-9]", "", _translit(lines[0])), a["postnummer"]
+
+
+def _lev(a: str, b: str) -> int:
+    prev = list(range(len(b) + 1))
+    for i, ca in enumerate(a, 1):
+        cur = [i]
+        for j, cb in enumerate(b, 1):
+            cur.append(min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + (ca != cb)))
+        prev = cur
+    return prev[-1]
+
+
+def _near(ours: set[str], theirs: set[str]) -> bool:
+    """Near-namesakes: every distinctive word of one name has a close match in the other ('Advisor' and
+    'Advisors', 'Fjellbekk Trevare' and 'Fjellbekk Trevare Eiendom')."""
+    a = [w for w in ours if len(w) >= 3] or list(ours)
+    b = [w for w in theirs if len(w) >= 3] or list(theirs)
+
+    def close(x: str, y: str) -> bool:
+        return x == y or (min(len(x), len(y)) >= 4 and (x.startswith(y) or y.startswith(x) or _lev(x, y) <= 2))
+    small, big = (a, b) if len(a) <= len(b) else (b, a)
+    return all(any(close(x, y) for y in big) for x in small)
+
+
+def _active(r: dict) -> bool:
+    return not (r.get("slettedato") or r.get("konkurs") or r.get("underAvvikling")
+                or r.get("underTvangsavviklingEllerTvangsopplosning"))
+
+
+def _full_name_rx(name: str) -> re.Pattern | None:
+    ws = re.findall(r"[0-9a-zæøåäöüé]+", name.lower().replace("&", " og "))
+    return name_regex(ws) if ws else None
+
+
+async def _check_collision(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> None:
+    """For proofs other than our org number: reject the site when another active registered entity (or another
+    company's workplace) carries the same distinctive name, unless the site names our full legal name (with its
+    legal form) and not the other's. Owners' sections, co-owned properties and housing co-ops accept only an
+    org number on the site or the registry-declared website."""
+    if v.status != "proven" or v.method == "orgnr_on_page":
+        return
+    e = ctx.registry or {}
+    form = ((e.get("organisasjonsform") or {}).get("kode") or "").upper()
+    if form in NON_OPERATING and v.method != "registry_website_and_name":
+        v.status, v.method = "name_only", None
+        v.detail = f"{form} entities need the org number on the site or a registry-declared website"
+        return
+    ours = _core_tokens(e.get("navn") or "")
+    if not ours:
+        return
+    query = " ".join(sorted(ours))
+    rows = _NAME_SEARCH.get(query)
+    if rows is None:
+        rows = []
+        for path in ("enheter", "underenheter"):
+            if not sp.can(1):
+                break
+            try:
+                snap = await sp.get(f"https://data.brreg.no/enhetsregisteret/api/{path}?navn={query.replace(' ', '%20')}"
+                                    f"&size=20", robots=False, headers={"Accept": "application/json"})
+                if snap.status == 200:
+                    rows += (snap.json().get("_embedded") or {}).get(path) or []
+            except (BudgetExhausted, _OutOfRequests):
+                raise
+            except Exception:
+                pass
+        _NAME_SEARCH[query] = rows
+    # Near-namesakes at our own postcode ('Advisors AS' beside 'Advisor AS') rank too low in a plain name
+    # search, so ask once more with the postcode filter.
+    pn = ((e.get("forretningsadresse") or e.get("beliggenhetsadresse") or {}).get("postnummer") or "")
+    longest = max(ours, key=len)
+    key2 = f"{longest}@{pn}"
+    if pn and len(longest) >= 3:
+        extra = _NAME_SEARCH.get(key2)
+        if extra is None:
+            extra = []
+            if sp.can(1):
+                try:
+                    snap = await sp.get(f"https://data.brreg.no/enhetsregisteret/api/enheter?navn={longest}"
+                                        f"&forretningsadresse.postnummer={pn}&size=50", robots=False,
+                                        headers={"Accept": "application/json"})
+                    if snap.status == 200:
+                        extra = (snap.json().get("_embedded") or {}).get("enheter") or []
+                except (BudgetExhausted, _OutOfRequests):
+                    raise
+                except Exception:
+                    pass
+            _NAME_SEARCH[key2] = extra
+        rows = rows + [r for r in extra if r.get("organisasjonsnummer") not in {x.get("organisasjonsnummer") for x in rows}]
+    our_phones = _digits_phones(e)
+    our_addr = _addr_key(e)
+    for r in rows:
+        org = r.get("organisasjonsnummer")
+        if org == ctx.org or r.get("overordnetEnhet") == ctx.org or not _active(r):
+            continue
+        theirs = _core_tokens(r.get("navn") or "")
+        if not theirs or theirs == ours or not _near(ours, theirs):
+            continue
+        shares = (our_addr and _addr_key(r) == our_addr) or bool(our_phones & _digits_phones(r))
+        if not shares:
+            continue
+        what = (f"near-namesake {r.get('navn')} ({org}) shares this company's registered "
+                f"{'address' if our_addr and _addr_key(r) == our_addr else 'phone'}")
+        if v.method == "registry_website_and_name":
+            v.namesake = (r.get("navn") or "", org)
+            v.detail = f"{v.detail}; {what}"
+            return
+        v.status, v.method, v.detail = "name_only", None, what
+        v.others = {org: r.get("navn") or ""}
+        return
+    text = " ".join(p.text for p in v.pages)
+    our_rx = _full_name_rx(e.get("navn") or "")
+    names_us = bool(our_rx and our_rx.search(text))
+    our_core_rx = name_regex([w for w in name_words(e.get("navn") or "") if w not in FORM_NAME_WORDS])
+    for r in rows:
+        org = r.get("organisasjonsnummer")
+        if org == ctx.org or r.get("overordnetEnhet") == ctx.org or not _active(r):
+            continue
+        theirs = _core_tokens(r.get("navn") or "")
+        if not theirs or not (theirs <= ours or ours <= theirs):
+            continue
+        other_rx = _full_name_rx(r.get("navn") or "")
+        names_them = bool(other_rx and other_rx.search(text))
+        if theirs != ours:
+            # A longer or shorter namesake (a subsidiary 'Kitron Eiendom AS', a parent 'Viken AS') collides only
+            # when the site shows that other name as a phrase.
+            core_rx = name_regex([w for w in name_words(r.get("navn") or "") if _translit(w) in theirs])
+            if not (core_rx and any(not _in_hostname(text, m.start(), m.end()) for m in core_rx.finditer(text))):
+                continue
+            if theirs < ours and our_core_rx and our_core_rx.search(text):
+                continue  # the site shows our longer name too, so the short form is just ours abbreviated
+        if names_us and not names_them:
+            continue
+        owner = r.get("overordnetEnhet")
+        what = (f"another registered entity shares the name: {r.get('navn')} ({org}"
+                + (f", workplace of {owner}" if owner else "") + ")")
+        if v.method == "registry_website_and_name":
+            # The company declared this website itself, so it stays its website, but the site may equally speak
+            # for the namesake (often a subsidiary): nothing is derived from it.
+            v.namesake = (r.get("navn") or "", owner or org)
+            v.detail = f"{v.detail}; {what}"
+            return
+        v.status, v.method = "name_only", None
+        v.detail = what
+        v.others = {org: r.get("navn") or ""}
+        return
 
 
 async def _check_variant(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> None:
@@ -1031,7 +1254,8 @@ def _in_chrome(a) -> bool:
 BRREG_SEARCH = "https://data.brreg.no/enhetsregisteret/api/enheter"
 FORM_WORDS = {"stiftelsen", "stiftelse", "sameiet", "sameie", "borettslag", "borettslaget", "andelslag", "forening",
               "foreningen", "selskapet", "firma"}
-_SISTER_CACHE: dict[str, list[tuple[str, str]]] = {}  # label -> [(org, registered name)] across companies
+_SISTER_CACHE: dict[str, list[tuple[str, str]]] = {}
+_ROW_CACHE: dict[str, dict] = {}  # Brreg search rows by org number, for tie checks  # label -> [(org, registered name)] across companies
 
 
 def _twords(s: str) -> list[str]:
@@ -1057,6 +1281,7 @@ class Scope:
     dominant: dict[str, str] = field(default_factory=dict)  # other company named prominently -> org or country
     cross: bool = False
     path_scoped: bool = False
+    other_mail: set[str] = field(default_factory=set)  # contact addresses on another organisation's domain
 
     def __post_init__(self) -> None:
         ours_t = [_translit(w) for w in self.words]
@@ -1075,7 +1300,7 @@ class Scope:
     def exclusive(self) -> bool:
         """The site is ours alone: no other org number of any country, no confirmed sister or dominating
         company, no redirect to another domain, and not one section of a shared host."""
-        return not (self.others or self.sisters or self.dominant or self.cross or self.path_scoped)
+        return not (self.others or self.sisters or self.dominant or self.cross or self.path_scoped or self.other_mail)
 
     def reasons(self) -> str:
         out = []
@@ -1089,6 +1314,8 @@ class Scope:
             out.append("it names sister companies " + ", ".join(f"{k} ({v})" for k, v in self.sisters.items()))
         if self.dominant:
             out.append("it is presented by other companies " + ", ".join(f"{k} ({v})" for k, v in self.dominant.items()))
+        if self.other_mail:
+            out.append("it lists contact addresses on other organisations' domains " + ", ".join(sorted(self.other_mail)[:3]))
         return "; ".join(out)
 
     def _num_hit(self, text: str, nums: list[str]) -> bool:
@@ -1217,6 +1444,7 @@ CREDIT = re.compile(r"(?i)(levert|utviklet|utvikla|laget|designet|design|webdesi
                     r"drevet|driftet|powered|made|built|hosted|hosting|produsert|publisert|tema|theme|webbyrå|byrå|"
                     r"utvikling|levert av|fra)\s*(av|by|med|with|fra|:)?\s*:?\s*$")
 OWNER_CONTEXT = re.compile(r"(?i)(behandlingsansvarlig|data controller|controller|eies av|eid av|drives av|driftes av|"
+                           r"operated by|owned by|run by|nettstedet eies|nettsiden eies|siden drives|"
                            r"er en del av|en avdeling|sin avdeling|avdeling av|datterselskap|subsidiary of|part of|©|copyright|"
                            r"ta kontakt med)")
 FOREIGN_SUFFIX = {"ab", "aps", "oy", "oyj", "gmbh", "ltd", "limited", "inc", "llc", "bv", "srl", "sarl", "ou", "uab"}
@@ -1227,13 +1455,30 @@ ENTITY_ANY = re.compile(r"((?:[0-9A-Za-zÆØÅæøåÄÖäöüé&\-]+[ \u00a0]+)
 CONNECTORS = {"og", "&", "i", "for", "av", "de", "la", "von", "van", "der", "and", "of"}
 
 
-def other_company_names(pages: list[Page], words: list[str]) -> list[tuple[str, str]]:
-    """Other legal names (with a legal-form suffix) that present the site: named twice on one page, or in the
-    page title, a copyright line or an ownership or controller sentence. Names inside links to other sites
-    (web agency and partner credits) do not count. Returns (name words, suffix), most prominent first."""
+OPERATOR_PAGE = re.compile(r"(?i)om-?oss|about|kontakt|contact|personvern|privacy|impressum|imprint|firmainfo|selskapet")
+OPERATOR_MARK = re.compile(r"(?i)footer|header|contact|kontakt|imprint|impressum|copyright|address|adresse|company-info")
+
+
+def _operator_text(p: Page) -> str:
+    """Text in operator positions: header, footer, navigation, address and contact or imprint blocks."""
+    parts = []
+    for el in p.soup.find_all(True):
+        marks = " ".join(el.get("class") or []) + " " + (el.get("id") or "")
+        if el.name in ("header", "footer", "address") or OPERATOR_MARK.search(marks):
+            parts.append(el.get_text(" ", strip=True))
+    return " | ".join(parts)
+
+
+def other_company_names(pages: list[Page], words: list[str]) -> list[tuple[str, str, bool]]:
+    """Other legal names (with a legal-form suffix) on the site, as (name words, suffix, positional).
+    Positional means an operator position: page title, header, footer, contact or imprint block, an about,
+    contact or privacy page, a copyright line or an ownership or controller sentence. Names inside links to
+    other sites (web agency and partner credits) are skipped. Positional names come first."""
     ours = [_translit(w) for w in words]
     best: dict[tuple[str, str], int] = {}
     for p in pages:
+        optext = _operator_text(p)
+        op_page = bool(OPERATOR_PAGE.search(unquote(urlsplit(p.url).path)))
         offsite = " | ".join(a.get_text(" ", strip=True) for a in p.soup.find_all("a", href=True)
                              if urlsplit(urljoin(p.url, a["href"])).scheme in ("http", "https")
                              and not same_site(host_of(urljoin(p.url, a["href"])), p.host))
@@ -1265,24 +1510,53 @@ def other_company_names(pages: list[Page], words: list[str]) -> list[tuple[str, 
                     continue  # a web agency or partner credit
                 key = (" ".join(ws), m.group(2).lower())
                 ctx_hit = bool(OWNER_CONTEXT.search(txt[max(0, m.start() - 60):m.end() + 10]))
-                score[key] = score.get(key, 0) + (2 if (is_title or ctx_hit) else 1)
+                mention = m.group(0).strip()
+                positional = is_title or ctx_hit or op_page or (mention in optext)
+                score[key] = max(score.get(key, 0), 2 if positional else 1)
         for k, v in score.items():
             best[k] = max(best.get(k, 0), v)
-    return sorted((k for k, v in best.items() if v >= 2), key=lambda k: -best[k])
+    return [(k[0], k[1], best[k] >= 2) for k in sorted(best, key=lambda k: -best[k])]
 
 
-async def confirm_dominant(sp: "_Spend", ctx: CompanyContext, names: list[tuple[str, str]], limit: int = 2
-                           ) -> dict[str, str]:
+def _tied(row: dict, e: dict, site_host: str) -> str | None:
+    """How a registered company is tied to us: shared address, phone, email domain or distinctive name words."""
+    if _addr_key(row) and _addr_key(row) == _addr_key(e):
+        return "shares our registered address"
+    if _digits_phones(row) & _digits_phones(e):
+        return "shares our registered phone"
+    dom = (row.get("epostadresse") or "@").rsplit("@", 1)[1].lower()
+    ours = (e.get("epostadresse") or "@").rsplit("@", 1)[1].lower()
+    if dom and dom not in FREE_MAIL and (dom == ours or same_site(dom, site_host)):
+        return "shares our email domain"
+    if _core_tokens(row.get("navn") or "") & {t for t in _core_tokens(e.get("navn") or "")
+                                              if len(t) >= 4 and t not in GENERIC_WORDS}:
+        return "shares our distinctive name words"
+    return None
+
+
+async def confirm_dominant(sp: "_Spend", ctx: CompanyContext, names: list[tuple[str, str, bool]], limit: int = 3,
+                           site_host: str = "") -> dict[str, str]:
+    """Registered companies that count against exclusivity: named in an operator position, or tied to us
+    (address, phone, email domain or name words). Clients, partners and suppliers in body text do not count."""
     out: dict[str, str] = {}
-    for lab, suffix in names:
+    e = ctx.registry or {}
+    ours = {t for t in _core_tokens(e.get("navn") or "") if len(t) >= 4 and t not in GENERIC_WORDS}
+    # positional names first, then body names that share our name words, then the rest
+    ordered = sorted(names, key=lambda n: (not n[2], not (set(n[0].split()) & ours)))
+    for lab, suffix, positional in ordered:
         if suffix in FOREIGN_SUFFIX:
-            out[f"{lab} {suffix}"] = "foreign"
+            if positional or set(lab.split()) & ours:
+                out[f"{lab} {suffix}"] = "foreign"
             continue
         if limit <= 0:
             break
         limit -= 1
         got = await confirm_sisters(sp, ctx, [lab], limit=1)
-        if lab in got:
+        if lab not in got:
+            continue
+        row = _ROW_CACHE.get(got[lab]) or {}
+        tie = _tied(row, e, site_host)
+        if positional or tie:
             out[f"{lab} {suffix}"] = got[lab]
     return out
 
@@ -1305,6 +1579,9 @@ async def confirm_sisters(sp: "_Spend", ctx: CompanyContext, labels: list[str], 
                 rows = []
             hits = [(r.get("organisasjonsnummer"), r.get("navn") or "") for r in rows
                     if " ".join(_translit(w) for w in name_words(r.get("navn") or "")) == lab]
+            for r in rows:
+                if r.get("organisasjonsnummer"):
+                    _ROW_CACHE[r["organisasjonsnummer"]] = r
             _SISTER_CACHE[lab] = hits
         for org, _name in hits:
             if org and org != ctx.org:
@@ -1648,6 +1925,22 @@ def news_listing_link(pages: list[Page], domain: str) -> str | None:
     return None
 
 
+def _date_floor(ctx: CompanyContext) -> str:
+    """Site activity cannot predate the entity: the earliest of incorporation and registry registration."""
+    e = ctx.registry or {}
+    ds = [str(e.get(k))[:10] for k in ("stiftelsesdato", "registreringsdatoEnhetsregisteret") if e.get(k)]
+    return min(ds) if ds else "0000-00-00"
+
+
+def _activity_blocked(ctx: CompanyContext, field_name: str) -> bool:
+    """True (and the field marked ambiguous) when the verified site is still a theme template."""
+    why = ctx.facts.get("website_placeholder")
+    if why:
+        ctx.mark(field_name, "activity", "ambiguous", note=f"the site contains template placeholder text ({why})")
+        return True
+    return False
+
+
 async def sitemap_activity(f: Fetcher, sp: _Spend, ctx: CompanyContext, home: Page, domain: str,
                            scope: Scope | None = None) -> None:
     scope = scope or Scope("", [])
@@ -1685,6 +1978,15 @@ async def sitemap_activity(f: Fetcher, sp: _Spend, ctx: CompanyContext, home: Pa
                 ctx.facts["website_sitemap_note"] = "sitemap lastmod looks generated at request time; not used"
                 return
             dated = [x for x in dated if not re.search(r"/(tag|tags|kategori|category|author|forfatter)/", x[0], re.I)]
+            floor = _date_floor(ctx)
+            early = [x for x in dated if x[1] < floor]
+            if early:
+                ctx.facts["website_activity_before_founding"] = len(early)
+            dated = [x for x in dated if x[1] >= floor and not PLACEHOLDER_SLUG.search(x[0])]
+            if not dated:
+                return
+            if _activity_blocked(ctx, "site_page_updated"):
+                return
             ours = [x for x in dated if scope.url_ours(x[0])]
             if scope.shared and not ours:
                 ctx.mark("site_page_updated", "activity", "ambiguous",
@@ -1718,7 +2020,13 @@ async def fetch_news(sp: _Spend, ctx: CompanyContext, pages: list[Page], domain:
         page, _st = await _fetch_page(sp, link)
         if page is None or not same_site(page.host, domain):
             return
-    for val, span in news_items(page, domain, scope):
+    floor = _date_floor(ctx)
+    items = [(val, span) for val, span in news_items(page, domain, scope)
+             if val["date"] >= floor and not PLACEHOLDER.search(f"{val['title']} {span}")
+             and not PLACEHOLDER_SLUG.search(val["url"])]
+    if items and _activity_blocked(ctx, "site_news"):
+        return
+    for val, span in items:
         ev = ctx.add_evidence(page.snap, source_class=COMPANY_OWNED, span=span, effective_date=val["date"],
                               method="website_news_v1", licence=LICENCE)
         ctx.add_claim("site_news", "activity", val, ev, as_of=val["date"],
@@ -1744,8 +2052,27 @@ async def prepare_scope(sp: _Spend, ctx: CompanyContext, v: Verdict) -> Scope:
     others = {k: (x[1] if isinstance(x, tuple) else x) for k, x in others.items()}
     sisters = await confirm_sisters(sp, ctx, sister_labels(v.pages, words))
     dominant = await confirm_dominant(sp, ctx, [n for n in other_company_names(v.pages, words)
-                                                if n[0] not in sisters][:3])
-    return Scope(ctx.org, words, others, sisters, dominant, v.cross, v.path_scoped)
+                                                if n[0] not in sisters][:6], limit=3, site_host=home.host)
+    if v.namesake:
+        dominant[v.namesake[0].lower()] = v.namesake[1]
+    reg_mail = ((ctx.registry or {}).get("epostadresse") or "@").rsplit("@", 1)[1].lower()
+    own_tokens = [t for t in _core_tokens((ctx.registry or {}).get("navn") or "")
+                  if len(t) >= 4 and t not in GENERIC_WORDS and t not in REGIONS]
+    other_mail: set[str] = set()
+    for p in v.pages:
+        if LEGAL_PAGE.search(unquote(urlsplit(p.url).path)):
+            continue
+        for a in p.soup.find_all("a", href=re.compile(r"^mailto:", re.I)):
+            dom = unquote(a["href"][7:]).split("?")[0].strip().lower().rsplit("@", 1)[-1]
+            if not re.fullmatch(r"[a-z0-9.\-]+\.[a-z]{2,}", dom) or dom in FREE_MAIL or same_site(dom, home.host) \
+                    or (reg_mail and same_site(dom, reg_mail)) or INVOICE_MAIL.search(dom):
+                continue
+            label = re.sub(r"[^a-z0-9]", "", dom.split(".")[-2] if dom.count(".") >= 1 else dom)
+            site_label = re.sub(r"[^a-z0-9]", "", bare(home.host).split(".")[0])
+            if label == site_label or any(t in label for t in own_tokens):
+                continue  # the company's own alternate domain
+            other_mail.add(dom)
+    return Scope(ctx.org, words, others, sisters, dominant, v.cross, v.path_scoped, other_mail)
 
 
 DERIVED_FIELDS = (("website_description", SECTION), ("site_contact_email", SECTION), ("site_contact_phone", SECTION),
@@ -1781,6 +2108,12 @@ def emit_site(ctx: CompanyContext, v: Verdict, scope: Scope | None = None) -> li
         return v.pages
     ctx.add_claim("official_website", SECTION, url, proof_evs, confidence=conf, match=m)
     site_match = {"method": "verified_site", "detail": f"from {domain}, proven by {v.method}"}
+    for p in v.pages:
+        ph = PLACEHOLDER.search(p.text)
+        if ph and re.search(r"(?i)lorem ipsum|dolor sit amet|legg inn en|gi en kort|skriv en kort|eksempelside|sample page",
+                            ph.group(0)):
+            ctx.facts["website_placeholder"] = ph.group(0)
+            break
     unsure = f"{scope.describe()}; not provably this company's" if scope.shared else ""
 
     if home.soup.title and home.soup.title.get_text(strip=True):
@@ -1793,7 +2126,7 @@ def emit_site(ctx: CompanyContext, v: Verdict, scope: Scope | None = None) -> li
                 desc = _clean(d["description"])
                 span = desc
                 break
-    if desc and not GENERIC_DESC.search(desc) and len(desc) >= 15:
+    if desc and not GENERIC_DESC.search(desc) and not PLACEHOLDER.search(desc) and len(desc) >= 15:
         if scope.shared and not scope.page_ours_only(home) and not (
                 scope.names_ours(desc) and not scope.names_sister(desc)):
             ctx.mark("website_description", SECTION, "ambiguous", note=unsure)

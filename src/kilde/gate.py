@@ -101,7 +101,10 @@ def check(ctx: CompanyContext) -> list[str]:
             continue
         if c.field == "site_contact_email":
             dom = str(c.value).split("@")[-1].lower()
-            if dom != site_dom and dom != reg_mail and registered_domain(dom) != site_dom:
+            managed = ((reg.get("organisasjonsform") or {}).get("kode") in ("ESEK", "BRL", "SAM", "BBL"))
+            if managed and registered_domain(dom) != site_dom:
+                withhold(c, "housing and co-ownership entities: contact emails only on the site's own domain (others are usually the manager's)")
+            elif dom != site_dom and dom != reg_mail and registered_domain(dom) != site_dom:
                 withhold(c, f"email domain {dom} differs from the verified site {site_dom} and the registry email")
         elif c.field == "site_contact_phone":
             d = _digits(str(c.value))
