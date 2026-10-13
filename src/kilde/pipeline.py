@@ -271,9 +271,21 @@ async def run_batch(orgs: list[str], opt: Options) -> tuple[list[dict], dict]:
     # results stable between runs (Builderr runs each entry twice and compares the facts).
     async def retry_website(ctx: CompanyContext) -> None:
         async with retry_sem:
+            before = list(ctx.claims)
+            n_ev = len(ctx.evidence)
             ctx.claims[:] = [c for c in ctx.claims if not (c.section == "web_presence" and c.availability == "failed")]
             ctx.module_states.pop("website", None)
-            await _step(ctx, "website", lambda: website.fetch_website(f, ctx), "official_website", "web_presence", timeout=120)
+            try:
+                await _step(ctx, "website", lambda: website.fetch_website(f, ctx), "official_website", "web_presence", timeout=120)
+            except asyncio.CancelledError:
+                # Interrupted: drop anything half-published and keep the first attempt's honest state.
+                ctx.claims[:] = before
+                del ctx.evidence[n_ev:]
+                ctx.module_states["website"] = "failed"
+                raise
+            if not any(c.section == "web_presence" for c in ctx.claims):
+                ctx.claims[:] = before
+                ctx.module_states["website"] = "failed"
 
     retry_sem = asyncio.Semaphore(8)
     def needs_retry(c: CompanyContext) -> bool:
