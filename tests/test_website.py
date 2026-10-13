@@ -1823,3 +1823,19 @@ def test_bare_facebook_page_id_needs_our_orgnr_and_an_unmixed_block():
         ctx = ctx_for(hjemmeside="fjellbekk.no")
         run(_fb_site(fb), ctx)
         assert not ctx.claims_for("social_profile")
+
+
+def test_group_handle_is_ours_when_we_are_the_registry_group_parent():
+    """Kitron shape: the listed parent links facebook.com/<name>group from its own org-number-proven site."""
+    body = (f'<footer>Fjellbekk Trevare ASA · Org.nr {OURS}'
+            '<a href="https://www.facebook.com/fjellbekkgroup/"></a></footer>')
+    tree = json.dumps({"organisasjonsnummer": OURS, "children": [{"organisasjonsnummer": OTHER, "children": []}]})
+    pages = {f"https://data.brreg.no/enhetsregisteret/api/konsernstruktur/{OURS}": (200, tree, "application/json")}
+    ctx = ctx_for(navn="FJELLBEKK TREVARE ASA", hjemmeside="fjellbekk.no")
+    run(_site(pages, body=body), ctx)
+    assert [str(c.value) for c in ctx.claims if c.field == "social_profile"] == ["facebook.com/fjellbekkgroup"]
+    # not a group parent: the same handle is another company's
+    W._GROUP_CACHE.clear()
+    ctx = ctx_for(navn="FJELLBEKK TREVARE ASA", hjemmeside="fjellbekk.no")
+    run(_site(body=body), ctx)
+    assert not [c for c in ctx.claims if c.field == "social_profile" and c.availability == "available"]

@@ -1582,6 +1582,7 @@ class Scope:
     codeclared: dict[str, str] = field(default_factory=dict)  # other org -> name, declaring the same website
     dominant_kind: dict[str, str] = field(default_factory=dict)  # dominant name -> operator, namesake or mention
     ours_printed: bool = False  # our org number in an operator position, no other operator: the site is ours
+    group_root: bool = False  # we are the top parent of a registry group, on our own proven domain
     addr: tuple | None = None  # (street regex, postcode) of our registered address
 
     def __post_init__(self) -> None:
@@ -1971,12 +1972,13 @@ BUILDER_BRANDS = ("surftown", "wix", "squarespace", "webnode", "onecom", "one.co
                   "24so", "sitebuilder", "strikingly", "ukit", "zyro", "ionos", "hostpoint", "loopia", "simply")
 
 
-def _names_other_company(handle: str, words: list[str], other_names: list[str]) -> bool:
+def _names_other_company(handle: str, words: list[str], other_names: list[str], group_root: bool = False) -> bool:
     """A handle that names a different company: our distinctive word plus a group or holding word our own name
-    lacks ('elprogroupas' for Elpro Electro AS), or the name of another registered company we know of."""
+    lacks ('elprogroupas' for Elpro Electro AS), or the name of another registered company we know of. When we
+    are ourselves the top parent of a registry group, '<our name>group' is our own handle."""
     ours = re.sub(r"[^a-z0-9]", "", _translit("".join(words)))
     lead = next((_translit(w) for w in words if len(w) >= 3 and w not in GENERIC_WORDS), "")
-    if lead and lead in handle:
+    if lead and lead in handle and not group_root:
         for gw in GROUP_WORDS:
             if gw in handle and gw not in ours:
                 return True
@@ -2083,7 +2085,7 @@ def collect_socials(pages: list[Page], words: list[str], domains: set[str], scop
             segs = [x for x in path.split("/") if x]
             raw_handle = segs[1] if len(segs) >= 2 and segs[0] in ("people", "p") else (segs[-1] if segs else "")
             handle = re.sub(r"[^a-z0-9]", "", _translit(unquote(raw_handle)))
-            if _names_other_company(handle, words, other_names) or any(
+            if _names_other_company(handle, words, other_names, scope.group_root) or any(
                     re.sub(r"[^a-z0-9]", "", b) in handle for b in BUILDER_BRANDS if not any(
                         re.sub(r"[^a-z0-9]", "", b) in k for k in keys)):
                 dropped.append(u)  # another company's, or the site builder's or web agency's own profile
@@ -2643,7 +2645,23 @@ async def prepare_scope(sp: _Spend, ctx: CompanyContext, v: Verdict) -> Scope:
     sc = Scope(ctx.org, words, others, sisters, dominant, v.cross, v.path_scoped, other_mail, codeclared, addr)
     sc.dominant_kind = kinds
     sc.ours_printed = ours_printed
+    if own_proof and _group_handle_linked(v.pages, words):
+        sc.group_root = bool(await _group_members(sp, ctx))  # one cached registry lookup, only when needed
     return sc
+
+
+def _group_handle_linked(pages: list[Page], words: list[str]) -> bool:
+    """A social link whose handle joins our distinctive word with a group or holding word ('kvistgroup')."""
+    lead = next((_translit(w) for w in words if len(w) >= 3 and w not in GENERIC_WORDS), "")
+    if not lead:
+        return False
+    for p in pages:
+        for a in p.soup.find_all("a", href=True):
+            c = clean_social(unwrap_redirect(a["href"]))
+            h = re.sub(r"[^a-z0-9]", "", _translit(unquote(urlsplit(c[1]).path))) if c else ""
+            if lead in h and any(g in h for g in GROUP_WORDS):
+                return True
+    return False
 
 
 def _num_in_operator_position(v: Verdict, num: str) -> bool:
