@@ -1347,12 +1347,16 @@ def _is_section(url: str) -> bool:
 
 
 _SEEDS: dict[str, list[dict]] | None = None
+# Order in which seed candidates are tried (lower first); unknown open-data sources rank 2.
+SEED_STRENGTH = {"commoncrawl": 0, "crawl_orgnr": 0, "crawl_phone_email": 1, "crawl_signals": 2,
+                 "commoncrawl_domain": 3}
 SEEDS_PATH = __import__("pathlib").Path(__file__).resolve().parent.parent / "data" / "website_seeds.json.gz"
 
 
 def website_seeds() -> dict[str, list[dict]]:
-    """Open-data website candidates by org number (OSM, Overture, Brreg workplaces, NAV, Wikidata), loaded once
-    per process. Candidates only: they pass exactly the same proof, collision and exclusivity rules."""
+    """Website candidates by org number (OSM, Overture, Brreg workplaces, NAV, Wikidata, Common Crawl and Kilde's
+    own crawl), loaded once per process. Candidates only: they pass exactly the same proof, collision and
+    exclusivity rules as a guessed domain (a seed is never the registry's declaration)."""
     global _SEEDS
     if _SEEDS is None:
         try:
@@ -1393,9 +1397,10 @@ def candidates(ctx: CompanyContext) -> list[tuple[str, str, str | None]]:
         if d not in FREE_MAIL and not any(d.endswith("." + x) for x in FREE_MAIL):
             add(d, "email")
     def seed_rank(x: dict) -> tuple:
+        # strongest first: an org number seen on the site, then a registry phone or email unique to this company,
+        # then open-data declarations and two-signal crawl matches, then bare domain-name matches
         src = set(x.get("sources") or [])
-        rank = 0 if "commoncrawl" in src else (2 if src == {"commoncrawl_domain"} else 1)
-        return rank, x.get("domain") or ""
+        return min((SEED_STRENGTH.get(s, 2) for s in src), default=3), x.get("domain") or ""
     for seed in sorted(website_seeds().get(ctx.org) or [], key=seed_rank):
         if seed.get("domain"):
             add(seed["domain"], "seed:" + "+".join(sorted(seed.get("sources") or [])))

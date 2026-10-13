@@ -2100,3 +2100,23 @@ def test_repair_with_core_never_quotes_a_window_without_it():
     # a core the page does not hold verbatim is described, never replaced by unrelated text
     span, _, exact = repair(raw, window, "text/html", None, "Fjellbekk Trevare")
     assert span == "Fjellbekk Trevare" and not exact
+
+
+def test_crawl_seeds_ordered_by_strength_after_registry_and_email(monkeypatch):
+    monkeypatch.setattr(W, "_SEEDS", {OURS: [{"domain": "a-signals.no", "sources": ["crawl_signals"]},
+                                             {"domain": "b-osm.no", "sources": ["osm_phone"]},
+                                             {"domain": "c-phone.no", "sources": ["crawl_phone_email"]},
+                                             {"domain": "d-weak.no", "sources": ["commoncrawl_domain"]},
+                                             {"domain": "e-orgnr.no", "sources": ["crawl_orgnr", "crawl_signals"]}]})
+    cands = W.candidates(ctx_for(navn="FJELLBEKK TREVARE AS", hjemmeside="fjellbekk.no",
+                                 epostadresse="post@fjellbekk-post.no"))
+    assert [d for d, _s, _u in cands[:2]] == ["fjellbekk.no", "fjellbekk-post.no"]  # declared sites first
+    order = [d for d, s, _ in cands if s.startswith("seed:")]
+    assert order == ["e-orgnr.no", "c-phone.no", "a-signals.no", "b-osm.no", "d-weak.no"]
+
+
+def test_crawl_seed_without_proof_on_the_live_site_publishes_nothing(monkeypatch):
+    monkeypatch.setattr(W, "_SEEDS", {OURS: [{"domain": "fjellbekk-sag.no", "sources": ["crawl_orgnr", "crawl_signals"]}]})
+    ctx = ctx_for()
+    run(FakeFetcher({"https://fjellbekk-sag.no/": (200, html("<h1>Fjellbekk Trevare</h1><p>Velkommen</p>"))}), ctx)
+    assert not ctx.claims_for("official_website")  # the seed's crawl-time evidence is not re-used
