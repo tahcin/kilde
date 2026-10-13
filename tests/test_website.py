@@ -1485,3 +1485,55 @@ def test_project_name_is_not_a_description():
     ctx2 = ctx_for(hjemmeside="fjellbekk.no")
     run(_site(body=f"<footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>", head=head2), ctx2)
     assert ctx2.claims_for("website_description")
+
+# ---------------------------------------------------------------- revision 2: more candidates, privacy-page proof
+def test_rev2_name_derived_candidates():
+    assert "adma.no" in W.name_domains("ADMA AS", {})
+    assert "vaneoceantech.com" in W.name_domains("VANE OCEAN TECHNOLOGIES AS", {})
+    assert not any(d.startswith(("vo", "otech")) for d in W.name_domains("VANE OCEAN TECHNOLOGIES AS", {}))
+    assert "omsorli.no" in W.name_domains("AUT MASKINENTREPRENØR OLAV MARTIN SØRLI AS", {})
+    assert "sunwind.no" in W.name_domains("SUNWIND GYLLING AS", {})
+    assert "2tal.as" in W.name_domains("2TAL UTEMILJØ ANLEGGSGARTNER AS", {})
+    ctx = ctx_for(navn="FJELLBEKK.NO AS")
+    assert W.candidates(ctx)[0][:2] == ("fjellbekk.no", "guess")
+    ctx2 = ctx_for(navn="KVIST GYLLING AS", historiskeNavn=[{"navn": "FJELLBEKK TREVARE AS"}])
+    assert ("fjellbekktrevare.no", "guess", None) in W.candidates(ctx2)
+
+
+def test_privacy_page_supplies_the_org_number_for_a_name_only_site():
+    """Ludenso shape: the front page names the company; only /privacy-policy prints the org number."""
+    home = html('<h1>Fjellbekk Trevare</h1><a href="/privacy-policy">Privacy policy</a>')
+    priv = html(f"<p>Fjellbekk Trevare AS, Torggata 2, Oslo. Organisation Number: {OURS[:3]} {OURS[3:6]} {OURS[6:]}</p>")
+    f = FakeFetcher({"https://fjellbekktrevare.no/": (200, home), "https://fjellbekktrevare.no/privacy-policy": (200, priv)})
+    claims = run(f, ctx_for())
+    assert claims["official_website"].match["method"] == "orgnr_on_page"
+
+
+def test_domain_name_redirecting_to_brand_site_with_our_orgnr():
+    """Innregistrering.no shape: the name is a domain that redirects to a brand site printing our org number."""
+    f = FakeFetcher({"https://kvistmerke.no/": (200, html(f"<footer>(c) Fjellbekk.no AS, Org.nr. {OURS}</footer>"))},
+                    redirects={"https://fjellbekk.no/": "https://kvistmerke.no/"})
+    claims = run(f, ctx_for(navn="FJELLBEKK.NO AS"))
+    assert claims["official_website"].value == "kvistmerke.no"
+
+
+def test_first_word_domain_needs_our_org_number():
+    """Mobarn shape: mobarn.no is the chain parent's site; it shows our address and our kindergarten's name."""
+    body = ("<footer>Kontakt Kvist Hamnegata 8b 9999 Testby</footer>"
+            "<p>01.02.2024 Ett år med friluftsavdeling i Kvist Lynghaug barnehage</p>")
+    ctx = ctx_for(navn="KVIST LYNGHAUG BARNEHAGE AS",
+                  forretningsadresse={"adresse": ["Hamnegata 8b"], "postnummer": "9999", "poststed": "TESTBY"})
+    assert ("kvist.no", "guess_short", None) in W.candidates(ctx)
+    run(FakeFetcher({"https://kvist.no/": (200, html(body))}), ctx)
+    assert not ctx.claims_for("official_website")
+
+
+def test_redirect_target_privacy_page_proves_the_brand_domain():
+    """Ludenso shape: ludenso.no redirects to ludenso.com, whose privacy page prints our org number."""
+    home = html('<h1>Fjellbekk Trevare</h1><a href="/privacy-policy">Privacy</a>')
+    priv = html(f"<p>Fjellbekk Trevare AS ... Organisation Number: {OURS[:3]} {OURS[3:6]} {OURS[6:]}</p>")
+    f = FakeFetcher({"https://fjellbekk.com/": (200, home), "https://fjellbekk.com/privacy-policy": (200, priv)},
+                    redirects={"https://fjellbekk.no/": "https://fjellbekk.com/"})
+    claims = run(f, ctx_for(hjemmeside="fjellbekk.no"))
+    assert claims["official_website"].value == "fjellbekk.com"
+    assert claims["official_website"].match["method"] == "orgnr_on_page"

@@ -270,6 +270,9 @@ def name_variants(name: str, e: dict | None = None) -> list[list[str]]:
     return out
 
 
+SHORT_FORMS: set[str] = set()  # labels made from part of the name (first word alone, initials plus surname)
+
+
 def name_domains(name: str, e: dict | None = None) -> list[str]:
     """Domains guessed from the legal name, best first: full name, then the safe variants (initials, form and
     place words dropped, hyphenated words kept whole), .no before .com. A kindergarten also gets
@@ -297,16 +300,41 @@ def name_domains(name: str, e: dict | None = None) -> list[str]:
         for v in _ascii_variants([r]):
             if v[0] not in labels:
                 labels.append(v[0])
+    extra: list[str] = []
+    plain = [w for w in words if not w.isdigit()]
+    tech = ["tech" if w in ("technologies", "technology", "teknologi", "technologi") else w for w in plain]
+    if tech != plain:
+        for v in _ascii_variants(tech):
+            extra.append("".join(v))  # VANE OCEAN TECHNOLOGIES as vaneoceantech
+    distinct = [w for w in plain if w not in GENERIC_WORDS and _translit(w) not in places]
+    first_alone = None
+    if len(plain) > 1 and distinct and distinct[0] not in COMMON_LABELS and (
+            len(distinct[0]) >= 5 or (len(distinct[0]) >= 4 and re.search(r"\d", distinct[0]))):
+        first_alone = _ascii_variants([distinct[0]])[0][0]  # SUNWIND GYLLING as sunwind; 2TAL ... as 2tal
+        extra.append(first_alone)
+        SHORT_FORMS.add(first_alone)
+    alpha = [w for w in plain if w.isalpha()]
+    tail = alpha[-3:] if len(alpha) >= 4 else []  # a person's name after at least one other word
+    if tail and all(len(w) >= 3 and w not in GENERIC_WORDS and _translit(w) not in places for w in tail):
+        for k in (3, 2):  # a person's name at the end: initials plus surname (Olav Martin Sørli as omsorli)
+            v = _ascii_variants(alpha[-k:])[0]
+            extra.append("".join(x[0] for x in v[:-1]) + v[-1])
+            SHORT_FORMS.add(extra[-1])
+    for lab in extra:
+        if lab not in labels:
+            labels.append(lab)
     good = []
     for lab in labels:
         if not (3 <= len(lab) <= 40) or lab.isdigit() or lab in COMMON_LABELS or len(lab) < 4:
             continue
-        if "-" not in lab and len(lab) < 5 and len(words) == 1:
-            continue
         if lab.replace("-", "") in places and "-" not in lab:
             continue
         good.append(lab)
-    out = [f"{lab}.no" for lab in good] + [f"{lab}.com" for lab in good]
+    short = [lab for lab in good if "-" not in lab and len(lab) < 5 and len(words) == 1]
+    good = [lab for lab in good if lab not in short]
+    # a four-letter single name (ADMA AS) is tried on .no only; a few names use the .as domain
+    as_labels = good[:2] + ([first_alone] if first_alone and first_alone in good[2:] else [])
+    out = [f"{lab}.no" for lab in short + good] + [f"{lab}.com" for lab in good] + [f"{lab}.as" for lab in as_labels]
     if (((e or {}).get("naeringskode1") or {}).get("kode") or "").startswith(("88.91", "85.1")):
         kids = [lab for lab in good if "barnehage" not in lab and not any(f in lab for f in FORM_NAME_WORDS)]
         out = [f"{lab}.barnehage.no" for lab in kids[:2]] + out
@@ -930,6 +958,16 @@ async def check_candidate(f: Fetcher, sp: _Spend, ctx: CompanyContext, v: Verdic
     v.cross = not same_site(final, bare(v.domain))
     v.path_scoped = _is_section(home.url)
     judge(v, ctx.org, e, registry_host)
+    if v.cross and v.status == "name_only" and _is_front_or_about(home.url) and sp.can(1):
+        # the redirect target names us on its front page: its linked privacy page may print our org number
+        priv = [urljoin(home.url, a["href"]).split("#")[0] for a in home.soup.find_all("a", href=True)
+                if re.search(r"(?i)personvern|privacy|impressum|imprint", a["href"] + " " + a.get_text())]
+        priv = [u for u in priv if same_site(host_of(u), home.host)]
+        if priv:
+            p, _st = await _fetch_page(sp, priv[0])
+            if p and same_site(p.host, home.host):
+                v.pages.append(p)
+                judge(v, ctx.org, e, registry_host)
     await _check_variant(sp, ctx, v)
     await _check_collision(sp, ctx, v)
     label = re.sub(r"[^a-z0-9]", "", bare(home.host).split(".")[0])
@@ -965,6 +1003,22 @@ async def check_candidate(f: Fetcher, sp: _Spend, ctx: CompanyContext, v: Verdic
             if v.status == "proven" and v.method == "orgnr_on_page":
                 return
     judge(v, ctx.org, e, registry_host)
+    if v.status == "name_only" and sp.can(1) and not any(re.search(r"(?i)personvern|privacy", p.url) for p in v.pages):
+        # a privacy, terms or imprint page often prints the operator's org number (ludenso.com/privacy-policy)
+        fetched = {p.url.rstrip("/") for p in v.pages}
+        links = [urljoin(home.url, a["href"]).split("#")[0] for a in home.soup.find_all("a", href=True)
+                 if re.search(r"(?i)personvern|privacy|cookie|vilk|terms|impressum|imprint", a["href"] + " " + a.get_text())]
+        links = [u for u in links if same_site(host_of(u), home.host) and u.rstrip("/") not in fetched]
+        origin = f"{urlsplit(home.url).scheme}://{urlsplit(home.url).netloc}"
+        for u in links[:1]:
+            if not sp.can(1):
+                break
+            p, _st = await _fetch_page(sp, u)
+            if p and same_site(p.host, home.host):
+                v.pages.append(p)
+                judge(v, ctx.org, e, registry_host)
+                if v.status == "proven":
+                    break
     await _check_variant(sp, ctx, v)
     await _check_collision(sp, ctx, v)
 
@@ -1032,6 +1086,10 @@ async def _check_collision(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> Non
     legal form) and not the other's. Owners' sections, co-owned properties and housing co-ops accept only an
     org number on the site or the registry-declared website."""
     if v.status != "proven" or v.method == "orgnr_on_page":
+        return
+    if v.source == "guess_short":
+        v.status, v.method = "name_only", None
+        v.detail = "a domain made from part of the name needs our org number on the site (chain or parent brand risk)"
         return
     e = ctx.registry or {}
     form = ((e.get("organisasjonsform") or {}).get("kode") or "").upper()
@@ -1224,8 +1282,17 @@ def candidates(ctx: CompanyContext) -> list[tuple[str, str, str | None]]:
     for seed in sorted(website_seeds().get(ctx.org) or [], key=lambda x: x.get("domain") or ""):
         if seed.get("domain"):
             add(seed["domain"], "seed:" + "+".join(sorted(seed.get("sources") or [])))
+    # a legal name that is itself a domain (INNREGISTRERING.NO AS)
+    for dom in re.findall(r"(?i)\b([a-z0-9æøå][a-z0-9æøå\-]*\.(?:no|com|net|org|as|io|nu|se|dk))\b", e.get("navn") or ""):
+        add(_translit(dom), "guess")
     for d in name_domains(e.get("navn") or "", e):
-        add(d, "guess")
+        full = re.sub(r"[^a-z0-9]", "", _translit(" ".join(name_words(e.get("navn") or ""))))
+        lab = d.split(".")[0]
+        add(d, "guess_short" if lab in SHORT_FORMS and lab != full else "guess")
+    for old in e.get("historiskeNavn") or []:  # former registered names
+        nm = old.get("navn") if isinstance(old, dict) else old
+        for d in name_domains(nm or "", e)[:2]:
+            add(d, "guess")
     return out
 
 
@@ -2847,7 +2914,12 @@ async def collect_dated_news(sp: "_Spend", ctx: CompanyContext, pages: list[Page
         try:  # WordPress: the REST list gives the newest 20 posts in one request
             snap = await sp.get(origin + "/wp-json/wp/v2/posts?per_page=20&_fields=title,link,date,date_gmt")
             if snap.status == 200:
-                keep(clean_feed(_wp_posts(snap.content.decode("utf-8", "replace"))), snap)
+                rows = _wp_posts(snap.content.decode("utf-8", "replace"))
+                keep(clean_feed(rows), snap)
+                if len(rows) >= 20 and len(found) < limit and sp.can(1):
+                    snap2 = await sp.get(origin + "/wp-json/wp/v2/posts?per_page=20&page=2&_fields=title,link,date,date_gmt")
+                    if snap2.status == 200:
+                        keep(clean_feed(_wp_posts(snap2.content.decode("utf-8", "replace"))), snap2)
         except (BudgetExhausted, _OutOfRequests):
             raise
         except Exception:
@@ -3120,7 +3192,8 @@ async def fetch_website(f: Fetcher, ctx: CompanyContext) -> None:
             if not sp.can(2):
                 budget_note = "per-company request cap reached"
                 break
-            if src == "guess" and len([v for v in verdicts if v.source == "guess"]) >= 10:
+            if src.startswith("guess") and len([v for v in verdicts if v.source.startswith("guess")
+                                                and v.status not in ("no_dns", "duplicate")]) >= 10:
                 break
             v = Verdict(dom, src)
             verdicts.append(v)
