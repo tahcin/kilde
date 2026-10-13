@@ -34,7 +34,25 @@ KNOWN_SOURCES = {
     "www.wikidata.org": ("Wikidata", "CC0"),
     "qlever.cs.uni-freiburg.de": ("Wikidata via QLever", "CC0"),
     "qlever.dev": ("Wikidata via QLever", "CC0"),
+    "stotte.brreg.no": ("Støtteregisteret (state aid register), Brønnøysundregistrene", "NLOD 2.0"),
+    "sgregister.dibk.no": ("DiBK sentral godkjenning register", "Public register (DiBK), open data"),
+    "www.forskningsradet.no": ("Research Council of Norway: SkatteFUNN lists", "NLOD"),
+    "forskningsradet.no": ("Research Council of Norway: SkatteFUNN lists", "NLOD"),
+    "forskningsradet-open-data": ("Research Council of Norway: funded projects (open data)", "NLOD"),
+    "matnyttig.mattilsynet.no": ("Mattilsynet Smilefjes food inspections", "CC BY 4.0"),
+    "data.mattilsynet.no": ("Mattilsynet Smilefjes food inspections", "CC BY 4.0"),
+    "ted.europa.eu": ("EU TED public procurement notices", "Free reuse (Commission Decision 2011/833/EU)"),
+    "api.ted.europa.eu": ("EU TED public procurement notices", "Free reuse (Commission Decision 2011/833/EU)"),
 }
+LICENCE_LINES = [
+    "NLOD 2.0: Brønnøysundregistrene (Enhetsregisteret, Regnskapsregisteret, Støtteregisteret) and Research Council of Norway data.",
+    "CC BY 4.0: Mattilsynet Smilefjes inspections and SSB Klass code lists.",
+    "Free reuse under Commission Decision 2011/833/EU: EU TED procurement notices.",
+    "Public register: DiBK sentral godkjenning.",
+    "ODbL: website candidates derived from OpenStreetMap. CDLA-Permissive 2.0: Overture Maps places.",
+    "CC0: GLEIF LEI records and Wikidata.",
+    "NAV API terms: NAV job ads.",
+]
 
 
 # ---------------------------------------------------------------------------
@@ -133,7 +151,10 @@ def _sources(envelopes: list[dict], run_report: dict) -> list[dict]:
     counts: dict[str, int] = {}
     for e in envelopes:
         for ev in e.get("evidence") or []:
-            host = (urlsplit(ev.get("source_url") or "").hostname or "").lower()
+            url = ev.get("source_url") or ""
+            host = (urlsplit(url).hostname or "").lower()
+            if host == "raw.githubusercontent.com" and "/forskningsradet/" in url.lower():
+                host = "forskningsradet-open-data"
             if host:
                 key = host if host in KNOWN_SOURCES else "company_owned" if ev.get("source_class") == "company_owned" else host
                 counts[key] = counts.get(key, 0) + 1
@@ -227,7 +248,8 @@ def write_report(envelopes: list[dict], path: str, run_report: dict) -> None:
             .replace("__TITLE__", html.escape(f"Kilde report {meta['run_id']}".strip()))
             .replace("__META__", _embed(meta)).replace("__DATATAG__", data_tag).replace("__DATA__", payload)
             .replace("__NOSCRIPT__", noscript_rows).replace("__NLOD__", html.escape(NLOD))
-            .replace("__SSB__", html.escape(SSB)))
+            .replace("__SSB__", html.escape(SSB))
+            .replace("__LICENCES__", "".join(f"<li>{html.escape(x)}</li>" for x in LICENCE_LINES)))
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(page)
 
@@ -261,6 +283,8 @@ PAGE = """<!doctype html>
     <div id="srclist"></div>
     <p>__NLOD__.</p>
     <p>__SSB__</p>
+    <h3>Licences</h3>
+    <ul class="lic">__LICENCES__</ul>
     <p>Typeface Figtree, SIL Open Font License 1.1.</p>
   </div>
 </footer>
@@ -551,6 +575,8 @@ pre.q mark{background:var(--hl);color:var(--ink);border-radius:2px}
 .foot h3{font-size:15px;color:var(--ink);margin-top:24px}
 .foot p{max-width:80ch;margin-top:8px}
 .aboutlead{font-size:15px}
+.lic{margin:8px 0 0;padding-left:18px;max-width:80ch}
+.lic li{margin-top:4px}
 .runinfo{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px 24px;margin:18px 0 0;max-width:900px}
 .runinfo dt{color:var(--muted);font-size:13px}
 .runinfo dd{margin:2px 0 0;font-weight:500;font-variant-numeric:tabular-nums}
@@ -707,6 +733,9 @@ function link(u,text){var s=safeUrl(u)||(isDomain(u)?'https://'+u:null);return s
 function money(v,withCur){if(!v||v.amount==null)return '';return '<span class="num">'+(withCur&&v.currency?esc(v.currency)+'\u00a0':'')+nfmt(v.amount)+'</span>';}
 var LANG={nb:'Norwegian Bokm\u00e5l',nn:'Norwegian Nynorsk',no:'Norwegian',en:'English',sv:'Swedish',da:'Danish',de:'German',fi:'Finnish'};
 var CHG={updated:'Updated',ukjent:'Update',endring:'Updated',ny:'New entry',new:'New entry',sletting:'Deleted',deleted:'Deleted'};
+function lfName(v){v=v||{};return LF[v.code]||(/underenhet/i.test(v.name||'')?'A registered workplace (sub-unit)':v.name||'');}
+function chgUnknown(v){return !v||!v.changed||!v.changed.length||v.changed.every(function(x){return /^unspecified/i.test(String(x));});}
+function endStop(t){t=String(t||'').trim();return /[.!?\u2026"\u201d)]$/.test(t)?t:t+'.';}
 var REGS={registrertIForetaksregisteret:'Foretaksregisteret',registrertIMvaregisteret:'Merverdiavgiftsregisteret (VAT)',registrertIStiftelsesregisteret:'Stiftelsesregisteret',
  registrertIFrivillighetsregisteret:'Frivillighetsregisteret',registrertIPartiregisteret:'Partiregisteret'};
 
@@ -777,6 +806,7 @@ function render(f,v){
      '<span class="note">'+[esc(v.address||''),v.municipality&&(v.address||'').toUpperCase().indexOf(v.municipality)<0?esc(tc(v.municipality)):'',v.industry?esc(v.industry):'',
        v.employees!=null?plural(v.employees,'employee'):'',v.start_date?'since '+dfmt(v.start_date):''].filter(Boolean).join('<br>')+'</span>';
   if(v.name&&(v.role||v.role_code))return '<span class="t">'+esc(v.name)+'</span>'+(v.organisation_number?' <span class="sub2 num">'+orgf(v.organisation_number)+'</span>':'');
+  if(f==='registry_change'&&chgUnknown(v))return 'Registry update (details not published)';
   if(f==='registry_change')return esc(CHG[String(v.type||'').toLowerCase()]||cap(v.type||'Update'))+(v.changed&&v.changed.length?': '+esc(v.changed.join(', ')):'');
   if(f==='site_page_updated')return 'Page updated: '+link(v.url,bare(v.url).replace(/^[^/]+/,'')||'/');
   if(f==='related_website')return link(v.url)+(v.other_organisation_number?' <span class="sub2">prints org number <span class="num">'+orgf(v.other_organisation_number)+'</span></span>':'');
@@ -805,7 +835,7 @@ function srcBtn(co,cl){
 function vbtn(co,cl,inner){return '<button type="button" class="vbtn" data-o="'+co.o+'" data-c="'+esc(cl.i)+'" aria-haspopup="dialog">'+inner+'</button>';}
 
 /* ----- plain language ----- */
-var IND={'00.000':'','01.130':'Vegetable farming','03.110':'Sea fishing','16.110':'Sawmill','33.120':'Machinery repair','35.122':'Wind power','35.210':'Gas production',
+var IND={'00.000':'Industry not stated','01.130':'Vegetable farming','03.110':'Sea fishing','16.110':'Sawmill','33.120':'Machinery repair','35.122':'Wind power','35.210':'Gas production',
  '41.000':'Building construction','43.120':'Groundwork and site preparation','43.210':'Electrical installation','43.221':'Plumbing','43.222':'Heating and ventilation installation',
  '43.320':'Carpentry','43.340':'Painting and glazing','43.910':'Masonry','43.990':'Specialised construction',
  '46.180':'Sales agent','46.710':'Vehicle wholesale','46.720':'Vehicle parts wholesale','47.110':'Grocery store','47.300':'Fuel station','47.540':'Electrical appliance shop',
@@ -831,7 +861,7 @@ var DIV={'01':'Farming','02':'Forestry','03':'Fishing and aquaculture','06':'Oil
 var LF={AS:'Private limited company',ASA:'Public limited company',ENK:'Sole proprietorship',ANS:'General partnership',DA:'Partnership with shared liability',
  NUF:'Norwegian branch of a foreign company',SA:'Cooperative',BA:'Company with limited liability',STI:'Foundation',FLI:'Association',ESEK:'Co-owned residential building',
  BRL:'Housing cooperative',KS:'Limited partnership',IKS:'Inter-municipal company',SAM:'Co-ownership',ORGL:'Organisation',KF:'Municipal enterprise',PK:'Pension fund',
- SPA:'Savings bank',GFS:'Mutual insurance company',KOMM:'Municipality',STAT:'State body'};
+ SPA:'Savings bank',BEDR:'A registered workplace (sub-unit)',AAFY:'A registered workplace (sub-unit)',PRE:'Shipping partnership',GFS:'Mutual insurance company',KOMM:'Municipality',STAT:'State body'};
 var SIG={'styrets leder alene':'the board chair alone','daglig leder alene':'the general manager alone','to styremedlemmer i fellesskap':'any two board members together',
  'to av styrets medlemmer i fellesskap':'any two board members together','styrets medlemmer hver for seg':'each board member alone',
  'styrets leder og ett styremedlem i fellesskap':'the board chair together with one board member','daglig leder og styrets leder i fellesskap':'the general manager and the board chair together',
@@ -870,11 +900,13 @@ function why(n){if(!n)return '';var id='why'+(++whyN);return ' <button type="but
 var UI={q:'',web:false,hire:false,chg:false,sort:'name'},homeY=0;
 function chk(id,text,on){return '<label class="ck"><input type="checkbox" id="'+id+'"'+(on?' checked':'')+'> '+text+'</label>';}
 function home(){
+  var checks=(CO.some(function(c){return c.fl.web;})?chk('f-web','With a website',UI.web):'')+(CO.some(function(c){return av(c,'job_ad').length;})?chk('f-hire','Hiring',UI.hire):'')+
+    (CO.some(recent)?chk('f-chg','Changed in the last 3 months',UI.chg):'');
   return '<section class="hero" aria-labelledby="h-home"><h1 id="h-home">Profiles of '+plural(CO.length,'Norwegian company','Norwegian companies')+', built from public sources.</h1>'+
     '<p class="lead">Every fact links to where it came from. Open a company to see what it does, who runs it, how it is doing and what changed.</p>'+
     '<div class="bigsearch" role="search">'+IC.search+'<label class="vh" for="q">Search companies</label><input id="q" type="search" placeholder="Search name, town or industry" autocomplete="off" spellcheck="false" value="'+esc(UI.q)+'"></div>'+
-    '<div class="controls"><div class="cks" role="group" aria-label="Show only"><span class="muted">Show only</span>'+
-      chk('f-web','With a website',UI.web)+chk('f-hire','Hiring',UI.hire)+chk('f-chg','Changed in the last 3 months',UI.chg)+'</div>'+
+    '<div class="controls"><div class="cks" role="group" aria-label="Show only">'+(checks?'<span class="muted">Show only</span>':'')+
+      checks+'</div>'+
     '<label class="sort"><span class="muted">Sort by</span><select id="sort">'+[['name','Name'],['rev','Revenue, highest first'],['chg','Latest change first']].map(function(o){
       return '<option value="'+o[0]+'"'+(UI.sort===o[0]?' selected':'')+'>'+o[1]+'</option>';}).join('')+'</select></label></div></section>'+
     '<p class="count" id="count" aria-live="polite"></p><ul class="clist" id="list"></ul>'+
@@ -882,7 +914,7 @@ function home(){
 }
 function bindHome(){
   $('q').addEventListener('input',function(){UI.q=this.value;shown=PAGE;applyFilters();});
-  [['f-web','web'],['f-hire','hire'],['f-chg','chg']].forEach(function(p){$(p[0]).addEventListener('change',function(){UI[p[1]]=this.checked;shown=PAGE;applyFilters();});});
+  [['f-web','web'],['f-hire','hire'],['f-chg','chg']].forEach(function(p){if($(p[0]))$(p[0]).addEventListener('change',function(){UI[p[1]]=this.checked;shown=PAGE;applyFilters();});});
   $('sort').addEventListener('change',function(){UI.sort=this.value;applyFilters();});
   $('more').addEventListener('click',function(){shown+=PAGE;drawList();});
 }
@@ -1059,7 +1091,8 @@ function errs(co){
 var SUGG=['What does it do?','Who runs it?','How did it do last year?','Is it hiring?','What changed recently?'];
 var INTENTS=[
  ['what',/what does|what do|does it do|do they do|business|industry|purpose|sector|activity|hva gj\u00f8r|gj\u00f8r|driver med|bransje|form\u00e5l|virksomhet|n\u00e6ring/g],
- ['who',/who|runs?\b|ceo|manag|leader|leads?\b|board|chair|owner|director|daglig|leder|styre|eier|innehaver/g],
+ ['who',/who runs|runs?\b|ceo|manag|leader|leads?\b|board|chair|director|daglig|leder|styre|in charge/g],
+ ['owner',/owns?\b|owner|owned|shareholder|stake|eier|eiere|aksjon\u00e6r|innehaver/g],
  ['money',/revenue|turnover|profit|loss|result|earn|money|financ|last year|perform|equity|accounts|omsetning|resultat|inntekt|overskudd|underskudd|regnskap|\u00f8konomi|egenkapital|tall/g],
  ['hiring',/hir(e|ing)|jobs?\b|vacanc|recruit|career|opening|ansett|ansatt nye|nye folk|ledig|stilling|jobb|karriere|rekrutt/g],
  ['changed',/chang|recent|news|update|happen|endr|nytt|nyhet|oppdater/g],
@@ -1067,13 +1100,13 @@ var INTENTS=[
  ['website',/website|web\s?site|\bweb\b|url|verif|domain|social|linkedin|facebook|instagram|nettside|hjemmeside|nettsted/g],
  ['contact',/contact|e-?mail|phone|call|reach|kontakt|telefon|e-post|epost|ring/g],
  ['size',/employ|staff|people|how big|size|workers|ansatte|st\u00f8rrelse/g],
- ['group',/parent|group|subsidiar|owned by|konsern|morselskap|datter/g]];
+ ['group',/parent|group|subsidiar|konsern|morselskap|datter/g]];
 function intents(q){q=q.toLowerCase();var best=0,out=[];INTENTS.forEach(function(it){var m=q.match(it[1]);var s=m?m.length:0;if(s>best){best=s;out=[it[0]];}else if(s&&s===best)out.push(it[0]);});return out.slice(0,2);}
 function S(text,cls){return [text,cls||[]];}
 function answerFor(co,intent){
   var out=[],c,cs;
   if(intent==='what'){c=one(co,'industry');if(c)out.push(S('Registered industry: '+c.v.name+' ('+c.v.code+').',[c]));
-    c=one(co,'statutory_purpose')||one(co,'registered_activity');if(c)out.push(S('Registered purpose: \u201c'+String(c.v).trim()+'\u201d',[c]));
+    c=one(co,'statutory_purpose')||one(co,'registered_activity');if(c)out.push(S('Registered purpose: \u201c'+endStop(c.v)+'\u201d',[c]));
     c=one(co,'website_description');if(c)out.push(S('Its own website says: \u201c'+c.v+'\u201d',[c]));}
   else if(intent==='who'){c=one(co,'ceo');if(c)out.push(S('General manager: '+c.v.name+'.',[c]));else{c=any(co,'ceo')[0];if(c&&c.n)out.push(S(c.n+'.',[c]));}
     c=one(co,'board_chair');if(c)out.push(S('Board chair: '+c.v.name+'.',[c]));
@@ -1089,7 +1122,7 @@ function answerFor(co,intent){
     else{c=any(co,'job_ad')[0];if(c&&c.a==='failed')out.push(S('Job ads could not be checked in this run ('+(c.n||'source failed')+').',[c]));else if(c)out.push(S('No active job ads on NAV for this organisation number.',[c]));}
     c=(one(co,'hiring_signal')||one(co,'careers_page'));if(c)out.push(S('The verified website has a careers page: '+bare(c.v)+'.',[c]));}
   else if(intent==='changed'){cs=av(co,'registry_change').sort(function(a,b){return (b.d||'').localeCompare(a.d||'');}).slice(0,3);
-    cs.forEach(function(x){out.push(S('On '+dfmt(x.d)+' the registry recorded '+(x.v.changed&&x.v.changed.length?'a change to '+x.v.changed.join(', '):'an update')+'.',[x]));});
+    cs.forEach(function(x){out.push(S('On '+dfmt(x.d)+' the registry recorded '+(!chgUnknown(x.v)?'a change to '+x.v.changed.join(', '):'an update (details not published)')+'.',[x]));});
     co.ch.slice(0,3).forEach(function(ch){var cl=ch.current_claim_id?ix(co)[ch.current_claim_id]:null;out.push(S('Since the previous run: '+label(ch.field)+' ('+String(ch.type||'change').replace(/_/g,' ')+').',cl?[cl]:[]));});}
   else if(intent==='where'){c=one(co,'business_address');if(c)out.push(S('Business address: '+c.v+'.',[c]));
     c=one(co,'municipality');if(c)out.push(S('Municipality: '+tc(c.v.name)+'.',[c]));
@@ -1103,6 +1136,15 @@ function answerFor(co,intent){
     if(c)out.push(S(label(f)+(/^registry/.test(f)?' (registry)':'')+': '+(/phone|mobile/.test(f)?phone(c.v):c.v)+'.',[c]));});}
   else if(intent==='size'){c=any(co,'employees_registered')[0];if(c&&c.a==='available')out.push(S('Employees registered: '+c.v+'.',[c]));else if(c&&c.n)out.push(S(c.n+'.',[c]));
     c=one(co,'employees_reported');if(c)out.push(S('Wikidata reports '+c.v.count+' employees'+(c.v.point_in_time?' as of '+dfmt(c.v.point_in_time):'')+'.',[c]));}
+  else if(intent==='owner'){var own=av(co,'owner'),pt=av(co,'partner'),lf_=one(co,'legal_form'),code=lf_&&lf_.v?lf_.v.code:'';
+    if(own.length)out.push(S('It is a sole proprietorship owned by '+own[0].v.name+'.',[own[0]]));
+    else if(pt.length)out.push(S('It is owned by its partners: '+pt.map(function(x){return x.v.name;}).join(', ')+'.',pt));
+    else if(code==='STI')out.push(S('It is a foundation, so it has no owners.',[lf_]));
+    else out.push(S('Owners and shareholders are not published in the open registers Kilde checks.',[]));
+    c=one(co,'group_parent');if(c)out.push(S('Its parent company is '+dn(c.v.name)+' ('+orgf(c.v.organisation_number)+')'+(c.v.ownership?', which owns '+c.v.ownership:'')+'.',[c]));
+    else{c=one(co,'lei_direct_parent')||one(co,'lei_ultimate_parent');if(c)out.push(S('GLEIF lists '+dn(c.v.name)+' as its parent company.',[c]));
+      else{c=one(co,'part_of_group');if(c)out.push(S(c.v?'It is registered as part of a group.':'It is not registered as part of a group.',[c]));}}
+    c=one(co,'board_chair');if(c&&!own.length)out.push(S('Who controls it: the board, chaired by '+c.v.name+'.',[c]));}
   else if(intent==='group'){c=one(co,'group_parent');if(c)out.push(S('Parent company: '+c.v.name+' ('+orgf(c.v.organisation_number)+')'+(c.v.ownership?', '+c.v.ownership+' owned':'')+'.',[c]));
     cs=av(co,'group_subsidiary');if(cs.length)out.push(S('Subsidiaries: '+cs.map(function(x){return x.v.name;}).join(', ')+'.',cs));
     c=one(co,'part_of_group');if(c&&!out.length)out.push(S(c.v?'It is registered as part of a group.':'It is not registered as part of a group.',[c]));}
@@ -1127,7 +1169,7 @@ function askPanel(co){
 }
 
 /* ----- company page ----- */
-function prettyDates(s){return s.replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g,function(m){return dfmt(m);});}
+function prettyDates(s){return s.replace(/an? underenhet til n\u00e6ringsdrivende og offentlig forvaltning/gi,'a registered workplace (sub-unit)').replace(/underenhet til n\u00e6ringsdrivende og offentlig forvaltning/gi,'registered workplace (sub-unit)').replace(/\b(\d{4})-(\d{2})-(\d{2})\b/g,function(m){return dfmt(m);});}
 function intro(co){
   var refs={n:0,m:{}},exact=esc(co.n),nice=esc(dn(co.n));
   var parts=co.sum.t.map(function(s){return prettyDates(esc(s[0])).split(exact).join(nice)+cites(co,s[1],refs);});
@@ -1152,7 +1194,8 @@ function cardWhat(co){
       inc=one(co,'incorporation_date')||one(co,'registration_date'),emp=any(co,'employees_registered')[0],lf=one(co,'legal_form'),
       st=one(co,'legal_status'),reg=one(co,'register_memberships'),fn=one(co,'former_names');
   var w=what(co),t=muni(co),a=[],cls=[];
-  if(w){a.push(esc(w)+(t?' in '+esc(t):'')+'.');cls.push(ind);}
+  if(w&&w!=='Industry not stated'){a.push(esc(w)+(t?' in '+esc(t):'')+'.');cls.push(ind);}
+  else if(w){a.push('The registry does not state its industry'+(t?'. It is based in '+esc(t):'')+'.');cls.push(ind);}
   else a.push('The registry does not say what line of business it is in.');
   var bits=[];if(inc){bits.push('founded in '+String(inc.v).slice(0,4));cls.push(inc);}
   if(emp&&emp.a==='available'){bits.push(empText(emp.v).toLowerCase()+' employees');cls.push(emp);}
@@ -1161,9 +1204,9 @@ function cardWhat(co){
   if(desc&&co.sum.t.some(function(x){return String(x[0]).indexOf(String(desc.v).slice(0,40))>=0;}))desc=null;
   var ans=P(a.join(' '))+(desc?'<p class="quote">In its own words: “'+esc(desc.v)+'”</p>':'');
   if(desc)cls.push(desc);
-  var det=(lf?crow(co,lf,'Company type',esc(LF[lf.v.code]||lf.v.name)+' <span class="sub2">'+esc(lf.v.name)+' ('+esc(lf.v.code)+')</span>'):'')+
+  var det=(lf?crow(co,lf,'Company type',esc(lfName(lf.v))+' <span class="sub2">'+esc(lf.v.name)+' ('+esc(lf.v.code)+')</span>'):'')+
     (ind?crow(co,ind,'Registered industry',esc(ind.v.name)+' <span class="sub2 num">'+esc(ind.v.code)+'</span>'):'')+
-    (pur?crow(co,pur,'Registered purpose',esc(pur.v)+' <span class="sub2">(Norwegian)</span>'):'')+
+    (pur?crow(co,pur,'Registered purpose',esc(endStop(pur.v))+' <span class="sub2">(Norwegian)</span>'):'')+
     (st?crow(co,st,'Status'):'')+
     (reg&&reg.v?crow(co,reg,'Registered for VAT',reg.v.registrertIMvaregisteret?'Yes':'No'):'')+
     (fn?crow(co,fn,'Former names'):'');
@@ -1272,7 +1315,7 @@ function cardHiring(co){
 function cardChanged(co){
   var regs=regChanges(co),sites=av(co,'site_page_updated').sort(function(x,y){return (y.d||'').localeCompare(x.d||'');}),a=[],cls=[];
   if(regs.length){var r=regs[0];a.push((regs.length===1?'One registry update':regs.length+' registry updates')+' in the last 12 months. The latest, on '+dfmt(r.d)+', '+
-      (r.v.changed&&r.v.changed.length?'changed the '+esc(r.v.changed.join(', '))+'.':'did not say what changed.'));cls.push(r);}
+      (!chgUnknown(r.v)?'changed the '+esc(r.v.changed.join(', '))+'.':'did not publish what changed.'));cls.push(r);}
   else a.push('No registry updates in the last 12 months.');
   if(co.ch.length)a.push(co.ch.length+' differences since the previous Kilde run.');
   var news=av(co,'dated_news').sort(function(x,y){return (y.d||'').localeCompare(x.d||'');});
@@ -1332,7 +1375,7 @@ function company(o){
   var co=BY[o];if(!co)return '<div class="co"><a class="back" href="#">'+IC.back+'All companies</a><p>No company '+esc(o)+' in this report.</p></div>';
   current=o;
   var lf=one(co,'legal_form'),w=what(co),t=muni(co),warn=statusWarn(co);
-  var sub=[w&&t?w+' in '+t:(w||t),lf&&lf.v?(LF[lf.v.code]||lf.v.name)+' ('+lf.v.code+')':'','Org. no. '+orgf(co.o)].filter(Boolean);
+  var sub=[w&&t&&w!=='Industry not stated'?w+' in '+t:(w&&t?w+' \u00b7 '+t:(w||t)),lf&&lf.v?lfName(lf.v)+' ('+lf.v.code+')':'','Org. no. '+orgf(co.o)].filter(Boolean);
   return '<article class="co"><a class="back" href="#">'+IC.back+'All companies</a>'+
     '<header class="cohead"><div><h1 id="h-name">'+esc(dn(co.n||co.o))+'</h1><p class="cosub">'+sub.map(esc).join(' · ')+'</p></div>'+cmpToggle(co)+'</header>'+
     (warn?'<p class="alert">'+IC.alert+'<span><strong>'+warn+'.</strong> This status is registered with Brønnøysundregistrene. '+srcLink(co,[one(co,'legal_status')])+'</span></p>':'')+
@@ -1362,7 +1405,7 @@ function compareView(list){
     grp('The basics')+
     row('What it does',function(co){var c=one(co,'industry');return cell(co,c,esc(what(co)||'Not stated'));})+
     row('Town',function(co){var c=one(co,'municipality');return cell(co,c,esc(muni(co)||'Not stated'));})+
-    row('Company type',function(co){var c=one(co,'legal_form');return c?cell(co,c,esc(LF[c.v.code]||c.v.name)):cell(co,null,'Not stated');})+
+    row('Company type',function(co){var c=one(co,'legal_form');return c?cell(co,c,esc(lfName(c.v))):cell(co,null,'Not stated');})+
     row('Founded',function(co){var c=one(co,'incorporation_date')||one(co,'registration_date');return c?cell(co,c,String(c.v).slice(0,4)):cell(co,null,'Not stated');})+
     row('Employees',function(co){var c=any(co,'employees_registered')[0];return c&&c.a==='available'?cell(co,c,esc(empText(c.v))):cell(co,c&&/no employees/i.test(c.n||'')?c:null,'None registered');})+
     grp('Money, latest filed year')+row('Revenue',fig('revenue'))+
