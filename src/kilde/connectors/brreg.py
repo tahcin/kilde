@@ -379,7 +379,8 @@ def describe_paths(changes: list[dict]) -> list[str]:
 
 async def fetch_change_feed(f: Fetcher, orgs: list[str], days: int = 365) -> dict[str, tuple[Snapshot, list[dict]]]:
     """Registry updates for the batch in the last `days` days, with the changed fields."""
-    since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    # Whole days, so two runs on the same day ask for the same window (Builderr runs each entry twice).
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%dT00:00:00.000Z")
     out: dict[str, tuple[Snapshot, list[dict]]] = {}
     for i in range(0, len(orgs), 100):
         chunk = orgs[i:i + 100]

@@ -13,7 +13,7 @@ from typing import Any, Awaitable, Callable
 
 from . import __version__, gate
 from .connectors import accounts, brreg
-from .http import Blocked, Budget, BudgetExhausted, Fetcher
+from .http import Blocked, Budget, BudgetExhausted, Fetcher, UnsafeAddress
 from .model import SECTIONS, CompanyContext, utc_now
 from .refresh import diff
 from .spans import MAX_SPAN, repair
@@ -21,6 +21,7 @@ from .synthesis import summarise
 
 log = logging.getLogger("kilde")
 COPIES_WINDOW = 28 * 60  # seconds; the endpoint asks for about 30 requests a minute
+DEFAULT_OFF = {"report_copies"}
 # Open registers keyed by organisation number, each with a batch prepare and a per-company emit.
 OPEN_SOURCES = [("ted", "public_contract_award", "activity"), ("smilefjes", "food_inspection", "activity"),
                 ("forskningsradet", "research_project", "activity"), ("stotteregisteret", "state_aid_award", "activity"),
@@ -48,7 +49,8 @@ def git_commit() -> str | None:
 
 class Options:
     def __init__(self, *, max_requests: int, seconds: float, concurrency: int = 16, previous: dict[str, dict] | None = None,
-                 run_id: str, out_dir: Path, cache_dir: str | None = None, modules: set[str] | None = None):
+                 run_id: str, out_dir: Path, cache_dir: str | None = None, modules: set[str] | None = None,
+                 checkpoint: Callable[[list[dict]], None] | None = None):
         self.max_requests = max_requests
         self.seconds = seconds
         self.concurrency = concurrency
@@ -57,6 +59,7 @@ class Options:
         self.out_dir = out_dir
         self.cache_dir = cache_dir
         self.modules = modules
+        self.checkpoint = checkpoint
 
 
 async def _step(ctx: CompanyContext, name: str, fn: Callable[[], Awaitable[None]], field: str, section: str,
@@ -82,7 +85,7 @@ async def _step(ctx: CompanyContext, name: str, fn: Callable[[], Awaitable[None]
         ctx.module_states.setdefault(name, "failed")
         if not any(c.field == field for c in ctx.claims):
             ctx.mark(field, section, "failed", note=f"budget_exhausted: {exc}")
-    except Blocked as exc:
+    except (Blocked, UnsafeAddress) as exc:
         ctx.module_states.setdefault(name, "blocked")
         if not any(c.field == field for c in ctx.claims):
             ctx.mark(field, section, "blocked", note=str(exc)[:200])
@@ -102,7 +105,9 @@ async def run_batch(orgs: list[str], opt: Options) -> tuple[list[dict], dict]:
     budget = Budget(opt.max_requests, opt.seconds)
     f = Fetcher(budget, cache_dir=opt.cache_dir)
     ctxs = {o: CompanyContext(o) for o in orgs}
-    want = (lambda m: opt.modules is None or m in opt.modules)
+    # The annual-report copy list is off by default: its endpoint allows about 30 requests a minute, so
+    # on a large batch it cannot finish the same set of companies in every run.
+    want = (lambda m: (m not in DEFAULT_OFF) if opt.modules is None else (m in opt.modules))
     website = _optional("website")
     nav = _optional("nav_jobs")
     gleif = _optional("gleif")
@@ -176,6 +181,17 @@ async def run_batch(orgs: list[str], opt: Options) -> tuple[list[dict], dict]:
                 log.warning("wikidata prepare failed: %r", exc)
 
     await guarded(asyncio.gather(prepare(), *(phase_a(c) for c in ctxs.values())), phase_a_deadline)
+
+    # Checkpoint: provisional envelopes (registry facts so far) are written now, so an external kill
+    # later in the run still leaves one envelope per company. The final write replaces them.
+    commit = git_commit()
+    if opt.checkpoint:
+        try:
+            now = utc_now()
+            opt.checkpoint([assemble(c, opt, started_at, now, commit, [], opt.out_dir / "snapshots", provisional=True)
+                            for c in ctxs.values()])
+        except Exception as exc:  # noqa: BLE001
+            log.warning("checkpoint failed: %r", exc)
 
     # The job index catch-up matches new ads by legal name before checking the org number, so it
     # runs once the registry phase has the names.
@@ -254,11 +270,16 @@ async def run_batch(orgs: list[str], opt: Options) -> tuple[list[dict], dict]:
     feed = batch_info.get("change_feed") or {}
     envelopes = []
     completed_at = utc_now()
-    commit = git_commit()
     snap_dir = opt.out_dir / "snapshots"
     gate_notes: list[str] = []
     for org in orgs:
         ctx = ctxs[org]
+        # Builderr's hiring family is shaped as a URL per signal: publish each verified NAV ad as one too.
+        for job in ctx.claims_for("job_ad"):
+            url = (job.value or {}).get("url") if isinstance(job.value, dict) else None
+            if url and url not in {str(c.value) for c in ctx.claims_for("hiring_signal")}:
+                ctx.add_claim("hiring_signal", "hiring", url, [e for e in ctx.evidence if e.id in job.evidence_ids],
+                              as_of=job.as_of, match=job.match, note="NAV job ad for this organisation number")
         try:
             gate_notes += gate.check(ctx)
         except Exception as exc:  # noqa: BLE001
@@ -307,7 +328,7 @@ def section_state(ctx: CompanyContext, section: str) -> str:
 
 
 def assemble(ctx: CompanyContext, opt: Options, started_at: str, completed_at: str, commit: str | None,
-             changes: list[dict], snap_dir: Path) -> dict:
+             changes: list[dict], snap_dir: Path, provisional: bool = False) -> dict:
     # Persist snapshots for every evidence item that has one (deduplicated by hash).
     for ev in ctx.evidence:
         snap = ctx.snapshots.get(ev.id)
@@ -333,7 +354,8 @@ def assemble(ctx: CompanyContext, opt: Options, started_at: str, completed_at: s
     return {
         "organisation_number": ctx.org,
         "agent": {"name": "Kilde", "version": __version__, "commit": commit},
-        "run": {"run_id": opt.run_id, "started_at": started_at, "completed_at": completed_at, "terminal_status": terminal},
+        "run": {"run_id": opt.run_id, "started_at": started_at, "completed_at": completed_at, "terminal_status": terminal,
+                **({"provisional": True} if provisional else {})},
         "legal_name": (ctx.registry or {}).get("navn"),
         "sections": {s: {"state": section_state(ctx, s), "claim_ids": [c.id for c in ctx.claims if c.section == s]}
                      for s in SECTIONS},

@@ -80,6 +80,7 @@ class Snapshot:
     content_type: str
     redirects: list[str] = field(default_factory=list)
     from_cache: bool = False
+    redacted: bool = False
 
     @property
     def sha256(self) -> str:
@@ -132,6 +133,8 @@ class CompanyContext:
             licence=licence,
             note=note,
         )
+        if snap is not None and getattr(snap, "redacted", False):
+            ev.note = ((ev.note + "; ") if ev.note else "") + "birth dates removed from the saved response before hashing"
         self.evidence.append(ev)
         if snap is not None:
             self.snapshots[eid] = snap

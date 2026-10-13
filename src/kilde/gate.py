@@ -54,7 +54,8 @@ def check(ctx: CompanyContext) -> list[str]:
     sites = ctx.claims_for("official_website")
     derived = [c for c in ctx.claims if c.field in DERIVED and c.availability == "available"
                and (c.match or {}).get("method") != "registry_declared"
-               and "wikidata" not in (c.match or {}).get("method", "")]
+               and "wikidata" not in (c.match or {}).get("method", "")
+               and (c.match or {}).get("method") != "employer_orgnr"]
     if not derived:
         return []
     notes: list[str] = []

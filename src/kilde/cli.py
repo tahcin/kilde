@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from . import __version__
+from . import __version__ as _v  # noqa: F401
 from .pipeline import Options, run_batch
 
 DEFAULT_REQUESTS_PER_COMPANY = 20  # Unstop: 2,000 requests per 100 companies
@@ -38,15 +39,35 @@ def read_organisations(path: str) -> list[str]:
                 values.extend(x for x in line.replace(";", ",").split(",") if x.strip())
     orgs: list[str] = []
     seen = set()
+    INVALID.clear()
     for v in values:
         raw = v.get("organisation_number") or v.get("orgnr") or v.get("organisasjonsnummer") if isinstance(v, dict) else v
         org = "".join(ch for ch in str(raw or "") if ch.isdigit())
         if len(org) != 9:
-            raise SystemExit(f"Invalid Norwegian organisation number: {v!r}")
+            # Never abort the batch: an unusable input still gets its own terminal envelope.
+            key = str(raw if raw is not None else v)
+            if key not in seen:
+                seen.add(key)
+                INVALID.append(key)
+            continue
         if org not in seen:  # one envelope per distinct organisation number
             seen.add(org)
             orgs.append(org)
     return orgs
+
+
+INVALID: list[str] = []
+
+
+def invalid_envelope(raw: str, run_id: str, at: str) -> dict:
+    sections = {s: {"state": "failed", "claim_ids": []} for s in
+                ("identity", "financials", "leadership", "locations", "web_presence", "hiring", "activity")}
+    return {"organisation_number": raw, "agent": {"name": "Kilde", "version": __version__},
+            "run": {"run_id": run_id, "started_at": at, "completed_at": at, "terminal_status": "failed"},
+            "legal_name": None, "sections": sections, "claims": [], "evidence": [],
+            "summary": {"text": "", "sentences": [], "unknowns": ["The input is not a valid nine-digit Norwegian organisation number."]},
+            "changes": [], "errors": [{"module": "input", "message": f"invalid organisation number: {raw!r}", "at": at}],
+            "operations": {"requests": 0, "third_party_cost_usd": 0.0, "llm_calls": 0}}
 
 
 def read_previous(path: str | None) -> dict[str, dict]:
@@ -101,7 +122,12 @@ def main(argv: list[str] | None = None) -> None:
     r.add_argument("--max-requests", type=int, default=None, help="outbound HTTP request budget (default 20 per company)")
     r.add_argument("--time-budget", type=float, default=None, help="seconds (default 2700)")
     r.add_argument("--concurrency", type=int, default=40)
-    r.add_argument("--modules", default=None, help="comma list to restrict modules (debugging)")
+    r.add_argument("--only", default=None, help="comma list of Kilde modules to run (debugging)")
+    # Accepted for compatibility with the starter kit's command; Kilde schedules its own work.
+    r.add_argument("--modules", default=None, help="accepted for starter-kit compatibility; ignored")
+    r.add_argument("--workers", type=int, default=None, help="accepted for starter-kit compatibility; see --concurrency")
+    r.add_argument("--checkpoint-every", type=int, default=None, help="accepted for starter-kit compatibility")
+    r.add_argument("--resume", action="store_true", help="accepted for starter-kit compatibility")
     r.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args(argv)
     if args.cmd != "run":
@@ -110,8 +136,11 @@ def main(argv: list[str] | None = None) -> None:
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING, format="%(levelname)s %(message)s")
 
     orgs = read_organisations(args.organisations)
-    if args.expected_count is not None and len(orgs) != args.expected_count:
-        raise SystemExit(f"Expected {args.expected_count} organisations, received {len(orgs)}")
+    expected_note = None
+    if args.expected_count is not None and len(orgs) + len(INVALID) != args.expected_count:
+        # Do not abort: every distinct input still gets an envelope; the mismatch is reported.
+        expected_note = f"expected {args.expected_count} organisations, received {len(orgs) + len(INVALID)} distinct inputs"
+        logging.warning(expected_note)
     out = Path(args.output)
     out_dir = out.parent
     run_id = args.run_id or datetime.now(timezone.utc).strftime("kilde-%Y%m%dT%H%M%SZ")
@@ -121,12 +150,18 @@ def main(argv: list[str] | None = None) -> None:
     seconds = args.time_budget or float(os.environ.get("KILDE_TIME_BUDGET", 0)) or DEFAULT_TIME_BUDGET
     opt = Options(max_requests=max_requests, seconds=seconds, concurrency=args.concurrency, previous=previous,
                   run_id=run_id, out_dir=out_dir, cache_dir=os.environ.get("KILDE_CACHE_DIR"),
-                  modules=set(args.modules.split(",")) if args.modules else None)
+                  modules=set(args.only.split(",")) if args.only else None,
+                  checkpoint=lambda envs: write_jsonl(out, envs + [invalid_envelope(r, run_id, envs[0]["run"]["started_at"] if envs else "") for r in INVALID]))
     envelopes, report = asyncio.run(run_batch(orgs, opt))
+    envelopes += [invalid_envelope(r, run_id, report["started_at"]) for r in INVALID]
+    report["emitted_envelopes"] = len(envelopes)
+    report["expected_count"] = args.expected_count if args.expected_count is not None else len(envelopes)
+    if expected_note:
+        report["expected_count_note"] = expected_note
 
     write_jsonl(out, envelopes)
     write_jsonl(Path(args.profiles_output or out_dir / "profiles.jsonl"), [profile_of(e) for e in envelopes])
-    report["validation"] = validate(envelopes, orgs)
+    report["validation"] = validate(envelopes, orgs + INVALID)
     report["inputs"] = {"organisations": args.organisations, "bulk": args.bulk, "previous_envelopes": len(previous)}
     report["coverage"] = coverage(envelopes)
     Path(args.report or out_dir / "run-report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")

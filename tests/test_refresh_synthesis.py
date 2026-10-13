@@ -87,3 +87,26 @@ def test_summary_never_mixes_group_and_company_accounts():
     text = summarise(ctx, [])["text"]
     assert "company accounts it reported an annual result of 2.4 million NOK" in text
     assert "5.0 million" not in text.split("company accounts")[1].split(".")[0]
+
+
+def test_birth_dates_never_reach_snapshots():
+    from kilde.http import redact_personal
+    raw = b'{"rollegrupper":[{"roller":[{"person":{"fodselsdato":"1970-01-01","navn":{"fornavn":"Kari","etternavn":"Testesen"}}}]}]}'
+    s = redact_personal(Snapshot(url="u", final_url="u", status=200, retrieved_at="t", content=raw, content_type="application/json"))
+    assert b"fodselsdato" not in s.content and b"Testesen" in s.content and s.redacted
+
+
+def test_private_addresses_are_refused():
+    import asyncio, httpx
+    from kilde.http import Budget, Fetcher, UnsafeAddress
+    f = Fetcher(Budget(10, 60))
+    async def go():
+        try:
+            await f._guard_address(httpx.Request("GET", "http://169.254.169.254/latest/meta-data"))
+        finally:
+            await f.close()
+    try:
+        asyncio.run(go())
+        raise AssertionError("metadata address was not refused")
+    except UnsafeAddress:
+        pass

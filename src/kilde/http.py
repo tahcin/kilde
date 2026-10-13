@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import ipaddress
 import json
 import os
 import time
@@ -29,6 +30,33 @@ from .model import Snapshot, utc_now
 USER_AGENT = f"KildeSignalpost/{__version__} (+https://github.com/tahcin/kilde)"
 ROBOTS_TOKEN = "KildeSignalpost"
 MAX_BYTES = 3_000_000
+
+
+def redact_personal(snap: "Snapshot") -> "Snapshot":
+    """Brønnøysund role and signature responses carry people's birth dates (fodselsdato). They are
+    removed before anything is hashed or saved, so no evidence file holds them. The saved snapshot is
+    then the redacted copy, re-serialised compactly in the same key order."""
+    if b"fodselsdato" not in snap.content or "json" not in (snap.content_type or "json"):
+        return snap
+    try:
+        data = json.loads(snap.content)
+    except ValueError:
+        return snap
+
+    def strip(o):
+        if isinstance(o, dict):
+            return {k: strip(v) for k, v in o.items() if k != "fodselsdato"}
+        if isinstance(o, list):
+            return [strip(v) for v in o]
+        return o
+
+    snap.content = json.dumps(strip(data), ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    snap.redacted = True
+    return snap
+
+
+class UnsafeAddress(Exception):
+    """The URL resolves to a private, loopback, link-local or otherwise non-public address."""
 
 
 class BudgetExhausted(Exception):
@@ -74,7 +102,9 @@ class Fetcher:
             follow_redirects=True,
             max_redirects=6,
             limits=httpx.Limits(max_connections=total, max_keepalive_connections=total),
+            event_hooks={"request": [self._guard_address]},
         )
+        self._addr_ok: dict[str, bool] = {}
         self.total = asyncio.Semaphore(total)
         self.per_host_limit = per_host
         # Documented open APIs with no published rate limit get slightly more parallelism.
@@ -90,6 +120,32 @@ class Fetcher:
         self.cache = Path(cache_dir) if cache_dir else None
         if self.cache:
             self.cache.mkdir(parents=True, exist_ok=True)
+
+    async def _guard_address(self, request: httpx.Request) -> None:
+        """Safe URL handling: never fetch private, loopback, link-local, reserved or multicast addresses
+        (a registry website or a redirect could point at internal services). Checked on every request,
+        including each redirect hop."""
+        host = request.url.host
+        if host in self._addr_ok:
+            ok = self._addr_ok[host]
+        else:
+            ok = True
+            try:
+                infos = await asyncio.get_running_loop().getaddrinfo(host, None)
+                addrs = {i[4][0] for i in infos}
+            except OSError:
+                addrs = set()  # unresolvable here (or behind a proxy): the request itself will fail or go via the proxy
+            try:
+                literal = {str(ipaddress.ip_address(host))}
+            except ValueError:
+                literal = set()
+            for a in addrs | literal:
+                ip = ipaddress.ip_address(a.split("%")[0])
+                if not ip.is_global or ip.is_multicast:
+                    ok = False
+            self._addr_ok[host] = ok
+        if not ok:
+            raise UnsafeAddress(f"refusing non-public address for {host}")
 
     async def close(self) -> None:
         await self.client.aclose()
@@ -161,7 +217,7 @@ class Fetcher:
         if cacheable:
             hit = self._cache_get(url, headers)
             if hit:
-                return hit
+                return redact_personal(hit)
         host = urlsplit(url).netloc.lower()
         sem = self.hosts.setdefault(host, asyncio.Semaphore(self.host_limits.get(host, self.per_host_limit)))
         async with self.total, sem:
@@ -178,6 +234,7 @@ class Fetcher:
             snap = Snapshot(url=url, final_url=str(r.url), status=r.status_code, retrieved_at=retrieved,
                             content=content, content_type=r.headers.get("content-type", ""),
                             redirects=[str(h.url) for h in r.history])
+        snap = redact_personal(snap)
         if cacheable and (snap.status < 500):
             self._cache_put(snap, headers)
         return snap
