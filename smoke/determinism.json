@@ -1,0 +1,10 @@
+{
+  "runs": [
+    "smoke1",
+    "smoke2"
+  ],
+  "companies": 100,
+  "differing_companies": [],
+  "available_facts_run1": 5746,
+  "available_facts_run2": 5746
+}

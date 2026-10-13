@@ -1,0 +1,86 @@
+{
+  "run_id": "profiles-1000",
+  "agent": "Kilde",
+  "version": "1.0.0",
+  "commit": "557f0a548a2cd6e9cfeaeded49817b9aff5e138b",
+  "started_at": "2026-10-13T14:54:30Z",
+  "completed_at": "2026-10-13T15:06:39Z",
+  "expected_count": 1000,
+  "emitted_envelopes": 1000,
+  "runtime_ms": 751121,
+  "publication_gate": {
+    "withheld": 4,
+    "notes": [
+      "927432080 site_contact_email: email domain gmail.com differs from the verified site lofotendroneservice.com and the registry email",
+      "931015168 site_contact_email: email domain gmail.com differs from the verified site gimlepub.no and the registry email",
+      "932686791 site_contact_email: email domain hotmail.com differs from the verified site hansenmultiservice.no and the registry email",
+      "931567306 social_profile: social handle 'company/radical-technologies-as' names another legal entity (sas)"
+    ]
+  },
+  "website_retries": 12,
+  "company_runtime_ms": {
+    "p50": 12446,
+    "p95": 32259,
+    "max": 100110
+  },
+  "operations": {
+    "requests": 8916,
+    "max_requests": 20000,
+    "dns_lookups": 12320,
+    "cache_hits": 0,
+    "by_host": {
+      "data.brreg.no": 4499,
+      "sgregister.dibk.no": 188,
+      "api.finanstilsynet.no": 63,
+      "api.gleif.org": 38,
+      "pam-stilling-feed.nav.no": 23,
+      "styrerommet.no": 17,
+      "vestbo.no": 17,
+      "jeloyelektro.no": 15,
+      "rengo.no": 15,
+      "memotwins.no": 15,
+      "al-injaaz.no": 15,
+      "focussecurity.no": 15,
+      "takkforbilen.no": 15,
+      "fjolgsauna.no": 15,
+      "jolleutstyr.no": 15,
+      "puerfons.no": 14,
+      "radiosandefjord.no": 13,
+      "www.usbl.no": 13,
+      "stereoprod.no": 13,
+      "www.aktivsprinkler.no": 13,
+      "www.kafeoslo.no": 13,
+      "bstromnaes.no": 13,
+      "www.straumr.no": 13,
+      "trykkmann.no": 13,
+      "www.sorskaar.no": 13
+    },
+    "third_party_cost_usd": 0.0,
+    "llm_calls": 0,
+    "time_budget_seconds": 1800
+  },
+  "validation": {
+    "passed": true,
+    "checks": {
+      "one_envelope_per_input": true,
+      "unique": true,
+      "all_terminal": true,
+      "all_sections_present": true,
+      "available_claims_have_evidence": true
+    }
+  },
+  "inputs": {
+    "organisations": "/private/tmp/claude-502/-Users-naresh-Desktop-Personal-hackathons/0abf2698-3d46-4e38-922f-4e551a399902/scratchpad/final/companies-1000.jsonl",
+    "bulk": null,
+    "previous_envelopes": 0
+  },
+  "coverage": {
+    "identity": 1.0,
+    "financials": 1.0,
+    "leadership": 0.997,
+    "locations": 0.752,
+    "web_presence": 0.12,
+    "hiring": 0.019,
+    "activity": 1.0
+  }
+}

@@ -49,9 +49,9 @@ On the 100 companies of Builderr's public sample (https://builderr.ai/signalpost
 | Hiring signals | not in sample | 10 companies |
 | LinkedIn data | collected by Builderr as "experimental" | not collected (unofficial access is not permitted) |
 
-## Final runs (commit 85a432b, fresh clone)
+## Final runs (commit 557f0a5, fresh clone)
 
-- Smoke test, 100 new companies: valid, 931 requests, about 3 minutes; run twice with identical facts (see `smoke/`).
-- 1,000 new companies: valid, 8,913 requests, 12.6 minutes, 0.8 GB peak memory (see `profiles-1000/`).
+- Smoke test, 100 new companies: valid, 948 requests, about 3 minutes; run twice with identical facts (5,746 each). See `smoke/`.
+- 1,000 new companies: valid, 8,916 requests, 12.5 minutes. See `profiles-1000/`.
 
 All scores above are from our own scorer and auditors, not Builderr's. Builderr's reference pool includes every entrant's verified finds and its own crawlers, so recall against it will be lower.
