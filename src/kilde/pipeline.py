@@ -132,7 +132,12 @@ async def run_batch(orgs: list[str], opt: Options) -> tuple[list[dict], dict]:
     async def phase_a(ctx: CompanyContext) -> None:
         async with sem:
             await _step(ctx, "registry", lambda: brreg.fetch_entity(f, ctx, batch_records.get(ctx.org)), "legal_name", "identity")
-            if not ctx.registry or ctx.facts.get("deleted"):
+            if not ctx.registry:
+                return
+            if ctx.facts.get("deleted"):
+                # A deleted entity's filed accounts stay public in Regnskapsregisteret; nothing else is fetched.
+                if want("financials"):
+                    await _step(ctx, "financials", lambda: accounts.fetch_accounts(f, ctx), "revenue", "financials")
                 return
             if want("roles"):
                 await _step(ctx, "roles", lambda: brreg.fetch_roles(f, ctx), "ceo", "leadership")
@@ -221,7 +226,8 @@ async def run_batch(orgs: list[str], opt: Options) -> tuple[list[dict], dict]:
         for ctx in ctxs.values():
             if time.monotonic() > stop - 3 or budget.remaining_requests() < 10:
                 break
-            if ctx.registry and ctx.registry.get("sisteInnsendteAarsregnskap") and not ctx.facts.get("deleted"):
+            if ctx.registry and (ctx.registry.get("sisteInnsendteAarsregnskap") or ctx.claims_for("revenue")
+                                 or ctx.claims_for("annual_result")):
                 await _step(ctx, "report_copies", lambda: accounts.fetch_report_copies(f, ctx), "annual_report_pdf", "financials")
 
     await guarded(asyncio.gather(copies_queue(), *(phase_b(c) for c in ctxs.values())), deadline_b)
@@ -265,7 +271,10 @@ async def run_batch(orgs: list[str], opt: Options) -> tuple[list[dict], dict]:
             ctx.mark("job_ad", "hiring", "not_available" if nav and "jobs" in batch_info else "failed",
                      note="No job ads checked" if not nav else None)
         if not any(c.section == "web_presence" for c in ctx.claims) and ctx.registry:
-            ctx.mark("official_website", "web_presence", "failed", note="website step did not run (budget or time)")
+            if ctx.facts.get("deleted"):
+                ctx.mark("official_website", "web_presence", "not_applicable", note="the company is deleted from the register")
+            else:
+                ctx.mark("official_website", "web_presence", "failed", note="website step did not run (budget or time)")
         changes = diff(ctx, opt.previous.get(org))
         envelopes.append(assemble(ctx, opt, started_at, completed_at, commit, changes, snap_dir))
     report = {
