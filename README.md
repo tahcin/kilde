@@ -37,6 +37,12 @@ uv run --frozen kilde run --organisations smoke/smoke-companies.jsonl --bulk brr
 
 Options: `--previous <envelopes.jsonl>` (refresh against an earlier run), `--state-dir <folder>` (off by default; keeps the latest envelopes so the next run diffs against them), `--max-requests`, `--time-budget` (seconds, default 1800), `--concurrency`, `--bulk` (Builderr's frozen registry snapshot, used for identity if the live API fails). The starter kit's `--workers`, `--resume`, `--checkpoint-every` and `--modules` are accepted and ignored. The same budgets can be set with `KILDE_MAX_REQUESTS` and `KILDE_TIME_BUDGET`. An invalid or duplicate input never stops the batch: each distinct input gets exactly one envelope.
 
+## Results
+
+- [`smoke/`](smoke/): the 100-company smoke test Builderr asks for, produced from a clean clone with the command above, with the HTML report, every saved snapshot, and a second run showing identical facts.
+- [`profiles-1000/`](profiles-1000/): 1,000 company profiles from a clean clone (12.5 minutes, about 9 requests per company, $0).
+- [EVAL.md](EVAL.md): eleven audited evaluation rounds on fresh random samples, the determinism drill, and a benchmark against Builderr's own 100-company sample.
+
 ## Envelope
 
 ```json
