@@ -594,7 +594,7 @@ def test_footer_icon_links_for_youtube_and_instagram():
     ctx = ctx_for(hjemmeside="fjellbekk.no")
     run(f, ctx)
     urls = sorted(str(c.value) for c in ctx.claims if c.field == "social_profile")
-    assert urls == ["tiktok.com/@lyd_og_lys", "youtube.com/channel/ucabc123xyz"]
+    assert urls == ["youtube.com/channel/ucabc123xyz"]  # an unnamed handle is not published, a numeric id is
 
 
 def test_news_items_with_literal_dates_only():
@@ -1420,3 +1420,24 @@ def test_ordinary_company_text_about_customers_is_not_a_recruiter_mark():
     ctx = ctx_for(hjemmeside="fjellbekk.no")
     run(_site({"https://fjellbekk.no/ledige-stillinger/": (200, jobs)}, body=body), ctx)
     assert ctx.claims_for("hiring_signal")
+
+
+# ---------------------------------------------------------------- round 7 audit fixes
+def test_site_builder_template_socials_are_not_the_company():
+    """Interiør og Malefag shape: a Surftown template footer links Surftown's own profiles."""
+    body = (f'<footer>Fjellbekk Trevare AS · Org.nr {OURS} <a href="mailto:post@fjellbekk.no">post@fjellbekk.no</a>'
+            '<a href="https://www.facebook.com/surftown.com">f</a><a href="https://www.linkedin.com/company/surftown">l</a>'
+            '<a href="https://x.com/surftown">x</a><a href="https://www.youtube.com/user/surftowncom">y</a>'
+            '<a href="https://www.instagram.com/fjellbekktrevare/">i</a></footer>')
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(_site(body=body), ctx)
+    assert [str(c.value) for c in ctx.claims if c.field == "social_profile"] == ["instagram.com/fjellbekktrevare"]
+
+
+def test_phone_span_contains_the_phone_not_a_neighbouring_email():
+    body = (f'<footer>Fjellbekk Trevare AS · Org.nr {OURS}<br>E-post: kari@fjellbekk.no Telefon: 977 50 160</footer>')
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    claims = run(_site(body=body), ctx)
+    c = claims["site_contact_phone"]
+    span = next(e.claim_span for e in ctx.evidence if e.id in c.evidence_ids)
+    assert "977 50 160" in span and "@" not in span

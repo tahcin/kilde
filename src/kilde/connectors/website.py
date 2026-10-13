@@ -752,11 +752,12 @@ class _Spend:
             return await self.f.get(url, robots=robots, headers=headers, reserve=RESERVE)
         finally:
             # count what this call cost; fall back to an estimate when the budget is shared and moving
+            # The per-company cap counts every fetch the same way, cached or live, so a cached rerun follows the
+            # same path as a live run (Builderr compares two runs).
             spent = self.f.budget.used - before
             est = (1 if new_robots else 0) + 1
-            n = max(0, min(spent, est))
-            self.used += n
-            self.ctx.requests += n
+            self.used += est
+            self.ctx.requests += max(0, min(spent, est))
 
 
 class _OutOfRequests(Exception):
@@ -1229,6 +1230,19 @@ def candidates(ctx: CompanyContext) -> list[tuple[str, str, str | None]]:
 
 
 # ---------------------------------------------------------------- extraction
+def _span_with_value(page: Page, span: str, phone: str) -> str:
+    """A phone claim's span must contain the number itself: keep the span only if its digits hold the number."""
+    digits = re.sub(r"\D", "", phone)[-8:]
+    if digits and digits in re.sub(r"\D", "", span or ""):
+        return span
+    raw = page.snap.content.decode("utf-8", "replace")
+    for m in PHONE_TEXT.finditer(raw):
+        if re.sub(r"\D", "", m.group(0))[-8:] == digits:
+            return m.group(0).strip()
+    m = re.search(r'tel:[^"\'<> ]*', raw)
+    return m.group(0) if m and digits in re.sub(r"\D", "", m.group(0)) else span
+
+
 def _ev(ctx: CompanyContext, page: Page, span: str | None, method: str = EXTRACT,
         effective: str | None = None, note: str | None = None) -> Evidence:
     if span:
@@ -1699,6 +1713,11 @@ async def confirm_sisters(sp: "_Spend", ctx: CompanyContext, labels: list[str], 
 
 # ---------------------------------------------------------------- derived items
 GROUP_WORDS = ("group", "gruppen", "gruppe", "konsern", "holding", "holdings", "invest")
+BUILDER_BRANDS = ("surftown", "wix", "squarespace", "webnode", "onecom", "one.com", "domeneshop", "jimdo",
+                  "123hjemmeside", "makeweb", "websidebygger", "godaddy", "hostinger", "weebly", "wordpress",
+                  "elementor", "shopify", "webflow", "hubspot", "mailchimp", "webhuset", "proisp", "ministry",
+                  "netthandelsbyraa", "nettsidemaker", "smartweb", "idium", "nettfabrikken", "frontkom", "vev.design",
+                  "24so", "sitebuilder", "strikingly", "ukit", "zyro", "ionos", "hostpoint", "loopia", "simply")
 
 
 def _names_other_company(handle: str, words: list[str], other_names: list[str]) -> bool:
@@ -1781,12 +1800,17 @@ def collect_socials(pages: list[Page], words: list[str], domains: set[str], scop
             segs = [x for x in path.split("/") if x]
             raw_handle = segs[1] if len(segs) >= 2 and segs[0] in ("people", "p") else (segs[-1] if segs else "")
             handle = re.sub(r"[^a-z0-9]", "", _translit(unquote(raw_handle)))
-            if _names_other_company(handle, words, other_names):
-                dropped.append(u)
+            if _names_other_company(handle, words, other_names) or any(
+                    re.sub(r"[^a-z0-9]", "", b) in handle for b in BUILDER_BRANDS if not any(
+                        re.sub(r"[^a-z0-9]", "", b) in k for k in keys)):
+                dropped.append(u)  # another company's, or the site builder's or web agency's own profile
                 continue
-            id_only = handle.isdigit() or bool(re.match(r"/channel/UC", path))
+            id_only = handle.isdigit() or bool(re.match(r"/channel/UC", path)) or "profile.php" in u or \
+                (len(segs) >= 2 and segs[0] in ("people", "p"))
             named = any(k in handle for k in keys)
-            if named or (chrome and len(urls) == 1 and (id_only or iconic)):
+            # like the publication gate: the handle carries our name or domain, or it is a numeric profile id
+            # linked from the site's header, footer or structured data as the only one for its platform
+            if named or (id_only and chrome and len(urls) == 1):
                 kept.append((not named, u, (plat, u, p, s)))
             else:
                 dropped.append(u)
@@ -1885,7 +1909,7 @@ def extract_contacts(pages: list[Page], domain: str, registry_phones: set[str] =
             if labels and re.fullmatch(r"(?i)faks|fax|telefaks", labels[-1]):
                 continue  # the nearest label says this is a fax number
             if n and PHONE_LABEL.search(before) and n not in phones and n not in skipped:
-                put(phones, n, p, _window(p.text, m.start(), m.end(), 20), _element_for(p, m.group(0).strip()))
+                put(phones, n, p, m.group(0).strip(), _element_for(p, m.group(0).strip()))
     # only addresses on the company's own domain; generic mailboxes first
     def ours_mail(a: str) -> bool:
         local, dom = a.rsplit("@", 1)
@@ -2395,7 +2419,7 @@ def emit_site(ctx: CompanyContext, v: Verdict, scope: Scope | None = None) -> li
     for a, p, s in emails:
         ctx.add_claim("site_contact_email", SECTION, a, _ev(ctx, p, s), match=site_match)
     for n, p, s in phones:
-        ctx.add_claim("site_contact_phone", SECTION, n, _ev(ctx, p, s), match=site_match)
+        ctx.add_claim("site_contact_phone", SECTION, n, _ev(ctx, p, _span_with_value(p, s, n)), match=site_match)
     if scope.shared and skipped:
         if not emails:
             ctx.mark("site_contact_email", SECTION, "ambiguous", note=unsure)
