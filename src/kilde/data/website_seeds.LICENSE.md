@@ -14,3 +14,11 @@ Rebuild with `scripts/build_website_seeds.py`.
 
 Stored per org: registered domains (or a company-specific subdomain on a site builder) and the
 source tags. No names, phone numbers, emails or other personal data are stored.
+
+## Common Crawl attribution (sources `commoncrawl`, `commoncrawl_domain`)
+
+cc_seeds.json.gz and cc_pairs.jsonl.gz are derived from Common Crawl crawl CC-MAIN-2026-39 (https://commoncrawl.org/), columnar URL index plus WARC records fetched by byte range from https://data.commoncrawl.org/.
+
+Use is governed by the Common Crawl Terms of Use (https://commoncrawl.org/terms-of-use, last updated 2024-03-07), which grant "a limited, non-assignable, non-transferable, non-sublicensable, non-exclusive, limited license to access and use the Service". The terms do not require attribution, but we credit Common Crawl and the crawl id as the source. Crawled pages "may be subject to separate terms of use or terms of service from the owners of such Crawled Content"; we store only org number, domain, page URL and capture time, not page content. Sole proprietorships (ENK) are excluded so no personal data is harvested (ToU clause 2(l)).
+
+The entries are candidates only: each domain must be re-fetched and verified live (respecting the site's robots.txt) before use.

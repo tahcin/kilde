@@ -42,6 +42,8 @@ SECTION = "web_presence"
 
 MAX_REQUESTS = 10         # HTTP requests per company, robots.txt and Brreg name checks included
 VERIFIED_CAP = 16         # raised cap once a site is proven and exclusive (news and careers)
+STEP_BUDGET = 6           # requests each for dated news and hiring on a verified exclusive site
+RELATED_STRICT = True     # every non-exclusive site becomes related_website (False: own domains named-only stay)
 RESERVE = 3               # stop when the run budget has fewer than this left
 MAX_INTERNAL = 3          # extra pages per candidate when the homepage is not conclusive
 DNS_TIMEOUT = 3.0
@@ -956,7 +958,19 @@ async def check_candidate(f: Fetcher, sp: _Spend, ctx: CompanyContext, v: Verdic
         return
     v.pages = [home]
     v.cross = not same_site(final, bare(v.domain))
+    e = ctx.registry or {}
     v.path_scoped = _is_section(home.url)
+    if v.path_scoped and not v.cross:
+        lab = re.sub(r"[^a-z0-9]", "", bare(home.host).split(".")[0])
+        if any(t in lab for t in _core_tokens(e.get("navn") or "") if len(t) >= 4 and t not in GENERIC_WORDS):
+            # the company's own domain (sicra.no/no/kunnskap/innsikter): judge it from its front page
+            root = canonical_url(home)
+            if sp.can(1):
+                front, _st = await _fetch_page(sp, root)
+                if front and same_site(front.host, home.host) and not is_parked(front):
+                    v.pages = [front, home]
+                    home = front
+                    v.path_scoped = False
     judge(v, ctx.org, e, registry_host)
     if v.cross and v.status == "name_only" and _is_front_or_about(home.url) and sp.can(1):
         # the redirect target names us on its front page: its linked privacy page may print our org number
@@ -1279,7 +1293,11 @@ def candidates(ctx: CompanyContext) -> list[tuple[str, str, str | None]]:
         d = em.rsplit("@", 1)[1]
         if d not in FREE_MAIL and not any(d.endswith("." + x) for x in FREE_MAIL):
             add(d, "email")
-    for seed in sorted(website_seeds().get(ctx.org) or [], key=lambda x: x.get("domain") or ""):
+    def seed_rank(x: dict) -> tuple:
+        src = set(x.get("sources") or [])
+        rank = 0 if "commoncrawl" in src else (2 if src == {"commoncrawl_domain"} else 1)
+        return rank, x.get("domain") or ""
+    for seed in sorted(website_seeds().get(ctx.org) or [], key=seed_rank):
         if seed.get("domain"):
             add(seed["domain"], "seed:" + "+".join(sorted(seed.get("sources") or [])))
     # a legal name that is itself a domain (INNREGISTRERING.NO AS)
@@ -2507,14 +2525,36 @@ def emit_site(ctx: CompanyContext, v: Verdict, scope: Scope | None = None) -> li
         ctx.facts["website_shared"] = {"others": sorted(scope.others), "sisters": scope.sisters}
     if v.cross or v.path_scoped:
         url = home.url.split("#")[0]  # the exact page that proves us, not the host's front page
-    if not scope.exclusive:
+    own_domain_only = (not RELATED_STRICT and not (v.cross or v.path_scoped or scope.others or scope.codeclared
+                                                   or scope.sisters))
+    if not scope.exclusive and own_domain_only:
+        # the company's own domain, non-exclusive only because other companies are named on it: the site is the
+        # company's, but nothing is derived from it
         m["detail"] = f"{m['detail']}; not exclusive: {scope.reasons()}"
         m["url"] = url
-        # the front page of a site is written as its registered domain; a section page keeps its full URL
-        value = site_domain(home.host) if urlsplit(url).path in ("", "/") and not (v.cross or v.path_scoped) else url
-        ctx.add_claim("official_website", SECTION, value, proof_evs, confidence=conf, match=m,
+        ctx.add_claim("official_website", SECTION, site_domain(home.host), proof_evs, confidence=conf, match=m,
                       note="Only the website itself is published; facts from this site are withheld because "
                            + scope.reasons())
+        for fld, sec in DERIVED_FIELDS:
+            ctx.mark(fld, sec, "ambiguous", note="site not exclusive to this company (" + scope.reasons() + ")")
+        return v.pages
+    if not scope.exclusive:
+        # A shared, chain, portal or parent site is labelled as related, not collapsed into the company:
+        # the proven page goes in related_website, and official_website is ambiguous with the reason.
+        others = sorted({k for k in scope.others if re.fullmatch(r"\d{9}", k)}
+                        | {x for x in scope.sisters.values() if re.fullmatch(r"\d{9}", str(x))}
+                        | {x for x in scope.dominant.values() if re.fullmatch(r"\d{9}", str(x))}
+                        | set(scope.codeclared))
+        m["detail"] = f"{m['detail']}; not exclusive: {scope.reasons()}"
+        m["url"] = url
+        ctx.add_claim("related_website", SECTION,
+                      {"url": url, "domain": site_domain(home.host),
+                       "relationship": "page on a shared or group site", "other_organisation_numbers": others},
+                      proof_evs, confidence=conf, match=m,
+                      note="The page is proven to name this company, but the site also serves others: " + scope.reasons())
+        ctx.mark("official_website", SECTION, "ambiguous",
+                 note="only a page on a shared, chain, portal or group site was found (" + scope.reasons()
+                      + "); see related_website")
         why = "site not exclusive to this company (" + scope.reasons() + "); derived facts withheld"
         for fld, sec in DERIVED_FIELDS:
             ctx.mark(fld, sec, "ambiguous", note=why)
@@ -2812,10 +2852,10 @@ def verbatim(raw: str, text: str | None) -> str | None:
         return text
     import html as _html
     cands = {_html.escape(text, quote=False), _html.escape(text, quote=True),
-             text.replace("–", "&#8211;").replace("—", "&#8212;").replace("’", "&#8217;").replace("&", "&amp;"),
+             text.replace("–", "&#8211;").replace("\u2014", "&#8212;").replace("’", "&#8217;").replace("&", "&amp;"),
              _html.escape(text, quote=False).replace("–", "&#8211;").replace("’", "&#8217;").replace("“", "&#8220;")
              .replace("”", "&#8221;").replace("…", "&#8230;")}
-    named = text.replace("&", "&amp;").replace("–", "&ndash;").replace("—", "&mdash;").replace("’", "&rsquo;") \
+    named = text.replace("&", "&amp;").replace("–", "&ndash;").replace("\u2014", "&mdash;").replace("’", "&rsquo;") \
         .replace("‘", "&lsquo;").replace("“", "&ldquo;").replace("”", "&rdquo;").replace("«", "&laquo;") \
         .replace("»", "&raquo;").replace("…", "&hellip;").replace("\u00a0", "&nbsp;")
     cands |= {named, text.replace("/", "\\/"), json.dumps(text)[1:-1], json.dumps(text, ensure_ascii=False)[1:-1]}
@@ -2823,7 +2863,7 @@ def verbatim(raw: str, text: str | None) -> str | None:
         if c and c in raw:
             return c
     # a whitespace-tolerant match of the plain text, allowing HTML entities for punctuation
-    alts = {"–": "(?:–|&ndash;|&#8211;|&#x2013;)", "—": "(?:—|&mdash;|&#8212;|&#x2014;)",
+    alts = {"–": "(?:–|&ndash;|&#8211;|&#x2013;)", "\u2014": "(?:\u2014|&mdash;|&#8212;|&#x2014;)",
             "’": "(?:’|&rsquo;|&#8217;|&#x2019;)", "&": "(?:&|&amp;|&#038;|&#38;)", "…": "(?:…|&hellip;|&#8230;)",
             "“": "(?:“|&ldquo;|&#8220;)", "”": "(?:”|&rdquo;|&#8221;)", "«": "(?:«|&laquo;)", "»": "(?:»|&raquo;)"}
     parts = ["".join(alts.get(ch, re.escape(ch)) for ch in w) for w in text.split()]
@@ -2935,6 +2975,7 @@ async def collect_dated_news(sp: "_Spend", ctx: CompanyContext, pages: list[Page
         feeds = [origin + "/feed/"] + [x for x in feeds if x.rstrip("/") != origin + "/feed"]
     if not feeds and _is_wix(home):
         feeds.append(origin + "/blog-feed.xml")
+    ctx.facts["website_dated_news_checked"] = feeds[:2] or ["no feed linked"]
     for feed in ([] if found else feeds[:2]):
         if not sp.can(1):
             break
@@ -3111,6 +3152,7 @@ async def collect_hiring(sp: "_Spend", ctx: CompanyContext, pages: list[Page], d
     if probed:
         candidates = [origin + p for p in JOB_PROBES]
     page = None
+    ctx.facts["website_hiring_signal_checked"] = [urlsplit(u).path or "/" for u in candidates[:7]]
     for url in candidates:
         if not sp.can(1):
             break
@@ -3211,12 +3253,25 @@ async def fetch_website(f: Fetcher, ctx: CompanyContext) -> None:
             emit_site(ctx, proven, scope)
             dom = bare(proven.pages[0].host)
             if scope.exclusive:
-                sp.cap = VERIFIED_CAP
-                for step in (collect_dated_news, collect_hiring):
+                for step, fld, sec in ((collect_dated_news, "dated_news", "activity"),
+                                       (collect_hiring, "hiring_signal", "hiring")):
+                    sp.cap = sp.used + STEP_BUDGET  # its own budget, separate from discovery
+                    before = len(ctx.claims)
+                    starved = False
                     try:
                         await step(sp, ctx, proven.pages, dom, scope)
                     except _OutOfRequests:
-                        pass
+                        starved = True
+                    except BudgetExhausted:
+                        starved = True
+                    if not any(c.field == fld for c in ctx.claims[before:]):
+                        checked = ", ".join(ctx.facts.get(f"website_{fld}_checked", [])[:6]) or "the verified site"
+                        if starved or f.budget.remaining_requests() <= RESERVE:
+                            ctx.mark(fld, sec, "failed", note=f"budget_exhausted: checked {checked}")
+                        else:
+                            ctx.mark(fld, sec, "not_available",
+                                     note=f"none found on the verified site {dom}; checked {checked}")
+                sp.cap = sp.used + 2
                 try:
                     await sitemap_activity(f, sp, ctx, proven.pages[0], dom, scope)
                 except _OutOfRequests:

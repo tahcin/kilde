@@ -393,10 +393,11 @@ def test_group_site_with_sister_withholds_all_derived_items():
     f.pages["https://lyngstadgruppen.no/"] = f.pages.pop("https://lyngstadgruppen.no/lyngstad-ror/")
     ctx = ctx_for(navn="LYNGSTAD RØR AS", hjemmeside="lyngstadgruppen.no")
     claims = run(f, ctx)
-    site = claims["official_website"]
+    site = claims["related_website"]
+    assert claims["official_website"].availability == "ambiguous"
     assert site.availability == "available" and SISTER in site.match["detail"]
     avail = {c.field for c in ctx.claims if c.availability == "available"}
-    assert avail == {"official_website"}
+    assert avail == {"related_website"}
     for fld in ("social_profile", "site_contact_phone", "site_contact_email", "site_page_updated", "hiring_signal"):
         assert claims[fld].availability == "ambiguous"
     assert ctx.facts["website_exclusive"] is False
@@ -415,10 +416,11 @@ def test_redirect_to_section_of_another_host_is_judged_on_that_page_alone():
                     redirects={"https://lyngstadror.no/": "https://www.rorkjeden.no/finn-rorlegger/testby/lyngstad-ror-as"})
     ctx = ctx_for(navn="LYNGSTAD RØR AS", hjemmeside="lyngstadror.no", mobil="41000020")
     claims = run(f, ctx)
-    site = claims["official_website"]
-    assert site.value == "https://www.rorkjeden.no/finn-rorlegger/testby/lyngstad-ror-as"
+    site = claims["related_website"]
+    assert claims["official_website"].availability == "ambiguous"
+    assert site.value["url"] == "https://www.rorkjeden.no/finn-rorlegger/testby/lyngstad-ror-as"
     assert site.match["method"] == "phone_and_name"
-    assert {c.field for c in ctx.claims if c.availability == "available"} == {"official_website"}
+    assert {c.field for c in ctx.claims if c.availability == "available"} == {"related_website"}
     assert "https://www.rorkjeden.no/om-oss/kontakt" not in f.calls
     assert ctx.facts["website_exclusive"] is False
 
@@ -441,7 +443,7 @@ def test_redirect_to_deep_page_on_another_host_stays_not_exclusive():
                     redirects={"https://fjellbekk.no/": "https://kjede.no/medlemmer/testby/fjellbekk"})
     ctx = ctx_for(hjemmeside="fjellbekk.no")
     claims = run(f, ctx)
-    assert claims["official_website"].value == "https://kjede.no/medlemmer/testby/fjellbekk"
+    assert claims["related_website"].value["url"] == "https://kjede.no/medlemmer/testby/fjellbekk"
     assert claims["site_contact_phone"].availability == "ambiguous"
     assert ctx.facts["website_exclusive"] is False
 
@@ -487,7 +489,7 @@ def test_portal_with_other_schools_withholds_sitemap_pages():
                     redirects={"https://fjellbekk.no/": "https://skolene.no/"})
     ctx = ctx_for(hjemmeside="fjellbekk.no", telefon="41000001")
     claims = run(f, ctx)
-    assert claims["official_website"].availability == "available"
+    assert claims["related_website"].availability == "available"
     assert claims["site_page_updated"].availability == "ambiguous"
     assert not any("sitemap" in u for u in f.calls)
 
@@ -503,8 +505,8 @@ def test_dealer_site_presented_by_another_company_and_privacy_phone():
                      W.BRREG_SEARCH + "?navn=kvist%20automobil&size=20": (200, brreg, "application/json")})
     ctx = ctx_for(hjemmeside="fjellbekk.no")
     claims = run(f, ctx)
-    assert claims["official_website"].availability == "available"
-    assert "kvist automobil" in claims["official_website"].match["detail"]
+    assert claims["related_website"].availability == "available"
+    assert "kvist automobil" in claims["related_website"].match["detail"]
     assert claims["site_contact_phone"].availability == "ambiguous"
 
 
@@ -829,8 +831,8 @@ def test_registry_declared_site_with_namesake_keeps_website_but_derives_nothing(
     pages.update(_brreg("enheter", "fjellbekk%20trevare", [{"organisasjonsnummer": SISTER, "navn": "FJELLBEKK TREVARE AS"}]))
     ctx = ctx_for(navn="FJELLBEKK TREVARE ASA", hjemmeside="fjellbekk.no")
     claims = run(FakeFetcher(pages), ctx)
-    assert claims["official_website"].availability == "available"
-    assert SISTER in claims["official_website"].match["detail"]
+    assert claims["related_website"].availability == "available"
+    assert SISTER in claims["related_website"].match["detail"]
     assert claims["site_contact_email"].availability == "ambiguous"
 
 
@@ -841,7 +843,7 @@ def test_redirect_to_portal_without_our_name_in_domain_stays_not_exclusive():
     f = FakeFetcher({"https://skolene.no/": (200, front)}, redirects={"https://fjellbekk.no/": "https://skolene.no/"})
     ctx = ctx_for(hjemmeside="fjellbekk.no", mobil="41000001")
     claims = run(f, ctx)
-    assert claims["official_website"].value == "https://skolene.no/"
+    assert claims["related_website"].value["url"] == "https://skolene.no/"
     assert claims["site_contact_email"].availability == "ambiguous"
 
 
@@ -908,9 +910,9 @@ def test_contact_address_on_another_organisations_domain_makes_site_not_exclusiv
     f = FakeFetcher({"https://fjellbekk.no/": (200, html(body))})
     ctx = ctx_for(hjemmeside="fjellbekk.no")
     claims = run(f, ctx)
-    assert claims["official_website"].availability == "available"
+    assert claims["related_website"].availability == "available"
     assert claims["site_contact_email"].availability == "ambiguous"
-    assert "kvistmaison.no" in claims["official_website"].match["detail"]
+    assert "kvistmaison.no" in claims["related_website"].match["detail"]
 
 
 # ---------------------------------------------------------------- reported families (Builderr's shapes)
@@ -1061,9 +1063,9 @@ def test_website_declared_by_several_registered_companies_is_a_group_site():
         {"organisasjonsnummer": "999000053", "navn": "SFJELLBEKK AS", "hjemmeside": "www.sfjellbekk.no"}]))
     ctx = ctx_for(hjemmeside="www.fjellbekk.no")
     claims = run(FakeFetcher(pages), ctx)
-    assert claims["official_website"].availability == "available"
-    assert claims["official_website"].value == "fjellbekk.no"
-    assert SISTER in claims["official_website"].match["detail"]
+    assert claims["related_website"].availability == "available"
+    assert claims["related_website"].value["domain"] == "fjellbekk.no"
+    assert SISTER in claims["related_website"].match["detail"]
     assert claims["site_contact_email"].availability == "ambiguous"
 
 
@@ -1537,3 +1539,28 @@ def test_redirect_target_privacy_page_proves_the_brand_domain():
     claims = run(f, ctx_for(hjemmeside="fjellbekk.no"))
     assert claims["official_website"].value == "fjellbekk.com"
     assert claims["official_website"].match["method"] == "orgnr_on_page"
+
+
+# ---------------------------------------------------------------- submission build: labelled relations, own budgets
+def test_explicit_hiring_and_news_states_on_a_verified_site():
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    claims = run(_site(), ctx)
+    assert claims["official_website"].value == "fjellbekk.no"
+    assert claims["hiring_signal"].availability == "not_available" and "checked" in claims["hiring_signal"].note
+    assert claims["dated_news"].availability == "not_available"
+
+
+def test_official_website_values_are_always_bare_domains():
+    """Sicra shape: the registry lists a deep page on the company's own domain."""
+    f = FakeFetcher({"https://fjellbekk.no/no/om-oss/historie": (200, html("<h1>Historie</h1><p>Fjellbekk Trevare</p>")),
+                     "https://fjellbekk.no/": (200, html(f"<footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>"))})
+    claims = run(f, ctx_for(hjemmeside="https://fjellbekk.no/no/om-oss/historie"))
+    assert claims["official_website"].value == "fjellbekk.no"
+
+
+def test_seed_order_commoncrawl_before_other_seeds_and_domain_matches(monkeypatch):
+    monkeypatch.setattr(W, "_SEEDS", {OURS: [{"domain": "a-weak.no", "sources": ["commoncrawl_domain"]},
+                                             {"domain": "b-osm.no", "sources": ["osm_phone"]},
+                                             {"domain": "c-cc.no", "sources": ["commoncrawl"]}]})
+    order = [d for d, s, _ in W.candidates(ctx_for(navn="FJELLBEKK TREVARE AS")) if s.startswith("seed:")]
+    assert order == ["c-cc.no", "b-osm.no", "a-weak.no"]
