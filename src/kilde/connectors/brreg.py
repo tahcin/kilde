@@ -169,7 +169,8 @@ def emit_entity_claims(ctx: CompanyContext, snap: Snapshot, e: dict) -> None:
                      if host in site), None)
     if platform:
         url = site if site.startswith("http") else "https://" + site
-        ctx.add_claim("social_profile", "web_presence", {"platform": platform, "url": url}, ev("hjemmeside"),
+        from .website import canonical_social
+        ctx.add_claim("social_profile", "web_presence", canonical_social(platform, url), ev("hjemmeside"),
                       match={"method": "registry_declared", "detail": "The company registered this profile as its website in Enhetsregisteret"})
     for key, field in (("hjemmeside", "registry_website"), ("epostadresse", "registry_email"),
                        ("telefon", "registry_phone"), ("mobil", "registry_mobile")):

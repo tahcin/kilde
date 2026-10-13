@@ -348,8 +348,12 @@ def emit_entity(ctx: CompanyContext, batch: WikidataBatch, qsnap: Snapshot, snap
 
     # Official website (P856)
     site, n = pick_website(statements(claims, "P856"))
-    if site:
-        ctx.add_claim("official_website", "web_presence", _value(site), ev("P856", site, ("P407", "P1001")),
+    from .website import canonical_social, site_domain
+    from urllib.parse import urlsplit as _us
+    known = {str(c.value) for c in ctx.claims_for("official_website")}
+    site_dom = site_domain(_us(str(_value(site))).netloc) if site and isinstance(_value(site), str) else None
+    if site and site_dom and site_dom not in known:
+        ctx.add_claim("official_website", "web_presence", site_dom, ev("P856", site, ("P407", "P1001")),
                       confidence=0.9, match=m,
                       note=f"Wikidata lists {n} website statements; this one is preferred or valid for Norway" if n > 1 else None)
         ctx.facts["wikidata_website"] = _value(site)
@@ -427,9 +431,10 @@ def emit_entity(ctx: CompanyContext, batch: WikidataBatch, qsnap: Snapshot, snap
         for s in statements(claims, p, current=True)[:5]:
             handle = _value(s)
             if isinstance(handle, str) and handle.strip():
-                ctx.add_claim("social_profile", "web_presence",
-                              {"platform": platform, "handle": handle, "url": pattern.format(quote(handle.strip(), safe="-_./"))},
-                              ev(p, s), match=m)
+                social = canonical_social(platform, pattern.format(quote(handle.strip(), safe="-_./")))
+                if str(social) in {str(c.value) for c in ctx.claims_for("social_profile")}:
+                    continue
+                ctx.add_claim("social_profile", "web_presence", social, ev(p, s), match=m)
 
     # Logo (P154): link to the Commons file page
     for s in statements(claims, "P154")[:1]:

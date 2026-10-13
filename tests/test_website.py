@@ -63,6 +63,7 @@ def offline_dns(monkeypatch):
     W._SISTER_CACHE.clear()
     W._NAME_SEARCH.clear()
     W._ROW_CACHE.clear()
+    W._HJEM_CACHE.clear()
 
 
 def ctx_for(**rec) -> CompanyContext:
@@ -101,7 +102,8 @@ def test_orgnr_in_footer_with_spaces_and_extraction():
     ctx = ctx_for(hjemmeside="www.fjellbekk.no")
     claims = run(f, ctx)
     site = claims["official_website"]
-    assert site.availability == "available" and site.value == "https://fjellbekk.no/"
+    assert site.availability == "available" and site.value == "fjellbekk.no"
+    assert claims["official_website_url"].value == "https://fjellbekk.no/"
     assert site.match["method"] == "orgnr_on_page"
     span = next(e for e in ctx.evidence if e.id == site.evidence_ids[0]).claim_span
     assert "999 000 002" in span and "Org.nr" in span
@@ -109,11 +111,9 @@ def test_orgnr_in_footer_with_spaces_and_extraction():
     assert claims["site_language"].value == "nb"
     assert claims["site_contact_email"].value == "post@fjellbekk.no"
     assert claims["site_contact_phone"].value == "+4741000001"
-    assert claims["careers_page"].value == "https://fjellbekk.no/karriere"
-    socials = {c.value["platform"]: c.value["url"] for c in ctx.claims if c.field == "social_profile"}
-    assert socials == {"facebook": "https://www.facebook.com/fjellbekktrevare",
-                       "linkedin": "https://www.linkedin.com/company/fjellbekk-trevare",
-                       "instagram": "https://www.instagram.com/fjellbekktrevare"}
+    socials = sorted(str(c.value) for c in ctx.claims if c.field == "social_profile")
+    assert socials == ["facebook.com/fjellbekktrevare", "instagram.com/fjellbekktrevare",
+                       "linkedin.com/company/fjellbekk-trevare"]
     assert claims["structured_data_organization"].value["name"] == "Fjellbekk Trevare"
     for c in ctx.claims:
         assert all(e.source_class == "company_owned" for e in ctx.evidence if e.id in c.evidence_ids)
@@ -280,8 +280,8 @@ def test_partner_social_links_dropped_and_footer_id_kept():
     f = FakeFetcher({"https://fjellbekk.no/": (200, html(body))})
     ctx = ctx_for(hjemmeside="fjellbekk.no")
     run(f, ctx)
-    urls = sorted(c.value["url"] for c in ctx.claims if c.field == "social_profile")
-    assert urls == ["https://www.facebook.com/profile.php?id=10001234", "https://www.instagram.com/fjellbekk.no"]
+    urls = sorted(str(c.value) for c in ctx.claims if c.field == "social_profile")
+    assert urls == ["instagram.com/fjellbekk.no"]  # profile.php links are never published
     assert "https://www.instagram.com/kafe_solsikke" in ctx.facts["website_social_dropped"]
 
 
@@ -324,7 +324,7 @@ def test_parked_bare_host_falls_through_to_www():
     f = FakeFetcher({"https://fjellbekk.no/": (200, html("<p>Domenet er til salgs</p>", title="fjellbekk.no")),
                      "https://www.fjellbekk.no/": (200, html(f"<footer>Org.nr {OURS}</footer>"))})
     claims = run(f, ctx_for(hjemmeside="fjellbekk.no"))
-    assert claims["official_website"].value == "https://www.fjellbekk.no/"
+    assert claims["official_website"].value == "fjellbekk.no"
 
 
 def test_real_robots_disallow_stops_the_candidate():
@@ -396,7 +396,7 @@ def test_group_site_with_sister_withholds_all_derived_items():
     assert site.availability == "available" and SISTER in site.match["detail"]
     avail = {c.field for c in ctx.claims if c.availability == "available"}
     assert avail == {"official_website"}
-    for fld in ("social_profile", "site_contact_phone", "site_contact_email", "site_page_updated", "careers_page"):
+    for fld in ("social_profile", "site_contact_phone", "site_contact_email", "site_page_updated", "hiring_signal"):
         assert claims[fld].availability == "ambiguous"
     assert ctx.facts["website_exclusive"] is False
     assert not any("sitemap" in u for u in f.calls)
@@ -429,7 +429,7 @@ def test_redirect_to_brand_about_page_with_our_orgnr_is_exclusive():
                     redirects={"https://fjellbekk.no/": "https://turbarna.no/om-oss/"})
     ctx = ctx_for(hjemmeside="fjellbekk.no")
     claims = run(f, ctx)
-    assert claims["official_website"].value == "https://turbarna.no/"
+    assert claims["official_website"].value == "turbarna.no"
     assert ctx.facts["website_exclusive"] is True
     assert claims["site_contact_email"].value == "post@turbarna.no"
 
@@ -565,13 +565,14 @@ def test_careers_page_needs_a_jobs_url():
     f = FakeFetcher({"https://fjellbekk.no/": (200, html(body))})
     ctx = ctx_for(hjemmeside="fjellbekk.no")
     run(f, ctx)
-    assert not ctx.claims_for("careers_page")
+    assert not ctx.claims_for("hiring_signal")
     body2 = (f'<footer>Org.nr {OURS}</footer><a href="/om-oss/ledige-stillinger/">Bli med</a>'
              '<a href="https://annet.teamtailor.com/jobs">Jobs</a>')
-    f2 = FakeFetcher({"https://fjellbekk.no/": (200, html(body2))})
+    f2 = FakeFetcher({"https://fjellbekk.no/": (200, html(body2)),
+                      "https://fjellbekk.no/om-oss/ledige-stillinger/": (200, html("<h1>Ledige stillinger</h1>"))})
     ctx2 = ctx_for(hjemmeside="fjellbekk.no")
     claims = run(f2, ctx2)
-    assert claims["careers_page"].value == "https://fjellbekk.no/om-oss/ledige-stillinger/"
+    assert claims["hiring_signal"].value == "https://fjellbekk.no/om-oss/ledige-stillinger/"
 
 
 def test_contact_page_fetched_after_proof():
@@ -591,8 +592,8 @@ def test_footer_icon_links_for_youtube_and_instagram():
     f = FakeFetcher({"https://fjellbekk.no/": (200, html(body))})
     ctx = ctx_for(hjemmeside="fjellbekk.no")
     run(f, ctx)
-    urls = sorted(c.value["url"] for c in ctx.claims if c.field == "social_profile")
-    assert urls == ["https://www.tiktok.com/@lyd_og_lys", "https://www.youtube.com/channel/UCabc123xyz"]
+    urls = sorted(str(c.value) for c in ctx.claims if c.field == "social_profile")
+    assert urls == ["tiktok.com/@lyd_og_lys", "youtube.com/channel/ucabc123xyz"]
 
 
 def test_news_items_with_literal_dates_only():
@@ -606,10 +607,9 @@ def test_news_items_with_literal_dates_only():
     f = FakeFetcher({"https://fjellbekk.no/": (200, home), "https://fjellbekk.no/nyheter": (200, listing)})
     ctx = ctx_for(hjemmeside="fjellbekk.no")
     run(f, ctx)
-    news = [c for c in ctx.claims if c.field == "site_news"]
-    assert [(c.value["date"], c.value["title"]) for c in news] == [
-        ("2026-08-20", "Nye kjøkkenmodeller er her"), ("2026-01-08", "Vi åpner ny hall i Testby")]
-    assert all(c.section == "activity" and c.as_of == c.value["date"] for c in news)
+    news = [c for c in ctx.claims if c.field == "dated_news"]
+    assert [c.value for c in news] == ["Nye kjøkkenmodeller er her (2026-08-20)", "Vi åpner ny hall i Testby (2026-01-08)"]
+    assert all(c.section == "activity" for c in news)
 
 
 def test_jobs_url_tokens():
@@ -640,9 +640,8 @@ def test_news_ignores_event_dates_in_sentences_and_category_links():
     f = FakeFetcher({"https://fjellbekk.no/": (200, home), "https://fjellbekk.no/nyheter": (200, listing)})
     ctx = ctx_for(hjemmeside="fjellbekk.no")
     run(f, ctx)
-    news = [(c.value["date"], c.value["url"]) for c in ctx.claims if c.field == "site_news"]
-    assert news == [("2026-05-11", "https://fjellbekk.no/nyheter/ny-modell"),
-                    ("2025-08-11", "https://fjellbekk.no/nyheter/andre")]
+    news = [c.value for c in ctx.claims if c.field == "dated_news"]
+    assert news == ["Ny modell av kjøkkenbenken (2026-05-11)", "Andre nyhet om verkstedet (2025-08-11)"]
 
 
 # ---------------------------------------------------------------- benchmark naming work
@@ -701,7 +700,7 @@ def test_place_word_is_not_a_social_handle_key():
         run(f, ctx)
     finally:
         W.REGIONS.discard("testby")
-    assert [c.value["url"] for c in ctx.claims if c.field == "social_profile"] == ["https://www.facebook.com/fjellbekktrevare"]
+    assert [str(c.value) for c in ctx.claims if c.field == "social_profile"] == ["facebook.com/fjellbekktrevare"]
 
 
 def test_dns_timeout_is_retried_not_treated_as_missing(monkeypatch):
@@ -817,9 +816,9 @@ def test_redirect_to_brand_site_proven_by_address_and_phone_keeps_derived_facts(
     f = FakeFetcher({"https://fjellbekk.com/": (200, front)}, redirects={"https://fjellbekk.no/": "https://fjellbekk.com/"})
     ctx = ctx_for(hjemmeside="fjellbekk.no", mobil="41000001")
     claims = run(f, ctx)
-    assert claims["official_website"].value == "https://fjellbekk.com/"
+    assert claims["official_website"].value == "fjellbekk.com"
     assert claims["site_contact_email"].value == "post@fjellbekk.com"
-    assert claims["social_profile"].value["url"] == "https://www.instagram.com/fjellbekktrevare"
+    assert claims["social_profile"].value == "instagram.com/fjellbekktrevare"
     assert ctx.facts["website_exclusive"] is False  # the gate's brand flag still needs org-number proof
 
 
@@ -911,3 +910,201 @@ def test_contact_address_on_another_organisations_domain_makes_site_not_exclusiv
     assert claims["official_website"].availability == "available"
     assert claims["site_contact_email"].availability == "ambiguous"
     assert "kvistmaison.no" in claims["official_website"].match["detail"]
+
+
+# ---------------------------------------------------------------- reported families (Builderr's shapes)
+def _site(extra_pages=None, body=None, head=""):
+    pages = {"https://fjellbekk.no/": (200, html(body or f"<footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>", head=head))}
+    pages.update(extra_pages or {})
+    return FakeFetcher(pages)
+
+
+def test_dated_news_from_rss_keeps_source_datetime_with_offset():
+    head = '<link rel="alternate" type="application/rss+xml" href="/feed/">'
+    rss = ('<?xml version="1.0"?><rss><channel><title>Fjellbekk</title>'
+           '<item><title>Bedre kjøkken etter ombygging</title><link>https://fjellbekk.no/2025/09/bedre-kjokken/</link>'
+           '<pubDate>Mon, 22 Sep 2025 20:00:00 +0200</pubDate></item>'
+           '<item><title>Hello world!</title><link>https://fjellbekk.no/hello-world/</link>'
+           '<pubDate>Tue, 01 Jan 2019 10:00:00 +0000</pubDate></item>'
+           '<item><title>Fra fremtiden</title><link>https://fjellbekk.no/2099/x/</link>'
+           '<pubDate>Tue, 01 Jan 2099 10:00:00 +0000</pubDate></item></channel></rss>')
+    f = _site({"https://fjellbekk.no/feed/": (200, rss, "application/rss+xml")}, head=head)
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(f, ctx)
+    news = [c for c in ctx.claims if c.field == "dated_news"]
+    assert [c.value for c in news] == ["Bedre kjøkken etter ombygging (2025-09-22T20:00:00+02:00)"]
+    spans = {e.claim_span for e in ctx.evidence if e.id in news[0].evidence_ids}
+    assert "<pubDate>Mon, 22 Sep 2025 20:00:00 +0200</pubDate>" in spans
+
+
+def test_dated_news_from_atom_and_wordpress_feed_probe():
+    atom = ('<feed xmlns="http://www.w3.org/2005/Atom"><entry><title>Ny hall</title>'
+            '<link rel="alternate" href="https://fjellbekk.no/ny-hall/"/><published>2026-03-01T09:30:00+01:00</published>'
+            '</entry></feed>')
+    f = _site({"https://fjellbekk.no/feed/": (200, atom, "application/atom+xml")},
+              body=f'<link href="/wp-content/x.css"><footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>')
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(f, ctx)
+    assert [c.value for c in ctx.claims if c.field == "dated_news"] == ["Ny hall (2026-03-01T09:30:00+01:00)"]
+
+
+def test_dated_news_listing_page_two_and_article_datetime():
+    body = f'<a href="/nyheter/">Nyheter</a><footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>'
+    page1 = html('<article><h3><a href="/nyheter/a">Første sak om verkstedet</a></h3><time>2026-02-01</time></article>'
+                 '<a rel="next" href="/nyheter/page/2/">Neste</a>')
+    page2 = html('<article><h3><a href="/nyheter/b">Andre sak om verkstedet</a></h3><span>2025-11-03</span></article>')
+    art = html('<h1>Første sak</h1>', head='<meta property="article:published_time" content="2026-02-01T08:15:00+01:00">')
+    f = _site({"https://fjellbekk.no/nyheter/": (200, page1), "https://fjellbekk.no/nyheter/page/2/": (200, page2),
+               "https://fjellbekk.no/nyheter/a": (200, art)}, body=body)
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(f, ctx)
+    assert [c.value for c in ctx.claims if c.field == "dated_news"] == [
+        "Første sak om verkstedet (2026-02-01T08:15:00+01:00)", "Andre sak om verkstedet (2025-11-03)"]
+
+
+def test_dated_news_never_before_the_company_existed():
+    head = '<link rel="alternate" type="application/rss+xml" href="/feed/">'
+    rss = ('<rss><channel><item><title>Gammel nyhet fra forgjengeren</title><link>https://fjellbekk.no/gammel/</link>'
+           '<pubDate>Fri, 15 Apr 2016 10:00:00 +0200</pubDate></item></channel></rss>')
+    f = _site({"https://fjellbekk.no/feed/": (200, rss, "application/rss+xml")}, head=head)
+    ctx = ctx_for(hjemmeside="fjellbekk.no", stiftelsesdato="2023-10-26")
+    run(f, ctx)
+    assert not [c for c in ctx.claims if c.field == "dated_news" and c.availability == "available"]
+
+
+def test_hiring_signal_by_probe_with_postings():
+    jobs = html('<h1>Karriere</h1>'
+                '<script type="application/ld+json">{"@type":"JobPosting","title":"Snekker","url":"/karriere/snekker",'
+                '"hiringOrganization":{"@type":"Organization","name":"Fjellbekk Trevare AS"}}</script>'
+                '<script type="application/ld+json">{"@type":"JobPosting","title":"Kokk","url":"/karriere/kokk",'
+                '"hiringOrganization":{"name":"Kvist Hotell AS"}}</script>'
+                '<main><a href="https://fjellbekk.webcruiter.no/main/recruit/public/4567">Lærling tømrer 2026</a></main>')
+    f = _site({"https://fjellbekk.no/karriere/": (200, jobs)})
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(f, ctx)
+    vals = [c.value for c in ctx.claims if c.field == "hiring_signal"]
+    assert vals == ["https://fjellbekk.no/karriere/", "https://fjellbekk.no/karriere/snekker",
+                    "https://fjellbekk.webcruiter.no/main/recruit/public/4567"]
+
+
+def test_hiring_signal_rejects_a_careers_link_that_lands_on_home():
+    body = f'<a href="/jobb/">Jobb hos oss</a><footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>'
+    f = FakeFetcher({"https://fjellbekk.no/": (200, html(body))}, redirects={"https://fjellbekk.no/jobb/": "https://fjellbekk.no/"})
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(f, ctx)
+    assert not ctx.claims_for("hiring_signal")
+
+
+def test_socials_from_plugin_iframe_and_data_href_capped_at_two():
+    body = (f'<footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>'
+            '<iframe src="https://www.facebook.com/plugins/page.php?href=https%3A%2F%2Fwww.facebook.com%2FFjellbekkTrevare&tabs"></iframe>'
+            '<div class="fb-page" data-href="https://www.facebook.com/fjellbekk.trevare.testby"></div>'
+            '<a href="https://www.facebook.com/fjellbekktrevareas">fb</a>'
+            '<a href="https://www.facebook.com/profile.php?id=123">fb</a>')
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(_site(body=body), ctx)
+    vals = sorted(str(c.value) for c in ctx.claims if c.field == "social_profile")
+    assert len(vals) == 2 and all(v.startswith("facebook.com/") and v == v.lower() for v in vals)
+    assert all(c.value.get("platform") == "facebook" for c in ctx.claims if c.field == "social_profile")
+
+
+def test_same_inputs_give_identical_claims():
+    head = '<link rel="alternate" type="application/rss+xml" href="/feed/">'
+    rss = ('<rss><channel><item><title>A</title><link>https://fjellbekk.no/a/</link><pubDate>Mon, 22 Sep 2025 20:00:00 +0200'
+           '</pubDate></item><item><title>B</title><link>https://fjellbekk.no/b/</link><pubDate>Mon, 22 Sep 2025 20:00:00 +0200'
+           '</pubDate></item></channel></rss>')
+    body = (f'<footer>Fjellbekk Trevare AS · Org.nr {OURS} <a href="https://www.instagram.com/fjellbekk/">i</a>'
+            '<a href="https://www.linkedin.com/company/fjellbekk/">l</a></footer>')
+    outs = []
+    for _ in range(2):
+        W._NAME_SEARCH.clear()
+        ctx = ctx_for(hjemmeside="fjellbekk.no")
+        run(_site({"https://fjellbekk.no/feed/": (200, rss, "application/rss+xml")}, body=body, head=head), ctx)
+        outs.append([(c.field, str(c.value), c.availability) for c in ctx.claims])
+    assert outs[0] == outs[1]
+
+
+def test_hiring_ignores_vacant_premises_and_probed_pages_without_jobs_heading():
+    assert not W.jobs_url("/vare-eiendommer/ledige-lokaler")
+    body = f'<footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>'
+    f = _site({"https://fjellbekk.no/karriere/": (200, html("<h1>Velkommen til Fjellbekk</h1>", title="Forside"))}, body=body)
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(f, ctx)
+    assert not ctx.claims_for("hiring_signal")
+
+
+def test_spam_feed_and_sample_posts_are_dropped():
+    head = '<link rel="alternate" type="application/rss+xml" href="/feed/">'
+    rss = ('<rss><channel><item><title>Cheap replica Birkin bags here</title><link>https://fjellbekk.no/a/</link>'
+           '<pubDate>Mon, 22 Sep 2025 20:00:00 +0200</pubDate></item><item><title>Ny hall</title>'
+           '<link>https://fjellbekk.no/b/</link><pubDate>Mon, 22 Sep 2025 20:00:00 +0200</pubDate></item></channel></rss>')
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(_site({"https://fjellbekk.no/feed/": (200, rss, "application/rss+xml")}, head=head), ctx)
+    assert not ctx.claims_for("dated_news")
+    assert W.SAMPLE_POST.match("Hei, verden!")
+
+
+# ---------------------------------------------------------------- round 4 audit (Elpro, Biri)
+def _hjem(host, rows):
+    return {f"https://data.brreg.no/enhetsregisteret/api/enheter?hjemmeside={host}&size=20":
+            (200, json.dumps({"_embedded": {"enheter": rows}}), "application/json")}
+
+
+def test_website_declared_by_several_registered_companies_is_a_group_site():
+    """Elpro shape: four companies declare www.elpro.no; we are one of them and the site shows no org number."""
+    body = '<h1>Fjellbekk Trevare</h1><footer><a href="mailto:post@fjellbekk.no">x</a></footer>'
+    pages = {"https://fjellbekk.no/": (200, html(body))}
+    pages.update(_hjem("fjellbekk.no", [
+        {"organisasjonsnummer": OURS, "navn": "FJELLBEKK TREVARE AS", "hjemmeside": "www.fjellbekk.no"},
+        {"organisasjonsnummer": SISTER, "navn": "FJELLBEKK GROUP AS", "hjemmeside": "www.fjellbekk.no"},
+        {"organisasjonsnummer": "999000053", "navn": "SFJELLBEKK AS", "hjemmeside": "www.sfjellbekk.no"}]))
+    ctx = ctx_for(hjemmeside="www.fjellbekk.no")
+    claims = run(FakeFetcher(pages), ctx)
+    assert claims["official_website"].availability == "available"
+    assert claims["official_website"].value == "fjellbekk.no"
+    assert SISTER in claims["official_website"].match["detail"]
+    assert claims["site_contact_email"].availability == "ambiguous"
+
+
+def test_privacy_page_controller_naming_another_company_makes_site_not_exclusive():
+    body = (f'<footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer><a href="/personvern/">Personvern</a>'
+            '<a href="mailto:post@fjellbekk.no">x</a>')
+    priv = html(f"<p>Kvist Gruppen AS (org.nr {OTHER}) er behandlingsansvarlig for dette nettstedet.</p>")
+    f = _site({"https://fjellbekk.no/personvern/": (200, priv)}, body=body)
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    claims = run(f, ctx)
+    assert "https://fjellbekk.no/personvern/" in f.calls
+    assert claims["site_contact_email"].availability == "ambiguous"
+
+
+def test_privacy_page_processors_do_not_count():
+    body = (f'<footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer><a href="/personvern/">Personvern</a>'
+            '<a href="mailto:post@fjellbekk.no">x</a>')
+    priv = html("<p>Vi bruker Google Ireland Limited og Kvist Analyse AS som databehandlere.</p>")
+    claims = run(_site({"https://fjellbekk.no/personvern/": (200, priv)}, body=body), ctx_for(hjemmeside="fjellbekk.no"))
+    assert claims["site_contact_email"].value == "post@fjellbekk.no"
+
+
+def test_social_handle_naming_the_group_is_dropped():
+    body = (f'<footer>Fjellbekk Trevare AS · Org.nr {OURS}'
+            '<a href="https://www.instagram.com/fjellbekkgroupas/">ig</a>'
+            '<a href="https://www.facebook.com/fjellbekktrevare/">fb</a></footer>')
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(_site(body=body), ctx)
+    assert [str(c.value) for c in ctx.claims if c.field == "social_profile"] == ["facebook.com/fjellbekktrevare"]
+
+
+def test_biri_shape_free_mail_address_phone_and_people_profile():
+    """Biri Fotklinikk shape: gmail box named after the company, phone beside the registered address,
+    Facebook 'people' profile URL."""
+    body = (f'<p>Org.nr: {OURS}</p>'
+            '<footer><p class="footertext">Klinikken Lyngveien 12B, 9999 Testby Kontakt Telefon: '
+            '<a href="tel:+4741000001">+47 410 00 001</a> E-post: '
+            '<a href="mailto:fjellbekktrevare@gmail.com">fjellbekktrevare@gmail.com</a></p>'
+            '<ul class="socialmedia"><li><a href="https://www.facebook.com/people/Fjellbekk-Trevare-As/100083089938875/">'
+            '</a></li></ul></footer>')
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    claims = run(_site(body=body), ctx)
+    assert claims["site_contact_email"].value == "fjellbekktrevare@gmail.com"
+    assert claims["site_contact_phone"].value == "+4741000001"
+    assert claims["social_profile"].value == "facebook.com/people/fjellbekk-trevare-as/100083089938875"

@@ -14,7 +14,7 @@ from urllib.parse import urlsplit
 from .model import CompanyContext
 
 DERIVED = {"site_contact_email", "site_contact_phone", "social_profile", "site_page_updated", "site_news",
-           "careers_page", "website_description", "website_title", "structured_data_organization"}
+           "careers_page", "hiring_signal", "dated_news", "website_description", "website_title", "structured_data_organization"}
 GENERIC = {
     "as", "asa", "sa", "da", "ans", "ba", "nuf", "ks", "enk", "ltd", "og", "and", "the", "of", "i",
     "holding", "holdings", "invest", "investering", "eiendom", "eiendommer", "eigedom", "bygg", "byggservice",

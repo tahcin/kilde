@@ -11,7 +11,7 @@ from .model import Claim, CompanyContext
 
 SECTION_WORDS = {
     "financials": "Filed financial figures", "leadership": "Registered leadership", "locations": "Registered workplaces",
-    "web_presence": "Verified company website", "hiring": "Active job ads", "activity": "Dated public activity",
+    "web_presence": "Verified company website", "hiring": "Job ads or a careers page", "activity": "Dated public activity",
 }
 LEGAL_FORMS = {
     "AS": "private limited company", "ASA": "public limited company", "ENK": "sole proprietorship",
@@ -199,6 +199,15 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
         newest = max(jobs, key=lambda c: c.value.get("published") or "")
         say(f"NAV lists {len(jobs)} active job ad{'s' if len(jobs) != 1 else ''} with its organisation number; the newest, "
             f"\"{newest.value.get('title')}\", was published {(newest.value.get('published') or '')[:10]}.", *jobs[:5])
+
+    careers = ctx.claims_for("hiring_signal")
+    if careers and not jobs:
+        say(f"Its verified website has a careers page ({careers[0].value}).", careers[0])
+    news = sorted(ctx.claims_for("dated_news"), key=lambda c: c.as_of or "", reverse=True)
+    if news:
+        title = str(news[0].value).rsplit(" (", 1)[0]
+        say(f"Its website lists {len(news)} dated news post{'s' if len(news) != 1 else ''}; the newest, \"{clip(title, 120)}\", "
+            f"is from {news[0].as_of}.", *news[:3])
 
     reg_changes = ctx.claims_for("registry_change")
     if reg_changes:

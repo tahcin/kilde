@@ -41,6 +41,7 @@ LICENCE = "company-owned page; robots.txt allowed"
 SECTION = "web_presence"
 
 MAX_REQUESTS = 10         # HTTP requests per company, robots.txt and Brreg name checks included
+VERIFIED_CAP = 16         # raised cap once a site is proven and exclusive (news and careers)
 RESERVE = 3               # stop when the run budget has fewer than this left
 MAX_INTERNAL = 3          # extra pages per candidate when the homepage is not conclusive
 DNS_TIMEOUT = 3.0
@@ -716,10 +717,11 @@ class _Spend:
 
     def __init__(self, f: Fetcher, ctx: CompanyContext):
         self.f, self.ctx, self.used = f, ctx, 0
+        self.cap = MAX_REQUESTS
         self.dns: dict[str, bool] = {}
 
     def can(self, n: int = 1) -> bool:
-        return self.used + n <= MAX_REQUESTS and self.f.budget.remaining_requests() > RESERVE + n
+        return self.used + n <= self.cap and self.f.budget.remaining_requests() > RESERVE + n
 
     async def get(self, url: str, *, robots: bool = True, headers: dict | None = None) -> Snapshot:
         p = urlsplit(url)
@@ -780,17 +782,23 @@ async def resolves(f: Fetcher, host: str) -> bool:
 
 
 async def reachable(host: str, port: int = 443) -> bool:
-    """A TCP connect before any HTTP, so dead hosts do not burn HTTP retries and timeouts."""
-    try:
-        _, w = await asyncio.wait_for(asyncio.open_connection(host, port), CONNECT_PROBE)
-        w.close()
+    """A TCP connect before any HTTP, so dead hosts do not burn HTTP retries and timeouts. A timeout is
+    retried once with a longer wait, so a slow moment does not change the result between two runs; a refused
+    connection is final."""
+    for wait in (CONNECT_PROBE, CONNECT_PROBE * 2):
         try:
-            await w.wait_closed()
+            _, w = await asyncio.wait_for(asyncio.open_connection(host, port, happy_eyeballs_delay=0.25), wait)
+            w.close()
+            try:
+                await w.wait_closed()
+            except Exception:
+                pass
+            return True
+        except (asyncio.TimeoutError, TimeoutError):
+            continue
         except Exception:
-            pass
-        return True
-    except Exception:
-        return False
+            return False
+    return False
 
 
 async def _fetch_page(sp: _Spend, url: str) -> tuple[Page | None, str]:
@@ -1208,7 +1216,9 @@ def clean_social(url: str) -> tuple[str, str] | None:
             return None
         segs = segs[:2]
     elif plat == "facebook":
-        if segs[0] == "profile.php":
+        if segs[0] == "people" and len(segs) >= 3 and segs[2].isdigit():
+            segs = segs[:3]
+        elif segs[0] == "profile.php":
             ids = [v for k, v in parse_qsl(p.query) if k == "id" and v.isdigit()]
             if not ids:
                 return None
@@ -1231,7 +1241,7 @@ def clean_social(url: str) -> tuple[str, str] | None:
         segs = segs[:1]
     else:  # instagram, x
         segs = segs[:1]
-    handle = segs[-1].lstrip("@").lower()
+    handle = (segs[1] if segs[0] == "people" and len(segs) == 3 else segs[-1]).lstrip("@").lower()
     if segs[0] != "profile.php" and handle in PLACEHOLDER_HANDLES:
         return None
     canon_host = {"linkedin": "www.linkedin.com", "facebook": "www.facebook.com", "instagram": "www.instagram.com",
@@ -1282,6 +1292,8 @@ class Scope:
     cross: bool = False
     path_scoped: bool = False
     other_mail: set[str] = field(default_factory=set)  # contact addresses on another organisation's domain
+    codeclared: dict[str, str] = field(default_factory=dict)  # other org -> name, declaring the same website
+    addr: tuple | None = None  # (street regex, postcode) of our registered address
 
     def __post_init__(self) -> None:
         ours_t = [_translit(w) for w in self.words]
@@ -1300,7 +1312,8 @@ class Scope:
     def exclusive(self) -> bool:
         """The site is ours alone: no other org number of any country, no confirmed sister or dominating
         company, no redirect to another domain, and not one section of a shared host."""
-        return not (self.others or self.sisters or self.dominant or self.cross or self.path_scoped or self.other_mail)
+        return not (self.others or self.sisters or self.dominant or self.cross or self.path_scoped or self.other_mail
+                    or self.codeclared)
 
     def reasons(self) -> str:
         out = []
@@ -1314,6 +1327,9 @@ class Scope:
             out.append("it names sister companies " + ", ".join(f"{k} ({v})" for k, v in self.sisters.items()))
         if self.dominant:
             out.append("it is presented by other companies " + ", ".join(f"{k} ({v})" for k, v in self.dominant.items()))
+        if self.codeclared:
+            out.append("other registered companies declare the same website: "
+                       + ", ".join(f"{n} ({o})" for o, n in sorted(self.codeclared.items())))
         if self.other_mail:
             out.append("it lists contact addresses on other organisations' domains " + ", ".join(sorted(self.other_mail)[:3]))
         return "; ".join(out)
@@ -1325,6 +1341,8 @@ class Scope:
     def names_ours(self, text: str) -> bool:
         if self._num_hit(text, [self.org]):
             return True
+        if self.addr and self.addr[0].search(text) and re.search(r"(?<!\d)" + self.addr[1] + r"(?!\d)", text):
+            return True  # our registered street address and postcode
         if self.ours_rx and any(not _in_hostname(text, m.start(), m.end()) for m in self.ours_rx.finditer(text)):
             return True
         return bool(self.sisters) and _word_hit(self.ours_unique, _translit(text))
@@ -1478,7 +1496,8 @@ def other_company_names(pages: list[Page], words: list[str]) -> list[tuple[str, 
     best: dict[tuple[str, str], int] = {}
     for p in pages:
         optext = _operator_text(p)
-        op_page = bool(OPERATOR_PAGE.search(unquote(urlsplit(p.url).path)))
+        path_txt = unquote(urlsplit(p.url).path)
+        op_page = bool(OPERATOR_PAGE.search(path_txt)) and not re.search(r"(?i)personvern|privacy", path_txt)
         offsite = " | ".join(a.get_text(" ", strip=True) for a in p.soup.find_all("a", href=True)
                              if urlsplit(urljoin(p.url, a["href"])).scheme in ("http", "https")
                              and not same_site(host_of(urljoin(p.url, a["href"])), p.host))
@@ -1591,8 +1610,27 @@ async def confirm_sisters(sp: "_Spend", ctx: CompanyContext, labels: list[str], 
 
 
 # ---------------------------------------------------------------- derived items
-def collect_socials(pages: list[Page], words: list[str], domains: set[str], scope: Scope | None = None
-                    ) -> tuple[list[tuple[str, str, Page, str]], list[str]]:
+GROUP_WORDS = ("group", "gruppen", "gruppe", "konsern", "holding", "holdings", "invest")
+
+
+def _names_other_company(handle: str, words: list[str], other_names: list[str]) -> bool:
+    """A handle that names a different company: our distinctive word plus a group or holding word our own name
+    lacks ('elprogroupas' for Elpro Electro AS), or the name of another registered company we know of."""
+    ours = re.sub(r"[^a-z0-9]", "", _translit("".join(words)))
+    lead = next((_translit(w) for w in words if len(w) >= 3 and w not in GENERIC_WORDS), "")
+    if lead and lead in handle:
+        for gw in GROUP_WORDS:
+            if gw in handle and gw not in ours:
+                return True
+    for name in other_names:
+        sq = re.sub(r"[^a-z0-9]", "", _translit(name))
+        if len(sq) >= 5 and sq in handle and sq not in ours and not ours.startswith(sq):
+            return True
+    return False
+
+
+def collect_socials(pages: list[Page], words: list[str], domains: set[str], scope: Scope | None = None,
+                    other_names: list[str] | None = None) -> tuple[list[tuple[str, str, Page, str]], list[str]]:
     """Social profile links from the verified site's pages and JSON-LD sameAs.
 
     A link is kept when its handle carries the company's name or domain; or, for handle-less ids
@@ -1600,13 +1638,24 @@ def collect_socials(pages: list[Page], words: list[str], domains: set[str], scop
     it is the only link for that platform and sits in the site's header, footer or structured data.
     Links to partners, clients, venues and sister companies are dropped."""
     scope = scope or Scope("", words)
+    other_names = list(other_names or []) + list(scope.sisters) + list(scope.dominant) + list(scope.codeclared.values())
     found: dict[str, dict[str, list]] = {}
     dropped: list[str] = []
     ours_sq = _squash(" ".join(words))
     for p in pages:
-        for a in p.soup.find_all("a", href=True):
-            c = clean_social(a["href"])
-            if not c:
+        links = list(p.soup.find_all("a", href=True))
+        # Facebook page-plugin iframes and data-href embeds count as links from the site
+        for el in p.soup.find_all(attrs={"data-href": True}):
+            links.append(el)
+        for fr in p.soup.find_all("iframe", src=True):
+            q = dict(parse_qsl(urlsplit(fr["src"]).query))
+            if "facebook.com/plugins" in fr["src"] and q.get("href"):
+                fr["data-href"] = q["href"]
+                links.append(fr)
+        for a in links:
+            raw = a.get("href") if a.name == "a" else a.get("data-href")
+            c = clean_social(raw or "")
+            if not c or "profile.php" in c[1]:
                 continue
             if not scope.accept(a, p):
                 dropped.append(c[1])
@@ -1614,9 +1663,9 @@ def collect_socials(pages: list[Page], words: list[str], domains: set[str], scop
             label = a.get_text(" ", strip=True)
             iconic = not label or bool(re.fullmatch(r"(?i)(f[øo]lg oss( på)?|follow us( on)?)?\s*(facebook|instagram|"
                                                     r"linkedin|youtube|twitter|x|tiktok)?", label))
-            rec = found.setdefault(c[0], {}).setdefault(c[1], [p, a["href"][:300], False, False])
-            rec[2] = rec[2] or _in_chrome(a)
-            rec[3] = rec[3] or iconic
+            rec = found.setdefault(c[0], {}).setdefault(c[1], [p, (raw or "")[:300], False, False])
+            rec[2] = rec[2] or _in_chrome(a) or a.name != "a"
+            rec[3] = rec[3] or iconic or a.name != "a"
         for d in p.jsonld:
             same = d.get("sameAs")
             if scope.shared:
@@ -1626,7 +1675,7 @@ def collect_socials(pages: list[Page], words: list[str], domains: set[str], scop
             for s in (same if isinstance(same, list) else [same] if same else []):
                 if isinstance(s, str):
                     c = clean_social(s)
-                    if c and not (scope.sisters and scope.names_sister(s)):
+                    if c and "profile.php" not in c[1] and not (scope.sisters and scope.names_sister(s)):
                         found.setdefault(c[0], {}).setdefault(c[1], [p, json.dumps({"sameAs": s})[:300], True, True])
     keys = {re.sub(r"[^a-z0-9]", "", _translit(w)) for w in words if len(w) >= 4 and _translit(w) not in REGIONS
             and w not in GENERIC_WORDS and w not in FORM_NAME_WORDS}
@@ -1634,17 +1683,26 @@ def collect_socials(pages: list[Page], words: list[str], domains: set[str], scop
     keys |= {re.sub(r"[^a-z0-9]", "", d.split(".")[0]) for d in domains if d}
     keys = {k for k in keys if len(k) >= 4}
     out = []
-    for plat, urls in found.items():
-        for u, (p, s, chrome, iconic) in urls.items():
+    for plat in sorted(found):
+        urls = found[plat]
+        kept = []
+        for u in sorted(urls):
+            p, s, chrome, iconic = urls[u]
             path = urlsplit(u).path
-            handle = re.sub(r"[^a-z0-9]", "", _translit(unquote(path.rsplit("/", 1)[-1])))
-            id_only = "profile.php" in path or handle.isdigit() or bool(re.match(r"/channel/UC", path))
+            segs = [x for x in path.split("/") if x]
+            raw_handle = segs[1] if len(segs) == 3 and segs[0] == "people" else (segs[-1] if segs else "")
+            handle = re.sub(r"[^a-z0-9]", "", _translit(unquote(raw_handle)))
+            if _names_other_company(handle, words, other_names):
+                dropped.append(u)
+                continue
+            id_only = handle.isdigit() or bool(re.match(r"/channel/UC", path))
             named = any(k in handle for k in keys)
             if named or (chrome and len(urls) == 1 and (id_only or iconic)):
-                out.append((plat, u, p, s))
+                kept.append((not named, u, (plat, u, p, s)))
             else:
                 dropped.append(u)
-    return out, dropped
+        out += [x[2] for x in sorted(kept)[:2]]  # at most two per platform, name-matched handles first
+    return out, sorted(dropped)
 
 
 def norm_phone(raw: str) -> str | None:
@@ -1684,6 +1742,7 @@ def extract_contacts(pages: list[Page], domain: str, registry_phones: set[str] =
     scope = scope or Scope("", [])
     pages = [p for p in pages if not LEGAL_PAGE.search(unquote(urlsplit(p.url).path))]
     email_domains = {bare(d) for d in email_domains if d} | {domain}
+    name_key = re.sub(r"[^a-z0-9]", "", _translit("".join(w for w in scope.words if w not in GENERIC_WORDS)))
     emails: dict[str, tuple[Page, str]] = {}
     phones: dict[str, tuple[Page, str]] = {}
     skipped: set[str] = set()
@@ -1723,7 +1782,14 @@ def extract_contacts(pages: list[Page], domain: str, registry_phones: set[str] =
             if n and PHONE_LABEL.search(before) and n not in phones and n not in skipped:
                 put(phones, n, p, _window(p.text, m.start(), m.end(), 20), _element_for(p, m.group(0).strip()))
     # only addresses on the company's own domain; generic mailboxes first
-    own = [(a, ps) for a, ps in emails.items() if any(same_site(a.rsplit("@", 1)[1], d) for d in email_domains)]
+    def ours_mail(a: str) -> bool:
+        local, dom = a.rsplit("@", 1)
+        if any(same_site(dom, d) for d in email_domains):
+            return True
+        # a free-mail box (birifotklinikk@gmail.com) counts when its mailbox name is our distinctive name
+        lq = re.sub(r"[^a-z0-9]", "", _translit(local))
+        return dom in FREE_MAIL and bool(name_key) and len(name_key) >= 6 and name_key in lq
+    own = [(a, ps) for a, ps in emails.items() if ours_mail(a)]
     generic = [x for x in own if x[0].split("@")[0] in GENERIC_MAILBOX]
     # personal mailboxes only when the site publishes no generic one, and then just one
     picked = generic[:2] if generic else own[:1]
@@ -1758,7 +1824,7 @@ def org_structured(page: Page, legal_name: str) -> tuple[dict, str] | None:
     return None
 
 
-JOBS_TOKENS = {"stilling", "stillinger", "ledige", "karriere", "jobb", "jobbe", "jobs", "job", "career", "careers",
+JOBS_TOKENS = {"stilling", "stillinger", "karriere", "jobb", "jobbe", "jobs", "job", "career", "careers",
                "vacancies", "vacancy", "rekruttering", "rekrutering", "stillingsannonser", "jobbmuligheter"}
 NOT_JOBS_PATH = re.compile(r"/(nyheter|nyhet|news|aktuelt|blogg?|artikler|presse|tag|kategori|category)/", re.I)
 
@@ -2011,28 +2077,6 @@ async def sitemap_activity(f: Fetcher, sp: _Spend, ctx: CompanyContext, home: Pa
         return
 
 
-async def fetch_news(sp: _Spend, ctx: CompanyContext, pages: list[Page], domain: str, scope: Scope) -> None:
-    link = news_listing_link(pages, domain)
-    if not link or not sp.can(1):
-        return
-    page = next((p for p in pages if p.url.rstrip("/") == link.rstrip("/")), None)
-    if page is None:
-        page, _st = await _fetch_page(sp, link)
-        if page is None or not same_site(page.host, domain):
-            return
-    floor = _date_floor(ctx)
-    items = [(val, span) for val, span in news_items(page, domain, scope)
-             if val["date"] >= floor and not PLACEHOLDER.search(f"{val['title']} {span}")
-             and not PLACEHOLDER_SLUG.search(val["url"])]
-    if items and _activity_blocked(ctx, "site_news"):
-        return
-    for val, span in items:
-        ev = ctx.add_evidence(page.snap, source_class=COMPANY_OWNED, span=span, effective_date=val["date"],
-                              method="website_news_v1", licence=LICENCE)
-        ctx.add_claim("site_news", "activity", val, ev, as_of=val["date"],
-                      match={"method": "verified_site_news", "detail": f"news listing {page.url} on verified site"})
-
-
 async def prepare_scope(sp: _Spend, ctx: CompanyContext, v: Verdict) -> Scope:
     """Fetch a contact page if none was read yet, then decide whether the site is shared."""
     home = v.pages[0]
@@ -2044,6 +2088,12 @@ async def prepare_scope(sp: _Spend, ctx: CompanyContext, v: Verdict) -> Scope:
                     if p and same_site(p.host, home.host):
                         v.pages.append(p)
                 break
+    if not (v.cross or v.path_scoped):
+        priv = next((u for u in internal_links(home) if re.search(r"(?i)personvern|privacy", u)), None)
+        if priv and sp.can(1) and priv not in {p.url for p in v.pages}:
+            p, _st = await _fetch_page(sp, priv)
+            if p and same_site(p.host, home.host):
+                v.pages.append(p)  # read for operator and controller names; never a contact source
     words = name_words((ctx.registry or {}).get("navn") or "")
     others = dict(v.others)
     for p in v.pages:
@@ -2072,12 +2122,47 @@ async def prepare_scope(sp: _Spend, ctx: CompanyContext, v: Verdict) -> Scope:
             if label == site_label or any(t in label for t in own_tokens):
                 continue  # the company's own alternate domain
             other_mail.add(dom)
-    return Scope(ctx.org, words, others, sisters, dominant, v.cross, v.path_scoped, other_mail)
+    codeclared = await _codeclared(sp, ctx, home)
+    if codeclared and v.method == "orgnr_on_page" and not others:
+        codeclared = {}  # the site prints our org number and no other: it speaks for us
+    e = ctx.registry or {}
+    a = e.get("forretningsadresse") or {}
+    srx = _street_regex(([x for x in a.get("adresse") or [] if x] or [""])[-1]) if a.get("adresse") else None
+    addr = (srx, a["postnummer"]) if srx and a.get("postnummer") else None
+    return Scope(ctx.org, words, others, sisters, dominant, v.cross, v.path_scoped, other_mail, codeclared, addr)
+
+
+_HJEM_CACHE: dict[str, list[dict]] = {}
+
+
+async def _codeclared(sp: "_Spend", ctx: CompanyContext, home: Page) -> dict[str, str]:
+    """Other active registered entities that declare this same website in the registry (a group site)."""
+    host = bare(home.host)
+    rows = _HJEM_CACHE.get(host)
+    if rows is None:
+        rows = []
+        if sp.can(1):
+            try:
+                snap = await sp.get(f"https://data.brreg.no/enhetsregisteret/api/enheter?hjemmeside={host}&size=20",
+                                    robots=False, headers={"Accept": "application/json"})
+                if snap.status == 200:
+                    rows = (snap.json().get("_embedded") or {}).get("enheter") or []
+            except (BudgetExhausted, _OutOfRequests):
+                raise
+            except Exception:
+                rows = []
+        _HJEM_CACHE[host] = rows
+    out = {}
+    for r in rows:
+        hj = bare(host_of(r.get("hjemmeside") or ""))
+        if hj == host and r.get("organisasjonsnummer") != ctx.org and _active(r):
+            out[r["organisasjonsnummer"]] = r.get("navn") or ""
+    return out
 
 
 DERIVED_FIELDS = (("website_description", SECTION), ("site_contact_email", SECTION), ("site_contact_phone", SECTION),
-                  ("social_profile", SECTION), ("structured_data_organization", SECTION), ("careers_page", "hiring"),
-                  ("site_page_updated", "activity"), ("site_news", "activity"))
+                  ("social_profile", SECTION), ("structured_data_organization", SECTION), ("hiring_signal", "hiring"),
+                  ("site_page_updated", "activity"), ("dated_news", "activity"))
 
 
 def emit_site(ctx: CompanyContext, v: Verdict, scope: Scope | None = None) -> list[Page]:
@@ -2099,14 +2184,19 @@ def emit_site(ctx: CompanyContext, v: Verdict, scope: Scope | None = None) -> li
         url = home.url.split("#")[0]  # the exact page that proves us, not the host's front page
     if not scope.exclusive:
         m["detail"] = f"{m['detail']}; not exclusive: {scope.reasons()}"
-        ctx.add_claim("official_website", SECTION, url, proof_evs, confidence=conf, match=m,
+        m["url"] = url
+        # the front page of a site is written as its registered domain; a section page keeps its full URL
+        value = site_domain(home.host) if urlsplit(url).path in ("", "/") and not (v.cross or v.path_scoped) else url
+        ctx.add_claim("official_website", SECTION, value, proof_evs, confidence=conf, match=m,
                       note="Only the website itself is published; facts from this site are withheld because "
                            + scope.reasons())
         why = "site not exclusive to this company (" + scope.reasons() + "); derived facts withheld"
         for fld, sec in DERIVED_FIELDS:
             ctx.mark(fld, sec, "ambiguous", note=why)
         return v.pages
-    ctx.add_claim("official_website", SECTION, url, proof_evs, confidence=conf, match=m)
+    m["url"] = url
+    ctx.add_claim("official_website", SECTION, site_domain(home.host), proof_evs, confidence=conf, match=m)
+    ctx.add_claim("official_website_url", SECTION, url, proof_evs, confidence=conf, match=dict(m))
     site_match = {"method": "verified_site", "detail": f"from {domain}, proven by {v.method}"}
     for p in v.pages:
         ph = PLACEHOLDER.search(p.text)
@@ -2158,8 +2248,8 @@ def emit_site(ctx: CompanyContext, v: Verdict, scope: Scope | None = None) -> li
     if dropped:
         ctx.facts["website_social_dropped"] = dropped
     for plat, u, p, s in socials:
-        ctx.add_claim("social_profile", SECTION, {"platform": plat, "url": u}, _ev(ctx, p, s),
-                      match={"method": "linked_from_verified_site", "detail": f"outbound link on {p.url}"})
+        ctx.add_claim("social_profile", SECTION, canonical_social(plat, u), _ev(ctx, p, s),
+                      match={"method": "linked_from_verified_site", "detail": f"outbound link {u} on {p.url}"})
     if scope.shared and not socials and dropped:
         ctx.mark("social_profile", SECTION, "ambiguous", note=unsure)
     for p in v.pages:
@@ -2167,12 +2257,347 @@ def emit_site(ctx: CompanyContext, v: Verdict, scope: Scope | None = None) -> li
         if so:
             ctx.add_claim("structured_data_organization", SECTION, so[0], _ev(ctx, p, so[1]), match=site_match)
             break
-    car = careers_link(v.pages, domain, scope)
-    if car == "ambiguous":
-        ctx.mark("careers_page", "hiring", "ambiguous", note=unsure)
-    elif car:
-        ctx.add_claim("careers_page", "hiring", car[0], _ev(ctx, car[1], car[2]), match=site_match)
     return v.pages
+
+
+# ---------------------------------------------------------------- canonical values (Builderr's shapes)
+SOCIAL_HOSTS = {"linkedin": "linkedin.com", "facebook": "facebook.com", "instagram": "instagram.com",
+                "youtube": "youtube.com", "x": "x.com", "tiktok": "tiktok.com"}
+
+
+class CanonicalSocial(str):
+    """A social profile as 'platform.com/handle' (lower case, no scheme, no www). `.get('platform')` and
+    `.get('url')` still answer for readers that expect the older dict shape; it serialises as a plain string."""
+
+    def __new__(cls, value: str, platform: str, url: str):
+        obj = str.__new__(cls, value)
+        obj.platform, obj.url = platform, url
+        return obj
+
+    def get(self, key: str, default=None):
+        return {"platform": self.platform, "url": self.url}.get(key, default)
+
+    def __getitem__(self, key):
+        if isinstance(key, str):  # dict-style access for older readers; string slicing still works
+            return {"platform": self.platform, "url": self.url}[key]
+        return str.__getitem__(self, key)
+
+    def __reduce__(self):
+        return (CanonicalSocial, (str(self), self.platform, self.url))
+
+    def __deepcopy__(self, memo):
+        return self
+
+
+def canonical_social(platform: str, url: str) -> CanonicalSocial:
+    p = urlsplit(url)
+    value = (SOCIAL_HOSTS[platform] + p.path.rstrip("/")).lower()
+    return CanonicalSocial(value, platform, url)
+
+
+def site_domain(host: str) -> str:
+    """The site's registered domain as Builderr writes it (no scheme, no www); a hosted subdomain such as
+    name.barnehage.no is kept whole."""
+    return bare(host.lower())
+
+
+# ---------------------------------------------------------------- dated news
+FEED_TYPES = re.compile(r"(?i)application/(rss|atom)\+xml")
+NEWS_PROBES = ("/nyheter/", "/aktuelt/", "/news/", "/presse/", "/blogg/")
+NOT_POST = re.compile(r"(?i)/(tag|tags|kategori|category|categories|author|forfatter|page|side|feed|comments?)/")
+SAMPLE_POST = re.compile(r"(?i)^(hello,? world!?|hei,? verden!?|tere-tere!?|sample page|eksempelside|lorem ipsum.*)$")
+SPAM = re.compile(r"(?i)\b(replica|birkin|aliexpress|designer reproduction|casino|viagra|cialis|payday|escort|betting|"
+                  r"porn|crypto ?currency|bitcoin|loan[s]? online|cheap jerseys|louis vuitton|rolex|essay writing)\b")
+
+
+def _iso_with_offset(raw: str) -> str | None:
+    """The source's own datetime as ISO 8601 with its offset (RFC 822 feed dates converted, offsets kept)."""
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    try:
+        if re.match(r"^\d{4}-\d{2}-\d{2}", raw):
+            d = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        else:
+            from email.utils import parsedate_to_datetime
+            d = parsedate_to_datetime(raw)
+    except (ValueError, TypeError, IndexError):
+        return None
+    if d.tzinfo is None:
+        return d.date().isoformat() if len(raw) <= 10 else d.isoformat()
+    return d.isoformat()
+
+
+def _xml_text(s: str) -> str:
+    s = re.sub(r"<!\[CDATA\[(.*?)\]\]>", r"\1", s, flags=re.S)
+    s = re.sub(r"<[^>]+>", " ", s)
+    import html as _html
+    return re.sub(r"\s+", " ", _html.unescape(s)).strip()
+
+
+def parse_feed(raw: str) -> list[dict]:
+    """Items of an RSS or Atom feed: title, url, datetime, and the exact raw title and date elements."""
+    out = []
+    for blk in re.finditer(r"<(item|entry)\b.*?</\1>", raw, re.S | re.I):
+        b = blk.group(0)
+        t = re.search(r"<title\b[^>]*>(.*?)</title>", b, re.S | re.I)
+        if not t:
+            continue
+        link = re.search(r"<link\b[^>]*>(.*?)</link>", b, re.S | re.I)
+        url = _xml_text(link.group(1)) if link and link.group(1).strip() else None
+        if not url:
+            for lk in re.finditer(r"<link\b([^>]*)/?>", b, re.I):
+                attrs = lk.group(1)
+                if re.search(r'rel=["\'](alternate)["\']', attrs) or "rel=" not in attrs:
+                    h = re.search(r'href=["\']([^"\']+)["\']', attrs)
+                    if h:
+                        url = h.group(1)
+                        break
+        dm = None
+        for tag in ("pubDate", "published", "dc:date", "updated"):
+            dm = re.search(rf"<{tag}\b[^>]*>(.*?)</{tag}>", b, re.S | re.I)
+            if dm:
+                break
+        if not dm or not url:
+            continue
+        when = _iso_with_offset(_xml_text(dm.group(1)))
+        if not when:
+            continue
+        out.append({"title": _xml_text(t.group(1)), "url": url.strip(), "datetime": when,
+                    "title_span": t.group(0), "date_span": dm.group(0)})
+    return out
+
+
+def _wp_posts(raw: str) -> list[dict]:
+    try:
+        rows = json.loads(raw)
+    except ValueError:
+        return []
+    out = []
+    for r in rows if isinstance(rows, list) else []:
+        title = _xml_text(((r.get("title") or {}).get("rendered")) or "")
+        gmt = r.get("date_gmt")
+        if title and r.get("link") and gmt:
+            out.append({"title": title, "url": r["link"], "datetime": f"{gmt}+00:00",
+                        "title_span": json.dumps({"date_gmt": gmt})[1:-1], "date_span": None})
+    return out
+
+
+def article_datetime(page: Page) -> tuple[str, str] | None:
+    """Publication datetime from an article page: meta article:published_time, JSON-LD datePublished or
+    time[datetime]. Returns (iso datetime, the exact source text)."""
+    tag = page.soup.find("meta", attrs={"property": re.compile(r"^article:published_time$", re.I)})
+    if tag and tag.get("content"):
+        iso = _iso_with_offset(tag["content"])
+        if iso:
+            return iso, tag["content"]
+    for d in page.jsonld:
+        if isinstance(d.get("datePublished"), str):
+            iso = _iso_with_offset(d["datePublished"])
+            if iso:
+                return iso, d["datePublished"]
+    t = page.soup.find("time", attrs={"datetime": True})
+    if t:
+        iso = _iso_with_offset(t["datetime"])
+        if iso:
+            return iso, t["datetime"]
+    return None
+
+
+def _news_ok(item: dict, floor: str, domain: str) -> bool:
+    day = item["datetime"][:10]
+    today = datetime.now(timezone.utc).date().isoformat()
+    path = urlsplit(item["url"]).path
+    return (floor <= day <= today and same_site(host_of(item["url"]), domain) and path not in ("", "/")
+            and not NOT_POST.search(path + "/") and not SAMPLE_POST.match(item["title"])
+            and not PLACEHOLDER.search(item["title"]) and not PLACEHOLDER_SLUG.search(item["url"])
+            and len(item["title"]) >= 4)
+
+
+def _is_wordpress(page: Page) -> bool:
+    gen = page.soup.find("meta", attrs={"name": re.compile("^generator$", re.I)})
+    return bool((gen and "wordpress" in (gen.get("content") or "").lower()) or b"/wp-content/" in page.snap.content)
+
+
+def _is_wix(page: Page) -> bool:
+    gen = page.soup.find("meta", attrs={"name": re.compile("^generator$", re.I)})
+    return bool((gen and "wix" in (gen.get("content") or "").lower()) or b"static.wixstatic.com" in page.snap.content)
+
+
+async def collect_dated_news(sp: "_Spend", ctx: CompanyContext, pages: list[Page], domain: str,
+                             scope: "Scope", limit: int = 20) -> None:
+    """Dated news from the verified site: feeds first (RSS or Atom link, WordPress /feed/ or REST posts,
+    Wix /blog-feed.xml), then the news listing (and its page 2). Each item keeps the source's own datetime.
+    Value "title (datetime)", newest first, at most 20."""
+    home = pages[0]
+    origin = f"{urlsplit(home.url).scheme}://{urlsplit(home.url).netloc}"
+    floor = _date_floor(ctx)
+    found: dict[str, tuple[dict, Snapshot, Page | None]] = {}
+
+    def keep(items: list[dict], snap: Snapshot) -> None:
+        for it in items:
+            it["url"] = urljoin(origin + "/", it["url"])
+            if _news_ok(it, floor, domain) and it["url"] not in found:
+                found[it["url"]] = (it, snap, None)
+
+    feeds: list[str] = []
+    for p in pages:
+        for ln in p.soup.find_all("link", attrs={"type": FEED_TYPES}):
+            href = urljoin(p.url, ln.get("href") or "")
+            if href and same_site(host_of(href), domain) and "comments" not in href and href not in feeds:
+                feeds.append(href)
+    if not feeds and _is_wordpress(home):
+        feeds.append(origin + "/feed/")
+    if not feeds and _is_wix(home):
+        feeds.append(origin + "/blog-feed.xml")
+    def clean_feed(items: list[dict]) -> list[dict]:
+        # a hacked site's feed full of spam is not company news: drop the whole feed
+        return [] if any(SPAM.search(it["title"]) for it in items) else items
+
+    for feed in feeds[:2]:
+        if not sp.can(1):
+            break
+        try:
+            snap = await sp.get(feed)
+        except (BudgetExhausted, _OutOfRequests):
+            raise
+        except Exception:
+            continue
+        if snap.status == 200 and b"<" in snap.content[:300]:
+            keep(clean_feed(parse_feed(snap.content.decode("utf-8", "replace"))), snap)
+        if found:
+            break
+    if not found and _is_wordpress(home) and sp.can(1):
+        try:
+            snap = await sp.get(origin + "/wp-json/wp/v2/posts?per_page=20&_fields=title,link,date_gmt")
+            if snap.status == 200:
+                keep(clean_feed(_wp_posts(snap.content.decode("utf-8", "replace"))), snap)
+        except (BudgetExhausted, _OutOfRequests):
+            raise
+        except Exception:
+            pass
+    if not found:
+        listing = news_listing_link(pages, domain)
+        probes = [listing] if listing else [origin + p for p in NEWS_PROBES]
+        for url in probes:
+            if not sp.can(1):
+                break
+            page, _st = await _fetch_page(sp, url)
+            if not page or not same_site(page.host, domain) or urlsplit(page.url).path in ("", "/"):
+                continue
+            listing_pages = [page]
+            nxt = page.soup.find("a", attrs={"rel": "next"}, href=True) or page.soup.find(
+                "a", href=re.compile(r"(/page/2/?$|[?&]page=2$|/side/2/?$)"))
+            if nxt and sp.can(1):
+                p2, _ = await _fetch_page(sp, urljoin(page.url, nxt["href"]))
+                if p2 and same_site(p2.host, domain):
+                    listing_pages.append(p2)
+            for lp in listing_pages:
+                for val, span in news_items(lp, domain, scope, limit=limit):
+                    it = {"title": val["title"], "url": val["url"], "datetime": val["date"],
+                          "title_span": span, "date_span": None}
+                    if _news_ok(it, floor, domain) and it["url"] not in found:
+                        found[it["url"]] = (it, lp.snap, lp)
+            break
+        # listing dates are dates only: read the article page for the full datetime while the budget allows
+        for url in sorted(found, key=lambda u: found[u][0]["datetime"], reverse=True)[:4]:
+            it, snap, lp = found[url]
+            if lp is None or not sp.can(1):
+                continue
+            art, _ = await _fetch_page(sp, url)
+            if art and same_site(art.host, domain):
+                got = article_datetime(art)
+                if got and got[0][:10] == it["datetime"][:10]:
+                    it.update(datetime=got[0], date_span=got[1], title_span=it["title"])
+                    found[url] = (it, art.snap, None)
+    if not found:
+        return
+    if _activity_blocked(ctx, "dated_news"):
+        return
+    ranked = sorted(found.values(), key=lambda x: (x[0]["datetime"][:19], x[0]["title"]), reverse=True)[:limit]
+    for it, snap, _lp in ranked:
+        evs = [ctx.add_evidence(snap, source_class=COMPANY_OWNED, span=it["title_span"] or it["title"],
+                                effective_date=it["datetime"][:10], method="website_news_v2", licence=LICENCE)]
+        if it.get("date_span"):
+            evs.append(ctx.add_evidence(snap, source_class=COMPANY_OWNED, span=it["date_span"],
+                                        effective_date=it["datetime"][:10], method="website_news_v2", licence=LICENCE))
+        ctx.add_claim("dated_news", "activity", f"{it['title']} ({it['datetime']})", evs, as_of=it["datetime"][:10],
+                      match={"method": "verified_site_news", "detail": f"{it['url']} on the verified site"})
+
+
+# ---------------------------------------------------------------- hiring signal
+JOB_PROBES = ("/karriere/", "/jobb/", "/jobbe-hos-oss/", "/ledige-stillinger/", "/stillinger/", "/careers/", "/jobs/")
+JOB_HEADING = re.compile(r"(?i)\b(karriere|ledige stillinger|stillinger|jobb(e)? hos oss|careers?|jobs|vacancies|"
+                         r"rekruttering)\b")
+ATS_POSTING = re.compile(r"(?i)(webcruiter\.no|jobbnorge\.no|recman\.(no|page)|teamtailor\.com|hrmanager\.no|"
+                         r"easycruit\.com|jobylon\.com|reachmee\.com|varbi\.com|smartrecruiters\.com)")
+
+
+def _careers_page_ok(page: Page, domain: str, home: Page, probed: bool) -> bool:
+    """A real careers page: on the verified domain, not the front page (or a copy of it served at another
+    path), and with a jobs word in its path or heading; a probed page needs the jobs word in its heading."""
+    path = urlsplit(page.url).path
+    if not same_site(page.host, domain) or path in ("", "/") or is_parked(page):
+        return False
+    if page.snap.sha256 == home.snap.sha256 or page.text == home.text:
+        return False
+    head = " ".join([page.soup.title.get_text(" ", strip=True) if page.soup.title else ""] +
+                    [h.get_text(" ", strip=True) for h in page.soup.find_all(["h1", "h2"])[:3]])
+    if probed:
+        return bool(JOB_HEADING.search(head))
+    return jobs_url(path) or bool(JOB_HEADING.search(head))
+
+
+async def collect_hiring(sp: "_Spend", ctx: CompanyContext, pages: list[Page], domain: str, scope: "Scope") -> None:
+    """hiring_signal: the careers page URL (linked, or found by probing the usual paths), plus one claim per
+    real posting on it (JSON-LD JobPosting naming us, or a linked ATS posting)."""
+    site_match = {"method": "verified_site", "detail": f"careers page on verified site {domain}"}
+    link = careers_link(pages, domain, scope)
+    candidates = [link[0]] if isinstance(link, tuple) else []
+    origin = f"{urlsplit(pages[0].url).scheme}://{urlsplit(pages[0].url).netloc}"
+    probed = not candidates
+    if probed:
+        candidates = [origin + p for p in JOB_PROBES]
+    page = None
+    for url in candidates:
+        if not sp.can(1):
+            break
+        known = next((p for p in pages if p.url.rstrip("/") == url.rstrip("/")), None)
+        got = known or (await _fetch_page(sp, url))[0]
+        if got and _careers_page_ok(got, domain, pages[0], probed):
+            page = got
+            break
+        if len(candidates) > 1 and got is None:
+            continue
+    if not page:
+        return
+    url = page.url.split("#")[0]
+    head = page.soup.title.get_text(" ", strip=True) if page.soup.title else url
+    ctx.add_claim("hiring_signal", "hiring", url, _ev(ctx, page, _clean(head, 200) or url), match=site_match)
+    postings: dict[str, tuple[str, str]] = {}
+    ours = _squash((ctx.registry or {}).get("navn") or "")
+    for d in page.jsonld:
+        if str(d.get("@type")) != "JobPosting":
+            continue
+        org = d.get("hiringOrganization")
+        name = org.get("name") if isinstance(org, dict) else org
+        if not isinstance(name, str) or not ours or not (_squash(name) in ours or ours in _squash(name)):
+            continue
+        purl = d.get("url") or ""
+        if purl and isinstance(d.get("title"), str):
+            postings.setdefault(urljoin(url, purl), (d["title"], json.dumps({"title": d["title"]}, ensure_ascii=False)))
+    for a in page.soup.find_all("a", href=True):
+        h = urljoin(url, a["href"].strip()).split("#")[0]
+        p = urlsplit(h)
+        label = a.get_text(" ", strip=True)
+        posting_path = re.search(r"(?i)(job|jobs|stilling|recruit|position|vacanc|annonse)", p.path + "?" + p.query) \
+            and not re.search(r"(?i)(profile|login|register|signup|subscribe|alert|search|list|candidate)", p.path + p.query)
+        if ATS_POSTING.search(p.netloc) and posting_path and 4 <= len(label) <= 120 and not _in_chrome(a):
+            postings.setdefault(h, (label, f'<a href="{a["href"][:200]}">{label}</a>'))
+    for purl in sorted(postings)[:10]:
+        title, span = postings[purl]
+        ctx.add_claim("hiring_signal", "hiring", purl, _ev(ctx, page, span),
+                      match={"method": "posting_on_verified_careers_page", "detail": title[:200]})
 
 
 # ---------------------------------------------------------------- entry point
@@ -2214,10 +2639,15 @@ async def fetch_website(f: Fetcher, ctx: CompanyContext) -> None:
             emit_site(ctx, proven, scope)
             dom = bare(proven.pages[0].host)
             if scope.exclusive:
+                sp.cap = VERIFIED_CAP
+                for step in (collect_dated_news, collect_hiring):
+                    try:
+                        await step(sp, ctx, proven.pages, dom, scope)
+                    except _OutOfRequests:
+                        pass
                 try:
-                    await fetch_news(sp, ctx, proven.pages, dom, scope)
                     await sitemap_activity(f, sp, ctx, proven.pages[0], dom, scope)
-                except (_OutOfRequests,):
+                except _OutOfRequests:
                     pass
     except BudgetExhausted:
         budget_note = "budget_exhausted"

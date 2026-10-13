@@ -100,7 +100,25 @@ def _slim_envelope(env: dict, urls: dict[str, int], span_limit: int | None) -> d
     }
 
 
+PLATFORM_OF = {"linkedin.com": "linkedin", "facebook.com": "facebook", "instagram.com": "instagram",
+               "youtube.com": "youtube", "x.com": "x", "twitter.com": "x", "tiktok.com": "tiktok"}
+
+
+def _display_values(env: dict) -> dict:
+    """Envelopes carry Builderr's canonical values (a social profile is 'platform.com/handle'); the page
+    wants the platform and a link, so translate here without touching the scored output."""
+    claims = []
+    for c in env.get("claims") or []:
+        v = c.get("value")
+        if c.get("field") == "social_profile" and isinstance(v, str):
+            host = v.split("/", 1)[0]
+            c = {**c, "value": {"platform": PLATFORM_OF.get(host, host.split(".")[0]), "url": "https://" + v, "handle": v}}
+        claims.append(c)
+    return {**env, "claims": claims}
+
+
 def build_data(envelopes: list[dict], span_limit: int | None = None) -> dict:
+    envelopes = [_display_values(e) for e in envelopes]
     urls: dict[str, int] = {}
     companies = [_slim_envelope(e, urls, span_limit) for e in envelopes]
     return {"u": list(urls), "co": companies}
@@ -642,7 +660,7 @@ var FIELD={legal_name:'Legal name',former_names:'Former names',legal_form:'Legal
  registered_workplace:'Registered workplace',official_website:'Verified website',related_website:'Related website',website_description:'Description',website_title:'Page title',
  site_language:'Site language',structured_data_organization:'Structured data',social_profile:'Social profile',
  site_email:'Email on website',site_phone:'Phone on website',site_contact_email:'Email on website',site_contact_phone:'Phone on website',contact_email:'Email on website',contact_phone:'Phone on website',
- job_ad:'Job ads',careers_page:'Careers page',registry_change:'Registry update',site_page_updated:'Website page updated',news:'News',news_item:'News'};
+ job_ad:'Job ads',careers_page:'Careers page',hiring_signal:'Careers page or job posting',dated_news:'Dated news post',official_website_url:'Website address',registry_change:'Registry update',site_page_updated:'Website page updated',news:'News',news_item:'News'};
 var PLAT={linkedin:'LinkedIn',facebook:'Facebook',instagram:'Instagram',youtube:'YouTube',x:'X',twitter:'X',tiktok:'TikTok',github:'GitHub',pinterest:'Pinterest',vimeo:'Vimeo'};
 var FIN=['revenue','operating_result','salary_costs','profit_before_tax','annual_result','total_assets','cash_and_bank','equity','debt'];
 var BREAK={total_assets:1};
@@ -1054,7 +1072,7 @@ function answerFor(co,intent){
       if(!r)out.push(S('No revenue figure was reported for '+y.v.year+'.',[]));}}
   else if(intent==='hiring'){cs=av(co,'job_ad');if(cs.length)out.push(S(plural(cs.length,'active job ad')+' on NAV: '+cs.slice(0,3).map(function(x){return x.v.title||'untitled';}).join(', ')+'.',cs.slice(0,3)));
     else{c=any(co,'job_ad')[0];if(c&&c.a==='failed')out.push(S('Job ads could not be checked in this run ('+(c.n||'source failed')+').',[c]));else if(c)out.push(S('No active job ads on NAV for this organisation number.',[c]));}
-    c=one(co,'careers_page');if(c)out.push(S('The verified website has a careers page: '+bare(c.v)+'.',[c]));}
+    c=(one(co,'hiring_signal')||one(co,'careers_page'));if(c)out.push(S('The verified website has a careers page: '+bare(c.v)+'.',[c]));}
   else if(intent==='changed'){cs=av(co,'registry_change').sort(function(a,b){return (b.d||'').localeCompare(a.d||'');}).slice(0,3);
     cs.forEach(function(x){out.push(S('On '+dfmt(x.d)+' the registry recorded '+(x.v.changed&&x.v.changed.length?'a change to '+x.v.changed.join(', '):'an update')+'.',[x]));});
     co.ch.slice(0,3).forEach(function(ch){var cl=ch.current_claim_id?ix(co)[ch.current_claim_id]:null;out.push(S('Since the previous run: '+label(ch.field)+' ('+String(ch.type||'change').replace(/_/g,' ')+').',cl?[cl]:[]));});}
@@ -1227,7 +1245,7 @@ function cardOnline(co){
   return card('online','Is it online?',P(a.join(' ')),cls,co,det);
 }
 function cardHiring(co){
-  var ads=av(co,'job_ad'),jn=any(co,'job_ad')[0],car=one(co,'careers_page'),a=[],cls=[];
+  var ads=av(co,'job_ad'),jn=any(co,'job_ad')[0],car=(one(co,'hiring_signal')||one(co,'careers_page')),a=[],cls=[];
   if(ads.length){a.push('Yes. '+(ads.length===1?'One open job ad':ads.length+' open job ads')+' on NAV, Norway’s public job board.');cls=cls.concat(ads);}
   else if(jn&&jn.a==='failed'){a.push('Unknown. Job ads could not be checked in this run.'+why(jn.n));cls.push(jn);}
   else if(jn){a.push('No open job ads on NAV, Norway’s public job board.');cls.push(jn);}
@@ -1242,9 +1260,13 @@ function cardChanged(co){
       (r.v.changed&&r.v.changed.length?'changed the '+esc(r.v.changed.join(', '))+'.':'did not say what changed.'));cls.push(r);}
   else a.push('No registry updates in the last 12 months.');
   if(co.ch.length)a.push(co.ch.length+' differences since the previous Kilde run.');
+  var news=av(co,'dated_news').sort(function(x,y){return (y.d||'').localeCompare(x.d||'');});
+  var ntitle=function(c){return String(c.v).replace(/\s*\([^()]*\)\s*$/,'');};
+  if(news.length){a.push((news.length===1?'Its website has one dated news post':'Its website has '+news.length+' dated news posts')+'; the latest, "'+esc(ntitle(news[0]))+'", is from '+dfmt(news[0].d)+'.');cls.push(news[0]);}
   var det=regs.slice(0,6).map(function(c){return drow(co,dfmt(c.d),render('registry_change',c.v),[c]);}).join('')+
     co.ch.map(function(ch){var cl=ch.current_claim_id?ix(co)[ch.current_claim_id]:null;
       return drow(co,ch.detected_at?dfmt(ch.detected_at):'Since last run',esc(label(ch.field))+': '+esc(String(ch.type||'change').replace(/_/g,' ')),cl?[cl]:[]);}).join('')+
+    news.slice(0,5).map(function(c){return drow(co,dfmt(c.d),esc(ntitle(c)),[c]);}).join('')+
     sites.slice(0,3).map(function(c){return drow(co,dfmt(c.d),render('site_page_updated',c.v),[c]);}).join('');
   var extra=(regs.length>6?'<p class="fine">'+(regs.length-6===1?'One older update is':(regs.length-6)+' older updates are')+' listed under all facts.</p>':'')+
     (!co.ch.length&&META.previous===0?'<p class="fine">This is the first Kilde run for these companies, so there is no earlier profile to compare with yet.</p>':'');

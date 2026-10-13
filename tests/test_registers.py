@@ -303,7 +303,7 @@ def test_wikidata_entity_claims():
     for c in ctx.claims:
         by.setdefault(c.field, []).append(c)
     assert by["wikidata_item"][0].value["qid"] == QID and len(by["wikidata_item"][0].evidence_ids) == 2
-    assert by["official_website"][0].value == "https://eksempel.test"
+    assert by["official_website"][0].value == "eksempel.test"  # canonical registered domain
     assert by["inception_date"][0].value == "1999-04"
     assert [c.value["ticker"] for c in by["stock_listing"]] == ["EKS"]
     assert by["isin"][0].value == "NO0000000001"
