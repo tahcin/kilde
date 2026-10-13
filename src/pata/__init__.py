@@ -1,0 +1,2 @@
+"""Pata: evidence-first Norwegian company research agent."""
+__version__ = "1.0.0"
