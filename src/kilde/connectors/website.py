@@ -993,8 +993,10 @@ async def check_candidate(f: Fetcher, sp: _Spend, ctx: CompanyContext, v: Verdic
     v.pages = [home]
     v.cross = not same_site(final, bare(v.domain))
     e = ctx.registry or {}
-    if v.cross and _declared_host(e, final):
-        v.cross = False  # a redirect into the registry's own website or email domain stays within the company
+    if v.cross and _declared_host(e, final) and urlsplit(home.url).path in ("", "/"):
+        # a redirect to the front page of the registry's own website or email domain stays within the company
+        # (a locale or section page of a bigger host, such as a group's /no page, is still judged as cross)
+        v.cross = False
     v.path_scoped = _is_section(home.url)
     if v.path_scoped and not v.cross:
         lab = re.sub(r"[^a-z0-9]", "", bare(home.host).split(".")[0])
@@ -1247,7 +1249,10 @@ async def _check_collision(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> Non
         if not theirs or not (theirs <= ours or ours <= theirs) or _staff_body(r):
             continue
         other_rx = _full_name_rx(r.get("navn") or "")
-        names_them = bool(other_rx and other_rx.search(masked))
+        # a foreign company's Norwegian branch (NUF) under our name is the parent: never masked away
+        nuf = ((r.get("organisasjonsform") or {}).get("kode") or "").upper() == "NUF" or \
+            bool(re.search(r"(?i)\bNUF\b", r.get("navn") or ""))
+        names_them = bool(other_rx and other_rx.search(text if nuf else masked))
         if theirs != ours:
             # A longer or shorter namesake (a subsidiary 'Kitron Eiendom AS', a parent 'Viken AS') collides only
             # when the site shows that other name as a phrase.

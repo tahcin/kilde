@@ -1839,3 +1839,20 @@ def test_group_handle_is_ours_when_we_are_the_registry_group_parent():
     ctx = ctx_for(navn="FJELLBEKK TREVARE ASA", hjemmeside="fjellbekk.no")
     run(_site(body=body), ctx)
     assert not [c for c in ctx.claims if c.field == "social_profile" and c.availability == "available"]
+
+
+def test_foreign_branch_under_our_name_still_collides_inside_our_name():
+    """Lundbeck shape: 'FJELLBEKK' is also the NUF of a foreign parent; the site writing 'Fjellbekk AS' is no proof."""
+    body = '<h1>Fjellbekk</h1><footer>Fjellbekk AS · <a href="mailto:post@fjellbekk.no">post@fjellbekk.no</a></footer>'
+    pages = {"https://fjellbekk.no/": (200, html(body, title="Fjellbekk"))}
+    pages.update(_brreg("enheter", "fjellbekk", [{"organisasjonsnummer": SISTER, "navn": "FJELLBEKK",
+                                                   "organisasjonsform": {"kode": "NUF"}}]))
+    claims = run(FakeFetcher(pages), ctx_for(navn="FJELLBEKK AS", hjemmeside="fjellbekk.no"))
+    assert claims.get("site_contact_email") is None or claims["site_contact_email"].availability != "available"
+
+
+def test_redirect_to_a_locale_page_of_the_registry_email_domain_stays_cross():
+    body = '<h1>Fjellbekk Trevare AS</h1><footer><a href="mailto:post@fjb.no">post@fjb.no</a></footer>'
+    f = FakeFetcher({"https://fjb.no/no": (200, html(body))}, redirects={"https://fjellbekk.no/": "https://fjb.no/no"})
+    claims = run(f, ctx_for(hjemmeside="fjellbekk.no", epostadresse="post@fjb.no"))
+    assert claims["official_website"].availability != "available"
