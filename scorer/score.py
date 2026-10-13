@@ -26,11 +26,15 @@ from urllib.parse import urlsplit
 
 FAMILIES = [
     "identity_extras", "financials", "leadership", "locations", "official_website", "social_profiles",
-    "contact", "hiring", "activity", "external_registers",
+    "contact", "hiring", "dated_news", "activity", "external_registers",
 ]
 
 # Recall weight per family. None means "equal weight over families with at least MIN_POOL_COMPANIES".
-FAMILY_WEIGHTS: dict[str, float] | None = None
+# Builderr's per-entrant feedback (published in competitors' repos, Oct 2026) reports recall on four
+# families: company website, social profile, hiring signal and dated news. That is the default view;
+# `--broad` weights every family equally instead.
+FOUR_FAMILY_WEIGHTS = {"official_website": 1.0, "social_profiles": 1.0, "hiring": 1.0, "dated_news": 1.0}
+FAMILY_WEIGHTS: dict[str, float] | None = FOUR_FAMILY_WEIGHTS
 MIN_POOL_COMPANIES = 3
 
 # claim field -> family. Fields not listed here (legal_name, legal_form, addresses, ...) are base
@@ -68,8 +72,9 @@ FIELD_FAMILY: dict[str, str] = {
     # hiring
     "job_ad": "hiring", "careers_page": "hiring",
     # activity
-    "registry_change": "activity", "site_page_updated": "activity", "news": "activity", "news_item": "activity",
-    "site_news": "activity",
+    "registry_change": "activity", "site_page_updated": "activity",
+    "news": "dated_news", "news_item": "dated_news", "site_news": "dated_news", "dated_news": "dated_news",
+    "hiring_signal": "hiring",
     # external registers
     "lei": "external_registers", "financial_licence": "external_registers", "ticker": "external_registers",
     "isin": "external_registers", "stock_ticker": "external_registers", "inception_date": "identity_extras",
@@ -565,7 +570,11 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--expected-count", type=int)
     ap.add_argument("--report-html")
     ap.add_argument("--out", required=True)
+    ap.add_argument("--broad", action="store_true", help="weight every family equally instead of the four reported ones")
     a = ap.parse_args(argv)
+    global FAMILY_WEIGHTS
+    if a.broad:
+        FAMILY_WEIGHTS = None
     envs = read_jsonl(a.envelopes)
     res = score(envs, pool_rows=read_jsonl(a.pool) if a.pool else None,
                 audit_rows=read_jsonl(a.audit) if a.audit else None, expected=a.expected_count,
