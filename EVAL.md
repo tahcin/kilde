@@ -12,6 +12,8 @@ How Kilde was measured before submission, and what each round changed. Every rou
 
 Stop rule: two consecutive rounds with zero wrong-company facts and clearly above the qualifying line.
 
+Important: the recall figures below are measured against our own reference pool (Kilde's finds plus what the auditors found by hand for 30 companies per round). Builderr's pool combines every entrant's verified finds and its own crawlers, so recall, and therefore the total, will be lower against it. These numbers are for comparing our own versions, not for comparing with Builderr's board.
+
 ## Rounds
 
 | Round | Recall /50 | Evidence /30 | Synthesis /12 | UX /8 | Wrong-company facts | Cause and fix |

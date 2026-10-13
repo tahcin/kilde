@@ -164,7 +164,8 @@ def main(argv: list[str] | None = None) -> None:
     write_jsonl(out, envelopes)
     write_jsonl(Path(args.profiles_output or out_dir / "profiles.jsonl"), [profile_of(e) for e in envelopes])
     report["validation"] = validate(envelopes, orgs + INVALID)
-    report["inputs"] = {"organisations": args.organisations, "bulk": args.bulk, "previous_envelopes": len(previous)}
+    report["inputs"] = {"organisations": Path(args.organisations).name, "bulk": Path(args.bulk).name if args.bulk else None,
+                        "previous_envelopes": len(previous), "distinct_inputs": len(orgs) + len(INVALID)}
     report["coverage"] = coverage(envelopes)
     Path(args.report or out_dir / "run-report.json").write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n")
     try:

@@ -126,11 +126,14 @@ async def run_batch(orgs: list[str], opt: Options) -> tuple[list[dict], dict]:
     # Phase A, breadth first: identity for everyone (one request per 100 companies), then filed accounts
     # for everyone, then roles, then workplaces. Under any request or time limit every company gets the
     # most valuable registry facts before any company gets the less valuable ones.
+    # With a normal budget each company gets its own registry lookup, so every identity fact cites a
+    # URL about that company alone; under a tight budget, one request per 100 companies instead.
     batch_records: dict[str, Any] = {}
-    try:
-        batch_records = await brreg.fetch_entities_batch(f, orgs)
-    except Exception as exc:  # noqa: BLE001
-        log.warning("batch entity lookup failed: %r", exc)
+    if opt.max_requests / max(1, len(orgs)) < 12:
+        try:
+            batch_records = await brreg.fetch_entities_batch(f, orgs)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("batch entity lookup failed: %r", exc)
     sem = asyncio.Semaphore(opt.concurrency)
     phase_a_deadline = budget.started + opt.seconds * 0.45
 
@@ -459,6 +462,15 @@ def assemble(ctx: CompanyContext, opt: Options, started_at: str, completed_at: s
         "evidence": [e.to_json() for e in ctx.evidence],
         "summary": summary,
         "changes": changes,
+        "refresh": {
+            "previous_run_id": (opt.previous.get(ctx.org) or {}).get("run", {}).get("run_id"),
+            "first_run": ctx.org not in opt.previous,
+            "compared_with_previous": ctx.org in opt.previous,
+            "changes_detected": len(changes),
+            "material_changes": sum(1 for c in changes if c.get("material")),
+            "registry_changes_last_12_months": len(ctx.claims_for("registry_change")),
+            "checked_at": completed_at,
+        },
         "errors": ctx.errors,
         "module_states": ctx.module_states,
         "operations": {"requests": ctx.requests, "runtime_ms": sum(t.values()), "third_party_cost_usd": 0.0,

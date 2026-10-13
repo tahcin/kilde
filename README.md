@@ -112,7 +112,7 @@ Every run can diff against the previous envelopes (`--previous`, or automaticall
 
 ## Budget and cost
 
-Every request goes through one budgeted client. Defaults: 20 outbound HTTP requests per company and 45 minutes per batch, both configurable. Identity, roles, accounts and workplaces for every company run first; external sources share what is left. Each step has a timeout; a step that times out rolls back anything it published half-way, and timed-out website steps get one unhurried second pass. DNS or network failures are reported as `failed`, never as absence. When time or requests run out, the remaining facts are marked `failed` with the reason and every envelope is still written.
+Every request goes through one budgeted client. Defaults: 20 outbound HTTP requests per company and 30 minutes per batch (`--time-budget 1800`), both configurable. Identity, roles, accounts and workplaces for every company run first; external sources share what is left. Each step has a timeout; a step that times out rolls back anything it published half-way, and timed-out website steps get one unhurried second pass. DNS or network failures are reported as `failed`, never as absence. When time or requests run out, the remaining facts are marked `failed` with the reason and every envelope is still written.
 
 Measured: see the 1,000-company figures in [EVAL.md](EVAL.md). The run report gives HTTP requests and DNS lookups separately; DNS lookups are used only to drop name-derived domains that do not exist before any HTTP request. Fetches to private, loopback, link-local or other non-public addresses are refused, including on redirects. Two runs of the same batch produce identical facts (Builderr runs each entry twice and compares).
 
