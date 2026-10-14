@@ -2713,7 +2713,9 @@ def other_company_names(pages: list[Page], words: list[str]) -> list[tuple[str, 
                 ctx_hit = _owner_statement(txt[max(0, m.start() - 60):m.start()], txt[m.start():m.end() + 10]) or \
                     bool(OWNER_AFTER.match(txt[m.end():m.end() + 30]))
                 mention = m.group(0).strip()
-                if _supplier_or_bio(txt[max(0, m.start() - 60):m.start()], txt[m.end():m.end() + 40]):
+                g1 = m.group(1)
+                lead = g1[:g1.rfind(run[0])] if run and run[0] in g1 else ""
+                if _supplier_or_bio(txt[max(0, m.start() - 60):m.start()] + lead, txt[m.end():m.end() + 40]):
                     side.add(key)
                 elif ctx_hit or is_title:
                     owned.add(key)

@@ -3336,3 +3336,11 @@ def test_owner_phrase_after_a_name_describes_that_company_not_the_site():
                                       "<p>Fjellbekk er Lyng Bil AS sin avdeling i Testby.</p>").encode(), "text/html"))
     names = {n[0]: n for n in W.other_company_names([page], ["fjellbekk", "trevare"])}
     assert not names["kvist invest"][4] and names["lyng bil"][4]
+
+
+def test_hosting_supplier_named_inside_the_matched_words_is_not_the_operator():
+    page = W.parse_page(Snapshot("https://fjellbekk.no/personvern", "https://fjellbekk.no/personvern", 200, "x",
+                                 html("<p>Opplysninger fra skjema lagres på servere som driftes av Kvist Media AS. For mer "
+                                      "informasjon, se deres erklæring.</p>").encode(), "text/html"))
+    n = [x for x in W.other_company_names([page], ["fjellbekk", "trevare"]) if x[0] == "kvist media"]
+    assert n and not n[0][4] and not n[0][2]
