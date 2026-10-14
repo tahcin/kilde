@@ -37,7 +37,7 @@ from ..http import Blocked, BudgetExhausted, Fetcher
 from ..spans import contains_core
 from ..templates import body_word_count, is_template_url, stub_posts, template_post
 from ..model import COMPANY_OWNED, CompanyContext, Evidence, Snapshot
-from ..words import generic_word, person_handle, regional_variant, social_tokens
+from ..words import generic_word, person_handle, person_word, regional_variant, social_tokens
 
 METHOD = "website_identity_v1"
 EXTRACT = "website_extract_v1"
@@ -172,9 +172,36 @@ def _translit(s: str) -> str:
     return unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()
 
 
+KEEP_LETTERS = set("æøåäöüÆØÅÄÖÜ")
+
+
+def fold_accents(s: str) -> str:
+    """Accented Latin letters as their base letter ('FERRÓ' as 'FERRO', 'é' as 'e'); the Norwegian æ, ø, å and
+    ä, ö, ü stay, since names and domains spell them in their own ways."""
+    out = []
+    for ch in s:
+        if ch.isascii() or ch in KEEP_LETTERS:
+            out.append(ch)
+            continue
+        base = unicodedata.normalize("NFKD", ch)[0]
+        out.append(base if base.isascii() and base.isalpha() else ch)
+    return "".join(out)
+
+
+# accented forms of each ASCII letter, so a folded name word still matches the accented spelling on a page
+_ACCENTED: dict[str, str] = {}
+for _cp in range(0xC0, 0x250):
+    _ch = chr(_cp)
+    if _ch in KEEP_LETTERS or not _ch.isalpha():
+        continue
+    _b = unicodedata.normalize("NFKD", _ch)[0]
+    if _b.isascii() and _b.isalpha():
+        _ACCENTED[_b.lower()] = _ACCENTED.get(_b.lower(), "") + _ch.lower() + _ch.upper()
+
+
 def name_words(name: str) -> list[str]:
     """Legal name as lower-case words, legal-form suffix removed, '&' as 'og'."""
-    s = name.lower().replace("&", " og ").replace("+", " og ")
+    s = fold_accents(name).lower().replace("&", " og ").replace("+", " og ")
     s = re.sub(r"\b(i likvidasjon|under avvikling|konkursbo)\b", " ", s)
     words = re.findall(r"[0-9a-zæøåäöüéèáà/]+", s)
     while words and words[-1] in LEGAL_SUFFIX:
@@ -316,7 +343,7 @@ def name_domains(name: str, e: dict | None = None) -> list[str]:
             if cand and cand not in seqs:
                 seqs.append(cand)
     # hyphenated words kept whole, with place words dropped ("SJØ-SPORT MANDAL" as sjo-sport)
-    raw = re.findall(r"[0-9a-zæøåäöüé]+(?:-[0-9a-zæøåäöüé]+)+", name.lower())
+    raw = re.findall(r"[0-9a-zæøåäöüé]+(?:-[0-9a-zæøåäöüé]+)+", fold_accents(name).lower())
     labels: list[str] = []
     for ws in seqs:
         for v in _ascii_variants(ws):
@@ -350,10 +377,13 @@ def name_domains(name: str, e: dict | None = None) -> list[str]:
     for lab in extra:
         if lab not in labels:
             labels.append(lab)
+    single = {v[0] for w in words for v in _ascii_variants([w])} | {_translit(w) for w in words}
     good = []
     for lab in labels:
         if not (3 <= len(lab) <= 40) or lab.isdigit() or lab in COMMON_LABELS or len(lab) < 4:
             continue
+        if lab in single and (person_word(lab) or generic_word(lab) or lab in GENERIC_WORDS or lab in places):
+            continue  # one common first name, surname, trade or place word ('maria.no', 'espen.no') names nobody
         if lab.replace("-", "") in places and "-" not in lab:
             continue
         good.append(lab)
@@ -378,8 +408,12 @@ def _word_rx(w: str) -> str:
         return r"(?:og|&|and|\+)"
     out = []
     for c in w:
-        out.append({"æ": "(?:æ|ae|a)", "ø": "(?:ø|oe|o)", "å": "(?:å|aa|a)", "ä": "(?:ä|ae|a)",
-                    "ö": "(?:ö|oe|o)", "a": "(?:a|å)", "o": "(?:o|ø)"}.get(c, re.escape(c)))
+        alt = {"æ": "(?:æ|ae|a)", "ø": "(?:ø|oe|o)", "å": "(?:å|aa|a)", "ä": "(?:ä|ae|a)",
+               "ö": "(?:ö|oe|o)", "a": "(?:a|å)", "o": "(?:o|ø)"}.get(c)
+        acc = _ACCENTED.get(c, "")
+        if acc:
+            alt = alt[:-1] + "|[" + acc + "])" if alt else f"(?:{re.escape(c)}|[{acc}])"
+        out.append(alt or re.escape(c))
     return "".join(out)
 
 
@@ -1326,7 +1360,7 @@ def _active(r: dict) -> bool:
 
 
 def _full_name_rx(name: str) -> re.Pattern | None:
-    ws = re.findall(r"[0-9a-zæøåäöüé]+", name.lower().replace("&", " og "))
+    ws = re.findall(r"[0-9a-zæøåäöüé]+", fold_accents(name).lower().replace("&", " og "))
     return name_regex(ws) if ws else None
 
 
@@ -1602,7 +1636,7 @@ def _shared_address_still_ours(v: Verdict, ctx: CompanyContext) -> bool:
     if form in LEGAL_UNIQUE_FORMS:
         return bool(_legal_span(v.pages, name, form))
     words = name_words(name)
-    full = re.findall(r"[0-9a-zæøåäöüé]+", name.lower().replace("&", " og "))
+    full = re.findall(r"[0-9a-zæøåäöüé]+", fold_accents(name).lower().replace("&", " og "))
     if len(full) <= len(words):
         return False  # no legal-form word in the registered name to show
     return any(_visible(_full_name_rx(name), p.text) for p in v.pages)
@@ -4983,6 +5017,14 @@ async def network_up(f: Fetcher) -> bool:
 
 
 TRIED_LIST = 10  # domains named in a website note
+GUESS_BUDGET = 6   # requests name guesses may use while stronger candidates still wait
+STRONG_EXTRA = 4   # extra per-company requests when the registry, its email domain or a seed gives a candidate
+
+
+def _strong_source(src: str) -> bool:
+    """A candidate with an identity signal: the registry website or email domain, or a seed other than a bare
+    domain-name match."""
+    return src in ("registry", "email") or (src.startswith("seed:") and src != "seed:commoncrawl_domain")
 
 
 def _tried_note(verdicts: list["Verdict"]) -> str:
@@ -5008,22 +5050,39 @@ async def fetch_website(f: Fetcher, ctx: CompanyContext) -> None:
     proven: Verdict | None = None
     budget_note = None
     search_failed = None
+    if any(_strong_source(src) for _d, src, _u in cands) and not ctx.facts.get("website_retry"):
+        sp.cap += STRONG_EXTRA  # decided from the candidates alone, so two runs give the same cap
+    guess_used = 0
+    deferred: list[tuple[str, str, str | None]] = []
     try:
         hosts = [h for d, _s, _u in cands[:24] for h in (d, "www." + d)]
         await asyncio.gather(*[_resolve(sp, f, h) for h in hosts])
-        for dom, src, start in cands:
+        order = list(cands)
+        i = 0
+        while i < len(order):
+            dom, src, start = order[i]
+            i += 1
             if not sp.can(2):
                 budget_note = "per-company request cap reached"
                 break
             if src.startswith("guess") and len([v for v in verdicts if v.source.startswith("guess")
                                                 and v.status not in ("no_dns", "duplicate")]) >= 10:
-                break
+                continue
+            if src.startswith("guess") and guess_used >= GUESS_BUDGET and \
+                    any(_strong_source(s2) for _d2, s2, _u2 in order[i:]) and (dom, src, start) not in deferred:
+                # name guesses have their own share of the cap while stronger candidates wait: they go last
+                deferred.append((dom, src, start))
+                order.append((dom, src, start))
+                continue
+            before_used = sp.used
             v = Verdict(dom, src)
             verdicts.append(v)
             if bare(dom) in done:
                 v.status = "duplicate"
                 continue
             await check_candidate(f, sp, ctx, v, done, registry_host, start)
+            if src.startswith("guess"):
+                guess_used += sp.used - before_used
             if v.transient and (v.status == "name_only" or (v.status == "proven" and v.method != "orgnr_on_page")):
                 # (a site that never shows our name is no closer to proof with one more page)
                 # a page of this site failed transiently: its verdict could differ on the next run, so the step
@@ -5071,8 +5130,9 @@ async def fetch_website(f: Fetcher, ctx: CompanyContext) -> None:
     except _RegistrySearchFailed as exc:
         search_failed = str(exc)
     finally:
+        seen_doms = {v.domain for v in verdicts}
         ctx.facts["website_candidates"] = [v.summary() for v in verdicts] + \
-            [{"domain": d, "source": s, "status": "not_checked"} for d, s, _ in cands[len(verdicts):]]
+            [{"domain": d, "source": s, "status": "not_checked"} for d, s, _ in cands if d not in seen_doms]
         ctx.facts["website_requests"] = sp.used
 
     if search_failed:
@@ -5085,7 +5145,20 @@ async def fetch_website(f: Fetcher, ctx: CompanyContext) -> None:
     if proven:
         ctx.module_states["website"] = "available"
         return
-    unchecked = cands[len(verdicts):] + [(v.domain, v.source, None) for v in verdicts if v.status == "skipped_budget"]
+    seen_doms = {v.domain for v in verdicts}
+    unchecked = [c for c in cands if c[0] not in seen_doms] + \
+        [(v.domain, v.source, None) for v in verdicts if v.status == "skipped_budget"]
+    weak_left = [d for d, src, _ in unchecked if not _strong_source(src)]
+    if budget_note == "per-company request cap reached" and unchecked and len(weak_left) == len(unchecked):
+        # Only name guesses and bare domain-name matches were left: they are guesses, not declarations, so the
+        # result is absence among what was checked, with the unchecked guesses named, not a failure.
+        budget_note = None
+        verdicts = [v for v in verdicts if v.status != "skipped_budget"]
+        weak_note = "not checked (name guesses only, per-company request cap reached): " + ", ".join(weak_left[:6]) + \
+            (f" and {len(weak_left) - 6} more" if len(weak_left) > 6 else "")
+        unchecked = []
+    else:
+        weak_note = ""
     run_short = f.budget.remaining_requests() <= RESERVE + 2 or f.budget.remaining_seconds() < 10
     # Weak candidates (domain-name matches from Common Crawl's host list) are hints, not declarations:
     # leaving them unchecked does not turn the result into a failure.
@@ -5160,9 +5233,14 @@ async def fetch_website(f: Fetcher, ctx: CompanyContext) -> None:
         note += f"; stopped early: {budget_note}"
     if tried:
         note += f"; {tried}"
+    if weak_note:
+        note += f"; {weak_note}"
     ambiguous = [v for v in verdicts if v.status in ("name_only", "related", "ambiguous")]
     looked = [v for v in verdicts if v.status not in ("no_dns", "duplicate")]
-    blocked = [v for v in verdicts if v.status == "blocked" and (v.source == "registry" or looked == [v])]
+    # robots.txt refusing a domain is reported only for a candidate with some identity signal (declared in the
+    # registry, or a seed); a guessed domain that refuses us is just a domain we could not read
+    blocked = [v for v in verdicts if v.status == "blocked" and (v.source == "registry" or (
+        looked == [v] and not v.source.startswith("guess")))]
     if ambiguous:
         names = ", ".join(f"{v.final_url or v.domain} ({v.status})" for v in ambiguous[:3])
         ctx.mark("official_website", SECTION, "ambiguous", note=f"{note}. Unproven candidates: {names}")

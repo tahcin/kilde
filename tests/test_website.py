@@ -1689,13 +1689,45 @@ def test_http_403_only_candidate_is_blocked():
     assert claims["official_website"].availability == "blocked"
 
 
-def test_cap_reached_with_unchecked_candidates_is_failed(monkeypatch):
+def test_cap_reached_with_only_name_guesses_unchecked_is_absence_with_note(monkeypatch):
     monkeypatch.setattr(W, "MAX_REQUESTS", 2)
-    pages = {"https://fjellbekktrevare.no/": (200, html("<h1>Kvist</h1>")),
-             "https://fjellbekk-trevare.no/": (200, html("<h1>Kvist</h1>"))}
+    pages = {"https://fjellbekktrevare.no/": (200, html("<h1>Kvist</h1>", title="Kvist")),
+             "https://fjellbekk-trevare.no/": (200, html("<h1>Kvist</h1>", title="Kvist"))}
     claims = run(FakeFetcher(pages), ctx_for())
+    assert claims["official_website"].availability == "not_available"
+    assert "not checked (name guesses only" in claims["official_website"].note
+
+
+def test_cap_reached_with_a_seed_unchecked_is_failed(monkeypatch):
+    monkeypatch.setattr(W, "MAX_REQUESTS", 2)
+    monkeypatch.setattr(W, "STRONG_EXTRA", 0)
+    monkeypatch.setattr(W, "website_seeds", lambda: {OURS: [{"domain": "kvistlyng.no", "sources": ["crawl_orgnr"]}]})
+    pages = {"https://fjellbekktrevare.no/": (200, html("<h1>Kvist</h1>", title="Kvist")),
+             "https://kvistlyng.no/": (200, html("<h1>Kvist</h1>", title="Kvist"))}
+    claims = run(FakeFetcher(pages), ctx_for(hjemmeside="fjellbekktrevare.no"))
     assert claims["official_website"].availability == "failed"
     assert claims["official_website"].note.startswith("budget_exhausted")
+
+
+def test_name_guesses_wait_for_a_seed_when_their_share_is_spent(monkeypatch):
+    """Guesses use at most GUESS_BUDGET requests while a seed with crawl proof still waits."""
+    monkeypatch.setattr(W, "GUESS_BUDGET", 2)
+    monkeypatch.setattr(W, "website_seeds", lambda: {OURS: [{"domain": "kvistlyng.no", "sources": ["crawl_orgnr"]}]})
+    page = html("<h1>Hei</h1>", title="Hei")
+    pages = {"https://fjellbekktrevare.no/": (200, page), "https://fjellbekktrevare.com/": (200, page),
+             "https://fjellbekk-trevare.no/": (200, page),
+             "https://kvistlyng.no/": (200, html(f"<footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>"))}
+    f = FakeFetcher(pages)
+    claims = run(f, ctx_for())
+    assert claims["official_website"].value == "kvistlyng.no"
+    assert "https://fjellbekk-trevare.no/" not in f.calls
+
+
+def test_blocked_name_guess_is_not_reported_as_blocked():
+    f = FakeFetcher({"https://fjellbekktrevare.no/": (200, "x")}, disallow={"https://fjellbekktrevare.no/"})
+    claims = run(f, ctx_for())
+    assert claims["official_website"].availability == "not_available"
+    assert "fjellbekktrevare.no (blocked)" in claims["official_website"].note
 
 
 def test_own_printed_orgnr_beats_sister_mentions_and_mail_services():
@@ -2962,7 +2994,8 @@ def test_budget_note_lists_domains_tried(monkeypatch):
                      "https://fjellbekktrevare.com/": (200, page), "https://fjellbekk-trevare.no/": (200, page)})
     claims = run(f, ctx_for(hjemmeside="fjellbekk.no"))
     note = claims["official_website"].note
-    assert note.startswith("budget_exhausted: not checked") and "domains tried: fjellbekk.no (no_match)" in note
+    assert claims["official_website"].availability == "not_available"
+    assert "domains tried: fjellbekk.no (no_match)" in note and "not checked (name guesses only" in note
 
 
 def test_rate_limited_proving_page_fails_the_step_and_the_retry_proves_it():
@@ -3196,3 +3229,17 @@ def test_regional_variant_handles():
     hs = ["equinor", "equinor_uk", "equinor_na", "equinorasa", "equinorcareers"]
     assert [h for h in hs if regional_variant(h, hs)] == ["equinor_uk", "equinor_na", "equinorcareers"]
     assert not regional_variant("fjellbekk", ["fjellbekk_uk"])
+
+
+def test_accented_letters_fold_in_names_and_still_match_the_page():
+    assert W.name_words("ANNETTE FERRÓ AS") == ["annette", "ferro"]
+    assert "annetteferro.no" in W.name_domains("ANNETTE FERRÓ AS")
+    assert W.name_regex(W.name_words("CAFÉ MÜLLER AS")).search("Velkommen til Café Müller")
+    assert W.name_words("BLÅBÆR ØST AS") == ["blåbær", "øst"]
+
+
+def test_single_first_name_surname_or_trade_word_is_never_guessed():
+    doms = W.name_domains("MARIA SCHEI BRUDESALONG AS")
+    assert not any(d.split(".")[0] in ("maria", "schei", "brudesalong") for d in doms)
+    assert W.name_domains("HAUGEN AS") == []
+    assert "sunwind.no" in W.name_domains("SUNWIND GYLLING AS")
