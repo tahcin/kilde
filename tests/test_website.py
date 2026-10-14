@@ -2889,3 +2889,20 @@ def test_phone_only_in_unnamed_header_is_not_proof():
     ctx = ctx_for(mobil="41000001")
     run(f, ctx)
     assert not [c for c in ctx.claims if c.field == "official_website" and c.availability == "available"]
+
+
+@pytest.mark.parametrize("written,ok", [("Lyngvegen 12B", True), ("Lyngvei 12 B", True), ("Lyngvn. 12B", True),
+                                        ("Lyngveien 120", False), ("Lyngsvingen 12B", False)])
+def test_street_suffix_spellings(written, ok):
+    body = f"<footer>Fjellbekk Trevare AS, {written}, 9999 Testby</footer>"
+    f = FakeFetcher({"https://fjellbekktrevare.no/": (200, html(body))})
+    ctx = ctx_for()
+    claims = run(f, ctx)
+    got = claims.get("official_website")
+    assert (got is not None and got.availability == "available" and got.match["method"] == "address_and_name") == ok
+
+
+def test_street_suffix_gate_forms():
+    rx = W._street_regex("Storgata 7")
+    assert all(rx.search(t) for t in ("Storgata 7", "Storgaten 7", "Storgate 7", "Storgt. 7"))
+    assert not rx.search("Storgata 71")

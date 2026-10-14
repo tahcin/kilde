@@ -647,13 +647,27 @@ def find_phone(page: Page, wanted: set[str], names: list[list[str]] | None = Non
     return None
 
 
+STREET_SUFFIX = (("vegen", "veien", "veg", "vei", "vn"), ("gata", "gaten", "gate", "gt"))
+
+
+def _street_word_rx(w: str) -> str:
+    """A street name word; its road or street suffix may be written in either written standard or short form
+    ('Vangsvegen' as 'Vangsveien', 'Storgata' as 'Storgaten' or 'Storgt.')."""
+    for forms in STREET_SUFFIX:
+        for suf in forms:
+            if w.endswith(suf) and len(w) > len(suf) + 2:
+                alts = "|".join(re.escape(x) + (r"\.?" if x in ("vn", "gt") else "") for x in forms)
+                return _word_rx(w[:-len(suf)]) + "(?:" + alts + ")"
+    return _word_rx(w)
+
+
 def _street_regex(street: str) -> re.Pattern | None:
     street = street.strip()
     m = re.match(r"^(.*?)[\s,]*(\d+)\s*([A-Za-z])?$", street)
     if not m or len(m.group(1)) < 3:
         return None  # need a street name plus a house number
     words = re.findall(r"[0-9A-Za-zÆØÅæøåÄÖäöüé'\-]+", m.group(1))
-    body = r"[\s.\-]*".join(_word_rx(w.lower()) for w in words)
+    body = r"[\s.\-]*".join(_street_word_rx(w.lower()) for w in words)
     num = m.group(2) + (r"\s?" + re.escape(m.group(3)) if m.group(3) else r"(?![0-9])")
     return re.compile(r"(?<![0-9a-zæøå])" + body + r"[\s.,]*" + num, re.I)
 
