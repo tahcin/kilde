@@ -2770,14 +2770,20 @@ def news_items(page: Page, domain: str, scope: Scope, limit: int = 5) -> list[tu
             continue
         if NEWS_PATH.fullmatch(pu.path.rstrip("/") + "/") or re.search(r"/(page|side|tag|kategori|category)/", pu.path):
             continue
+        # The item block is the nearest element holding the link and a date: the link itself first (a card
+        # whose <a> wraps heading and date), then up to five ancestors. A block that also holds another
+        # post's card (a link of its own with a heading or a date) is a list of items: the date and title
+        # there may belong to the neighbour, so the item is dropped rather than stitched together.
         block, found = a, None
-        for _ in range(5):
-            if block.parent is None:
-                break
-            block = block.parent
+        for level in range(6):
+            if level:
+                if block.parent is None:
+                    break
+                block = block.parent
             txt = block.get_text(" ", strip=True)
             links = {urljoin(page.url, x["href"]).split("#")[0].split("?")[0] for x in block.find_all("a", href=True)}
-            if len(txt) > 700 or len({x for x in links if same_site(host_of(x), domain)} - {u}) > 1:
+            if len(txt) > 700 or len({x for x in links if same_site(host_of(x), domain)} - {u}) > 1 \
+                    or _holds_other_item(page, block, u, domain, slash):
                 found = None
                 break  # the block holds more than one item: a date here may belong to another post
             found = find_date(block, slash)
@@ -2787,10 +2793,11 @@ def news_items(page: Page, domain: str, scope: Scope, limit: int = 5) -> list[tu
             continue
         same = [x for x in page.soup.find_all("a", href=True)
                 if urljoin(page.url, x["href"].strip()).split("#")[0].split("?")[0] == u]
-        if any(block not in x.parents for x in same):
+        if any(x is not block and block not in x.parents for x in same):
             continue  # linked from several items: a category or tag, not a post
         head = block.find(re.compile(r"^h[1-5]$"))
-        anchors = [x for x in block.find_all("a", href=True) if same_site(host_of(urljoin(page.url, x["href"])), domain)]
+        anchors = ([block] if block.name == "a" else []) + \
+            [x for x in block.find_all("a", href=True) if same_site(host_of(urljoin(page.url, x["href"])), domain)]
         main = (head.find("a", href=True) if head else None) or max(anchors, key=lambda x: len(x.get_text(strip=True)))
         if urljoin(page.url, main["href"].strip()).split("#")[0].split("?")[0] != u:
             continue  # a tag, category or author link inside someone else's item block
@@ -2803,6 +2810,21 @@ def news_items(page: Page, domain: str, scope: Scope, limit: int = 5) -> list[tu
         items[u] = ({"title": title, "url": u, "date": found[0], "date_text": found[1]}, span or found[1])
     ranked = sorted(items.values(), key=lambda x: x[0]["date"], reverse=True)
     return ranked[:limit]
+
+
+def _holds_other_item(page: Page, block, u: str, domain: str, slash: str | None) -> bool:
+    """True when `block` contains a link to another page of the site that heads an item of its own: the link
+    wraps a heading or a date, or sits in a heading. Then the block is a list, and its first heading or date
+    may not be ours."""
+    heading = re.compile(r"^h[1-6]$")
+    for x in block.find_all("a", href=True):
+        v = urljoin(page.url, x["href"].strip()).split("#")[0].split("?")[0]
+        if v == u or not same_site(host_of(v), domain):
+            continue
+        if x.find(heading) is not None or x.find("time") is not None or find_date(x, slash) \
+                or x.find_parent(heading) is not None:
+            return True
+    return False
 
 
 def news_listing_link(pages: list[Page], domain: str) -> str | None:

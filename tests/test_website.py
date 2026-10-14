@@ -2382,3 +2382,53 @@ def test_failed_sister_search_fails_the_step(monkeypatch):
     ctx = ctx_for(hjemmeside="fjellbekk.no")
     claims = run(f, ctx)
     assert claims["official_website"].availability == "failed" and ctx.module_states["website"] == "timeout"
+
+
+def _card(slug: str, title: str, iso: str, shown: str) -> str:
+    """One item card shaped like a CMS article list: the <a> wraps image, heading, summary and date."""
+    return (f'<a href="/aktuelt/{slug}" class="flow list-item"><img src="/img/{slug}.jpg" alt="">'
+            f'<div class="kicker"><div class="kicker--text"></div><h2 class="heading-md">{title}</h2></div>'
+            f'<div class="article-summary">Kort ingress om {title.lower()} fra verkstedet.</div>'
+            f'<div class="avatar"><div class="avatar--name">Ola Testesen</div><div class="avatar--divider">|</div>'
+            f'<time class="avatar--date" datetime="{iso}">{shown}</time></div></a>')
+
+
+def test_card_listing_ties_title_date_and_link_to_the_same_item_and_reads_page_one():
+    """Regression: on a card list the date and title of one card were paired with the next card's link, and
+    only page 2 (two cards) yielded items while the newer posts on page 1 were missed."""
+    body = f'<a href="/aktuelt">Aktuelt</a><footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>'
+    nav = ('<nav aria-label="Søkeresultat navigasjon" class="pagination"><ul>'
+           '<li><a rel="prev" href="/aktuelt?page={p}"><span></span></a></li>'
+           '<li><a rel="next" href="/aktuelt?page={n}"><span></span></a></li></ul></nav>')
+    page1 = html('<main><h1>Aktuelt</h1><div class="article-list-items">'
+                 + _card("ny-selger", "Ny selger i teamet vårt", "2026-09-09T16:30:25.4448Z", "9. september 2026")
+                 + _card("sommerapent", "Sommeråpent i butikken", "2026-06-03T11:40:19.7892Z", "3. juni 2026")
+                 + _card("ny-maskin", "Ny maskin på verkstedet", "2026-03-18T06:07:10.7479Z", "18. mars 2026")
+                 + '</div>' + nav.format(p=1, n=2) + '</main>')
+    page2 = html('<main><div class="article-list-items">'
+                 + _card("sterk-partner", "Sterk partner for fremtiden", "2025-02-25T07:36:46.1099Z", "25. februar 2025")
+                 + _card("presisjon", "Presisjon som grunnlag", "2025-03-05T19:54:20.4817Z", "5. mars 2025")
+                 + '</div>' + nav.format(p=1, n=3) + '</main>')
+    f = _site({"https://fjellbekk.no/aktuelt": (200, page1), "https://fjellbekk.no/aktuelt?page=2": (200, page2)}, body=body)
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(f, ctx)
+    news = [c for c in ctx.claims if c.field == "dated_news"]
+    got = {c.match["detail"].split(" ")[0].rsplit("/", 1)[-1]: c.value for c in news}
+    assert got == {"ny-selger": "Ny selger i teamet vårt (2026-09-09)", "sommerapent": "Sommeråpent i butikken (2026-06-03)",
+                   "ny-maskin": "Ny maskin på verkstedet (2026-03-18)",
+                   "presisjon": "Presisjon som grunnlag (2025-03-05)", "sterk-partner": "Sterk partner for fremtiden (2025-02-25)"}
+    assert f.calls.index("https://fjellbekk.no/aktuelt") < f.calls.index("https://fjellbekk.no/aktuelt?page=2")
+    for c in news:  # the quoted title and date are the claimed item's own
+        spans = " ".join(e.claim_span for e in ctx.evidence if e.id in c.evidence_ids)
+        assert c.value.rsplit(" (", 1)[0] in spans or c.value[-11:-1] in spans
+
+
+def test_list_without_item_containers_drops_dates_it_cannot_tie_to_one_link():
+    """Two headed links share one block with a single date: the date could be either post's, so neither gets it."""
+    body = f'<a href="/nyheter">Nyheter</a><footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>'
+    listing = html('<main><div class="list"><h3><a href="/nyheter/a">Første sak om verkstedet</a></h3>'
+                   '<h3><a href="/nyheter/b">Andre sak om verkstedet</a></h3><time datetime="2026-05-02">2. mai 2026</time>'
+                   '</div></main>')
+    page = W.parse_page(Snapshot(url="https://fjellbekk.no/nyheter", final_url="https://fjellbekk.no/nyheter", status=200,
+                                 retrieved_at=utc_now(), content=listing.encode(), content_type="text/html"))
+    assert W.news_items(page, "fjellbekk.no", W.Scope(OURS, ["fjellbekk"])) == []
