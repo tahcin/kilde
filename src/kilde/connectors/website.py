@@ -1882,12 +1882,23 @@ def candidates(ctx: CompanyContext) -> list[tuple[str, str, str | None]]:
         # then open-data declarations and two-signal crawl matches, then bare domain-name matches
         src = set(x.get("sources") or [])
         return min((SEED_STRENGTH.get(s, 2) for s in src), default=3), x.get("domain") or ""
-    for seed in sorted(website_seeds().get(ctx.org) or [], key=seed_rank):
-        if seed.get("domain"):
-            add(seed["domain"], "seed:" + "+".join(sorted(seed.get("sources") or [])))
+    # Seeds whose domain carries our name come first, then the whole-name guesses, then seeds on other domains
+    # (a brand, product or campaign site that prints our org number): when several sites are ours, the one named
+    # after the company is the one published (betonmast.no before flexiwood.no).
+    seeds = [x for x in sorted(website_seeds().get(ctx.org) or [], key=seed_rank) if x.get("domain")]
+    named = [x for x in seeds if _domain_has_name(x["domain"], e)]
+    for seed in named:
+        add(seed["domain"], "seed:" + "+".join(sorted(seed.get("sources") or [])))
     # a legal name that is itself a domain (INNREGISTRERING.NO AS)
     for dom in re.findall(r"(?i)\b([a-z0-9æøå][a-z0-9æøå\-]*\.(?:no|com|net|org|as|io|nu|se|dk))\b", e.get("navn") or ""):
         add(_translit(dom), "guess")
+    whole = {re.sub(r"[^a-z0-9]", "", "".join(v)) for v in _ascii_variants(name_words(e.get("navn") or ""))}
+    for d in name_domains(e.get("navn") or "", e):
+        if d.split(".")[0] in whole and d.rsplit(".", 1)[-1] in ("no", "com"):
+            add(d, "guess")
+    for seed in seeds:
+        if seed not in named:
+            add(seed["domain"], "seed:" + "+".join(sorted(seed.get("sources") or [])))
     for d in name_domains(e.get("navn") or "", e):
         full = re.sub(r"[^a-z0-9]", "", _translit(" ".join(name_words(e.get("navn") or ""))))
         lab = d.split(".")[0]

@@ -2834,3 +2834,15 @@ def test_legal_form_with_capital_a_right_after_the_whole_name():
     for text in ("Moi Rør as part of the group", "Moi Rør, As we said", "Moi As", "Moi Rør A/S", "as Moi Rør"):
         assert not rx.search(text), text
     assert W._legal_name_rx("SOLVANG ASA", "ASA").search("Solvang Asa")
+
+
+def test_domain_named_after_the_company_is_tried_before_a_brand_site(monkeypatch):
+    """Betonmast/Puer Fons shape: an unnamed brand site printing our org number sorted before our own domain."""
+    seeds = {OURS: [{"domain": "brandsite.no", "sources": ["crawl_orgnr"]},
+                    {"domain": "fjellbekktrevare.com", "sources": ["crawl_orgnr"]}]}
+    monkeypatch.setattr(W, "website_seeds", lambda: seeds)
+    doms = [d for d, _s, _u in W.candidates(ctx_for())]
+    assert doms.index("fjellbekktrevare.com") < doms.index("fjellbekktrevare.no") < doms.index("brandsite.no")
+    seeds[OURS] = [{"domain": "brandsite.no", "sources": ["crawl_orgnr"]}]
+    doms = [d for d, _s, _u in W.candidates(ctx_for())]
+    assert doms.index("fjellbekktrevare.no") < doms.index("brandsite.no")
