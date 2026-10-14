@@ -220,12 +220,14 @@ async def fetch_roles(f: Fetcher, ctx: CompanyContext) -> None:
     data = snap.json()
     m = {"method": "registry_endpoint", "detail": f"Roles registered on {ctx.org}"}
     found = set()
+    filtered: dict[str, set[str]] = {}  # role code -> why a registered holder was not published
     for group in data.get("rollegrupper", []):
         changed = group.get("sistEndret")
         for role in group.get("roller", []):
-            if role.get("fratraadt") or role.get("avregistrert"):
-                continue
             code = (role.get("type") or {}).get("kode")
+            if role.get("fratraadt") or role.get("avregistrert"):
+                filtered.setdefault(code, set()).add("resigned")
+                continue
             field = ROLE_FIELDS.get(code, "other_role")
             holder: dict[str, Any] = {"role": (role.get("type") or {}).get("beskrivelse"), "role_code": code,
                                       "group": (group.get("type") or {}).get("beskrivelse")}
@@ -233,6 +235,7 @@ async def fetch_roles(f: Fetcher, ctx: CompanyContext) -> None:
                 n = role["person"].get("navn") or {}
                 holder["name"] = " ".join(x for x in (n.get("fornavn"), n.get("mellomnavn"), n.get("etternavn")) if x)
                 if role["person"].get("erDoed"):
+                    filtered.setdefault(code, set()).add("deceased")
                     continue
                 span = {"navn": n, "type": role.get("type")}  # birth date deliberately left out of the span
             elif role.get("enhet"):
@@ -248,9 +251,26 @@ async def fetch_roles(f: Fetcher, ctx: CompanyContext) -> None:
             found.add(field)
     ctx.facts["role_names"] = [c.value.get("name") for c in ctx.claims if c.section == "leadership" and c.availability == "available"]
     if "ceo" not in found:
-        ev = ctx.add_evidence(snap, source_class=OFFICIAL_REGISTRY, method="brreg_roles_v1", licence=LICENCE,
-                              span="No DAGL role in rollegrupper")
-        ctx.mark("ceo", "leadership", "not_available", ev, note="No general manager registered (not required for every company form)")
+        why = filtered.get("DAGL") or set()
+        if "deceased" in why and '"erDoed":true' in snap.text().replace(" ", ""):
+            # the register still lists a general manager, marked deceased: not published (as for every role
+            # holder marked deceased), and the reason says so instead of claiming no role is registered
+            ev = ctx.add_evidence(snap, source_class=OFFICIAL_REGISTRY, method="brreg_roles_v1", licence=LICENCE,
+                                  span='"erDoed":true')
+            ctx.mark("ceo", "leadership", "not_available", ev,
+                     note="The registered general manager (DAGL) is marked deceased in the register (erDoed); "
+                          "the name is withheld and no other general manager is registered")
+        elif "resigned" in why:
+            ev = ctx.add_evidence(snap, source_class=OFFICIAL_REGISTRY, method="brreg_roles_v1", licence=LICENCE,
+                                  span='"fratraadt":true')
+            ctx.mark("ceo", "leadership", "not_available", ev,
+                     note="The register lists only a general manager (DAGL) who has resigned (fratraadt); "
+                          "no current general manager is registered")
+        else:
+            ev = ctx.add_evidence(snap, source_class=OFFICIAL_REGISTRY, method="brreg_roles_v1", licence=LICENCE,
+                                  span="No DAGL role in rollegrupper")
+            ctx.mark("ceo", "leadership", "not_available", ev,
+                     note="No general manager registered (not required for every company form)")
     ctx.module_states["roles"] = "available"
 
 
@@ -278,6 +298,13 @@ async def fetch_subunits(f: Fetcher, ctx: CompanyContext) -> None:
     ctx.facts["workplaces"] = [{"organisasjonsnummer": u.get("organisasjonsnummer"), "navn": u.get("navn"),
                                 "beliggenhetsadresse": u.get("beliggenhetsadresse")}
                                for u in items if not u.get("nedleggelsesdato") and u.get("navn")]
+    if all(u.get("nedleggelsesdato") for u in items):
+        ev = ctx.add_evidence(snap, source_class=OFFICIAL_REGISTRY, method="brreg_subunits_v1", licence=LICENCE,
+                              span=span_of(items[0], "organisasjonsnummer", "nedleggelsesdato"))
+        ctx.mark("registered_workplace", "locations", "not_available", ev,
+                 note=f"The registry lists {len(items)} sub-unit{'s' if len(items) != 1 else ''}, all closed "
+                      "(nedleggelsesdato set); no active workplace")
+        return
     for u in items:
         if u.get("nedleggelsesdato"):
             continue

@@ -388,3 +388,45 @@ def test_registry_declared_social_must_be_a_handle(site, expected):
     ctx = CompanyContext(ORG)
     brreg.emit_entity_claims(ctx, snap, e)
     assert [str(c.value) for c in ctx.claims_for("social_profile")] == expected
+
+
+class _OneSnap:
+    def __init__(self, body: dict, status: int = 200):
+        self.body, self.status = body, status
+
+    async def get(self, url, *, headers=None, robots=False, cacheable=True, reserve=0):
+        return Snapshot(url=url, final_url=url, status=self.status, retrieved_at="2026-10-13T00:00:00Z",
+                        content=json.dumps(self.body, separators=(",", ":")).encode(), content_type="application/json")
+
+
+def _role(code, desc, fornavn, *, dead=False, resigned=False):
+    r = {"type": {"kode": code, "beskrivelse": desc}, "person": {"navn": {"fornavn": fornavn, "etternavn": "Testesen"},
+                                                                 "erDoed": dead}, "fratraadt": resigned}
+    return r
+
+
+@pytest.mark.parametrize("roles,note", [
+    ([_role("DAGL", "Daglig leder", "Kari", dead=True), _role("LEDE", "Styrets leder", "Ola")],
+     "marked deceased in the register"),
+    ([_role("DAGL", "Daglig leder", "Kari", resigned=True), _role("LEDE", "Styrets leder", "Ola")], "has resigned"),
+    ([_role("LEDE", "Styrets leder", "Ola")], "No general manager registered"),
+])
+def test_ceo_reason_says_what_the_register_holds(roles, note):
+    from kilde.connectors import brreg
+    body = {"rollegrupper": [{"type": {"beskrivelse": "Roller"}, "roller": roles}]}
+    ctx = CompanyContext(ORG)
+    run(brreg.fetch_roles(_OneSnap(body), ctx))
+    ceo = next(c for c in ctx.claims if c.field == "ceo")
+    assert ceo.availability == "not_available" and note in ceo.note
+    assert "Kari" not in json.dumps([c.to_json() for c in ctx.claims] + [e.to_json() for e in ctx.evidence])
+    assert [c.value["name"] for c in ctx.claims_for("board_chair")] == ["Ola Testesen"]
+
+
+def test_all_closed_subunits_are_named_as_such():
+    from kilde.connectors import brreg
+    body = {"_embedded": {"underenheter": [{"organisasjonsnummer": "999000011", "navn": "X", "nedleggelsesdato": "2020-01-01"}]},
+            "page": {"totalElements": 1}}
+    ctx = CompanyContext(ORG)
+    run(brreg.fetch_subunits(_OneSnap(body), ctx))
+    wp = next(c for c in ctx.claims if c.field == "registered_workplace")
+    assert wp.availability == "not_available" and "all closed" in wp.note
