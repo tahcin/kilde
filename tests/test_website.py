@@ -3434,3 +3434,9 @@ def test_invoice_scanning_inboxes_and_clients_are_not_other_presenters():
                                       "<footer>© 2026 Fjellbekk Trevare AS</footer>").encode(), "text/html"))
     n = {x[0]: x for x in W.other_company_names([page], ["fjellbekk", "trevare"])}
     assert not n["kvist strom"][2] and not n["kvist strom"][4]
+
+
+def test_four_letter_acronym_is_guessed_alone_after_the_whole_name():
+    doms = W.name_domains("TTSS BYGGSERVICE AS")
+    assert doms.index("ttss.no") > doms.index("ttssbyggservice.com") and "ttss.com" in doms
+    assert "berg.no" not in W.name_domains("BERG BYGG AS") and "lyng.no" not in W.name_domains("LYNG MALING AS")

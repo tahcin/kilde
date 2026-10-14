@@ -363,7 +363,9 @@ def name_domains(name: str, e: dict | None = None) -> list[str]:
     distinct = [w for w in plain if w not in GENERIC_WORDS and _translit(w) not in places]
     first_alone = None
     if len(plain) > 1 and distinct and distinct[0] not in COMMON_LABELS and (
-            len(distinct[0]) >= 5 or (len(distinct[0]) >= 4 and re.search(r"\d", distinct[0]))):
+            len(distinct[0]) >= 5 or (len(distinct[0]) >= 4 and (re.search(r"\d", distinct[0]) or (
+                distinct[0].isalpha() and not person_word(distinct[0]) and not generic_word(distinct[0])
+                and distinct[0] == distinct[0].lower() and not re.search(r"[aeiouyæøå]", distinct[0][1:]))))):
         first_alone = _ascii_variants([distinct[0]])[0][0]  # SUNWIND GYLLING as sunwind; 2TAL ... as 2tal
         extra.append(first_alone)
         SHORT_FORMS.add(first_alone)
