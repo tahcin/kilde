@@ -318,12 +318,12 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
                       if c is max((x for x in inspections if (x.value or {}).get("place") == (c.value or {}).get("place")),
                                   key=lambda x: x.as_of or ""))
         latest = inspections[0]
-        n_places, _m = ctx.source_total("food_inspection", len(places))
+        n_objects, _m = ctx.source_total("food_inspection", len(inspections))  # inspected places, one claim each
         where = ("its premises" if len(places) == 1 else str(len(places)) + " of its premises")
-        if n_places > len(places):
-            where = f"the {len(places)} most recently inspected of its {n_places} inspected premises"
+        capped = (f" (the register has {n_objects} inspected places for it; the {len(inspections)} most recently "
+                  f"inspected are shown)") if n_objects > len(inspections) else ""
         say(f"Mattilsynet's Smilefjes register lists {on_file} food safety inspection{'s' if on_file != 1 else ''} at "
-            f"{where}; the latest, on {latest.as_of}, found: {(latest.value or {}).get('result', 'see source')}.",
+            f"{where}{capped}; the latest, on {latest.as_of}, found: {(latest.value or {}).get('result', 'see source')}.",
             *inspections[:3])
     approval = first(ctx, "approval_sentral_godkjenning")
     if approval:

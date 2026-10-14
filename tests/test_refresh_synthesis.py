@@ -131,3 +131,16 @@ def test_capped_counts_say_the_source_total():
            "are shown." in summarise(ctx3, [])["text"]
     ctx4 = build("Kari Testesen", ["a"])  # no cap: the plain count
     assert "NAV lists 1 active job ad with its organisation number" in summarise(ctx4, [])["text"]
+
+
+def test_smilefjes_total_counts_places_not_a_cap_when_all_are_shown():
+    ctx = build("Kari Testesen", [])
+    ev = ctx.evidence[0]
+    for obj in ("a", "b"):  # two inspected places under one sub-unit number, both shown
+        ctx.add_claim("food_inspection", "activity", {"place": "Kafe", "place_organisation_number": "999000011",
+                                                      "inspections_on_file": 3, "result": "ok"}, ev, as_of=f"2026-0{1 + (obj == 'b')}-01")
+    ctx.set_total("food_inspection", 2)
+    text = summarise(ctx, [])["text"]
+    assert "inspected are shown" not in text and "at its premises" in text
+    ctx.set_total("food_inspection", 7)
+    assert "the register has 7 inspected places for it; the 2 most recently inspected are shown" in summarise(ctx, [])["text"]
