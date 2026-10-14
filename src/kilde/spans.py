@@ -39,7 +39,7 @@ def _value_pattern(v: Any) -> str:
                 in_str = True
                 out.append('"')
             elif ch in "{}[],:":
-                out.append(re.escape(ch) + r"\s*")
+                out.append(r"\s*" + re.escape(ch) + r"\s*")
             else:
                 out.append(re.escape(ch))
         return "".join(out)
@@ -75,14 +75,25 @@ def _objects(raw: str) -> list[tuple[int, int]]:
     return spans
 
 
-def region(raw: str, anchor: tuple[str, Any] | None) -> tuple[int, int]:
+def region(raw: str, anchor: tuple | None) -> tuple[int, int]:
+    """The smallest JSON object holding the anchor pair. An anchor may also be a tuple of pairs, for records
+    whose key repeats in the response (a company listed several times in a group tree): the smallest
+    object that holds a match of every pair, so the span quotes that record and not the first namesake."""
     if not anchor:
         return 0, len(raw)
-    m = pair_pattern(*anchor).search(raw)
-    if not m:
+    pairs = list(anchor) if anchor and isinstance(anchor[0], (tuple, list)) else [anchor]
+    hits = [[m.span() for m in pair_pattern(*p).finditer(raw)] for p in pairs]
+    if not hits[0]:
         return 0, len(raw)
-    containing = [(s, e) for s, e in _objects(raw) if s <= m.start() and e >= m.end()]
-    return min(containing, key=lambda x: x[1] - x[0]) if containing else (0, len(raw))
+    if len(pairs) == 1:
+        s0, e0 = hits[0][0]
+        containing = [(s, e) for s, e in _objects(raw) if s <= s0 and e >= e0]
+        return min(containing, key=lambda x: x[1] - x[0]) if containing else (0, len(raw))
+    if not all(hits):
+        return 0, len(raw)
+    good = [(s, e) for s, e in _objects(raw)
+            if all(any(s <= a and b <= e for a, b in h) for h in hits)]
+    return min(good, key=lambda x: (x[1] - x[0], x[0])) if good else (0, len(raw))
 
 
 def _pairs_from(span_obj: Any) -> list[tuple[str, Any]]:
