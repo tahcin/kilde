@@ -426,9 +426,11 @@ def bulk_identity(ctx: CompanyContext, path: str) -> None:
 
 
 def _maybe_licensed(reg: dict) -> bool:
-    """Finanstilsynet licences: finance, insurance, accounting, auditing, real-estate brokerage, debt collection."""
+    """Finanstilsynet licences: finance, insurance, accounting, auditing, real-estate brokerage, debt collection,
+    and the trades that commonly act as credit or insurance agents (motor vehicle trade, travel agencies)."""
     codes = [(reg.get(k) or {}).get("kode", "") for k in ("naeringskode1", "naeringskode2", "naeringskode3")]
-    return any(c.startswith(("64", "65", "66", "68.3", "69.2", "82.91")) for c in codes)
+    return any(c.startswith(("64", "65", "66", "68.3", "69.2", "82.91", "45.1", "45.4", "47.81", "47.82", "79."))
+               for c in codes)
 
 
 def section_state(ctx: CompanyContext, section: str) -> str:

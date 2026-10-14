@@ -430,3 +430,10 @@ def test_all_closed_subunits_are_named_as_such():
     run(brreg.fetch_subunits(_OneSnap(body), ctx))
     wp = next(c for c in ctx.claims if c.field == "registered_workplace")
     assert wp.availability == "not_available" and "all closed" in wp.note
+
+
+def test_motor_vehicle_dealers_are_checked_for_finanstilsynet_licences():
+    from kilde.pipeline import _maybe_licensed
+    assert _maybe_licensed({"naeringskode1": {"kode": "47.810"}})
+    assert _maybe_licensed({"naeringskode1": {"kode": "45.111"}})
+    assert not _maybe_licensed({"naeringskode1": {"kode": "41.200"}})
