@@ -49,3 +49,37 @@ def test_retry_after_header_forms():
 def test_page_byte_cap_leaves_room_for_inline_images():
     from kilde import http
     assert http.MAX_BYTES >= 6_000_000
+
+
+def _redirecting(robots_b: str) -> Fetcher:
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/robots.txt":
+            return httpx.Response(200, text=robots_b if req.url.host == "other.no" else "")
+        if req.url.host == "fjellbekk.no":
+            return httpx.Response(301, headers={"location": "https://other.no/private/page"})
+        return httpx.Response(200, text="<html>ok</html>", headers={"content-type": "text/html"})
+    f = Fetcher(Budget(50, 60))
+    f.client = httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=True,
+                                 event_hooks={"request": [f._guard_robots]})
+    return f
+
+
+def test_redirect_target_must_be_allowed_by_its_own_robots_txt():
+    f = _redirecting("User-agent: *\nDisallow: /private/\n")
+    with pytest.raises(Blocked):
+        asyncio.run(f.get("https://fjellbekk.no/", robots=True))
+    f = _redirecting("")
+    assert asyncio.run(f.get("https://fjellbekk.no/", robots=True)).status == 200
+
+
+def test_unreadable_robots_txt_is_not_a_disallow():
+    from kilde.http import RobotsUnreachable
+
+    def handler(req: httpx.Request) -> httpx.Response:
+        if req.url.path == "/robots.txt":
+            raise httpx.ConnectError("certificate has expired")
+        return httpx.Response(200, text="ok")
+    f = Fetcher(Budget(50, 60))
+    f.client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    with pytest.raises(RobotsUnreachable):
+        asyncio.run(f.get("https://fjellbekk.no/", robots=True))

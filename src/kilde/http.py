@@ -12,6 +12,8 @@ outbound requests and keep their original retrieval time.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import contextvars
 import hashlib
 import ipaddress
 import json
@@ -67,6 +69,15 @@ class Blocked(Exception):
     """robots.txt disallows the path."""
 
 
+class RobotsUnreachable(Blocked):
+    """robots.txt could not be read (5xx, timeout, TLS or connection error): RFC 9309 says do not crawl now,
+    which is a transient failure, not a disallow."""
+
+
+# set while a robots-respecting fetch runs: every redirect hop it follows must be allowed too
+_ROBOTS_FETCH: contextvars.ContextVar[bool] = contextvars.ContextVar("kilde_robots_fetch", default=False)
+
+
 class Budget:
     def __init__(self, max_requests: int, seconds: float):
         self.max_requests = max_requests
@@ -112,6 +123,11 @@ def retry_after(value: str | None) -> float:
     return max(0.0, min(secs, RETRY_AFTER_MAX))
 
 
+def _origin(url: str) -> str:
+    p = urlsplit(url)
+    return f"{p.scheme}://{p.netloc}"
+
+
 class Fetcher:
     def __init__(self, budget: Budget, *, per_host: int = 2, total: int = 96, timeout: float = 15.0,
                  cache_dir: str | None = None):
@@ -122,7 +138,7 @@ class Fetcher:
             follow_redirects=True,
             max_redirects=6,
             limits=httpx.Limits(max_connections=total, max_keepalive_connections=total),
-            event_hooks={"request": [self._guard_address]},
+            event_hooks={"request": [self._guard_address, self._guard_robots]},
         )
         self._addr_ok: dict[str, bool] = {}
         self.total = asyncio.Semaphore(total)
@@ -167,6 +183,17 @@ class Fetcher:
         if not ok:
             raise UnsafeAddress(f"refusing non-public address for {host}")
 
+    async def _guard_robots(self, request: httpx.Request) -> None:
+        """A fetch that obeys robots.txt obeys it on every redirect hop: a redirect to another host (or another
+        path) is followed only when that host's robots.txt allows it."""
+        if not _ROBOTS_FETCH.get() or request.url.path == "/robots.txt":
+            return
+        url = str(request.url)
+        if not await self.allowed(url, nested=True):
+            if self.robots.get(_origin(url)) is None:
+                raise RobotsUnreachable(f"robots.txt of {_origin(url)} could not be read")
+            raise Blocked(f"robots.txt disallows {url} (redirect target)")
+
     async def close(self) -> None:
         await self.client.aclose()
 
@@ -200,7 +227,7 @@ class Fetcher:
                                  "content_type": snap.content_type, "redirects": snap.redirects}))
 
     # Robots -------------------------------------------------------------
-    async def allowed(self, url: str) -> bool:
+    async def allowed(self, url: str, nested: bool = False) -> bool:
         """RFC 9309 2.3.1.3 and 2.3.1.4: a 4xx robots.txt (401 and 403 included: a static host such as S3 or
         CloudFront answers 403 for a missing file) means no rules, so everything is allowed; a 5xx or an
         unreachable robots.txt means complete disallow. A site that refuses our crawler outright answers 403 on
@@ -211,7 +238,7 @@ class Fetcher:
             if origin not in self.robots:
                 rp: Protego | None
                 try:
-                    snap = await self._raw_get(origin + "/robots.txt", None, cacheable=True)
+                    snap = await self._raw_get(origin + "/robots.txt", None, cacheable=True, nested=nested)
                     if snap.status >= 500:
                         rp = None
                     elif snap.status >= 400:
@@ -232,17 +259,34 @@ class Fetcher:
     async def get(self, url: str, *, headers: dict | None = None, robots: bool = False,
                   cacheable: bool = True, reserve: int = 0) -> Snapshot:
         if robots and not await self.allowed(url):
+            if self.robots.get(_origin(url)) is None:
+                raise RobotsUnreachable(f"robots.txt of {_origin(url)} could not be read")
             raise Blocked(f"robots.txt disallows {url}")
-        return await self._raw_get(url, headers, cacheable=cacheable, reserve=reserve)
+        if not robots:
+            return await self._raw_get(url, headers, cacheable=cacheable, reserve=reserve)
+        token = _ROBOTS_FETCH.set(True)
+        try:
+            snap = await self._raw_get(url, headers, cacheable=cacheable, reserve=reserve)
+        finally:
+            _ROBOTS_FETCH.reset(token)
+        for hop in snap.redirects[1:] + ([snap.final_url] if snap.final_url != url else []):
+            if not await self.allowed(hop):  # a cached response is checked here, after the fact
+                if self.robots.get(_origin(hop)) is None:
+                    raise RobotsUnreachable(f"robots.txt of {_origin(hop)} could not be read")
+                raise Blocked(f"robots.txt disallows {hop} (redirect target)")
+        return snap
 
-    async def _raw_get(self, url: str, headers: dict | None, *, cacheable: bool, reserve: int = 0) -> Snapshot:
+    async def _raw_get(self, url: str, headers: dict | None, *, cacheable: bool, reserve: int = 0,
+                       nested: bool = False) -> Snapshot:
         if cacheable:
             hit = self._cache_get(url, headers)
             if hit:
                 return redact_personal(hit)
         host = urlsplit(url).netloc.lower()
         sem = self.hosts.setdefault(host, asyncio.Semaphore(self.host_limits.get(host, self.per_host_limit)))
-        async with self.total, sem:
+        # a robots.txt read from inside a request hook runs outside the slots its caller already holds
+        async with (contextlib.AsyncExitStack() if nested else self.total), \
+                (contextlib.AsyncExitStack() if nested else sem):
             self.budget.take(host, reserve)
             gap = self.host_min_interval.get(host)
             if gap:

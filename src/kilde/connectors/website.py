@@ -33,7 +33,7 @@ import dns.exception
 import dns.resolver
 from bs4 import BeautifulSoup
 
-from ..http import Blocked, BudgetExhausted, Fetcher
+from ..http import Blocked, BudgetExhausted, Fetcher, RobotsUnreachable
 from ..spans import contains_core
 from ..templates import body_word_count, is_template_url, stub_posts, template_post
 from ..model import COMPANY_OWNED, CompanyContext, Evidence, Snapshot
@@ -1056,6 +1056,8 @@ STATUS_RANK = {"unreachable": 0, "no_dns": 0, "parked": 3, "blocked": 4, "http_4
 async def _fetch_page(sp: _Spend, url: str) -> tuple[Page | None, str]:
     try:
         snap = await sp.get(url)
+    except RobotsUnreachable:
+        return None, "unreachable"  # robots.txt could not be read: try again later (or over http), never "blocked"
     except Blocked:
         return None, "blocked"
     except (BudgetExhausted, _OutOfRequests):
