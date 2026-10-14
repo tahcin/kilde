@@ -38,6 +38,9 @@ export type Meta = {
   families: Record<"official_website" | "social_profile" | "hiring_signal" | "dated_news", { companies: number; facts: number }>;
 };
 
+declare const __DATA_VERSION__: string;
+const V = `?v=${__DATA_VERSION__}`;
+
 const cache = new Map<string, Promise<unknown>>();
 
 function once<T>(key: string, load: () => Promise<T>): Promise<T> {
@@ -68,11 +71,11 @@ async function getGz<T>(url: string): Promise<T> {
   return JSON.parse(text) as T;
 }
 
-export const loadIndex = () => once("index", () => getJSON<Row[]>("/data/index.json"));
-export const loadMeta = () => once("meta", () => getJSON<Meta>("/data/meta.json"));
+export const loadIndex = () => once("index", () => getJSON<Row[]>(`/data/index.json${V}`));
+export const loadMeta = () => once("meta", () => getJSON<Meta>(`/data/meta.json${V}`));
 export const loadCompany = (org: string) => once(`c:${org}`, async () => {
   if (!/^\d{9}$/.test(org)) throw new Error("bad org");
-  const co = await getGz<Company>(`/data/c/${org}.json.gz`);
+  const co = await getGz<Company>(`/data/c/${org}.json.gz${V}`);
   co.byId = Object.fromEntries(co.c.map((c) => [c.i, c]));
   return co;
 });

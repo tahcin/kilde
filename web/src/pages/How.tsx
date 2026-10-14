@@ -61,8 +61,8 @@ export default function How() {
           <p>Any proof other than the organisation number triggers a search of the register for other companies with the same name, address or phone; if one exists, the site is marked not proven. Social profiles, news and careers pages are taken only from a site that belongs to this company alone.</p>
         </Block>
         <Block title="How well it works">
-          <p>Kilde was checked in seventeen rounds, each on a fresh random sample of 100 companies, by auditors separate from the build who compared its output with the live sources by hand. The last three rounds found no facts about the wrong company and no invented figures; the final round alone checked 2,778 items.</p>
-          <p>Two runs on the same companies produce identical facts. A run averages about 13 web requests per company, and 1,000 companies took about 12 minutes.</p>
+          <p>Kilde was checked in twenty rounds, each on a fresh random sample of 100 companies, by auditors separate from the build who compared its output with the live sources by hand. The audit of the final code found no facts about the wrong company, no invented figures and no wrong values: all 159 website facts and 2,478 financial amounts were correct. The round before found one wrong-company fact (a housing co-op given a festival hotline quoted on its homepage), and the rule behind it was fixed.</p>
+          <p>Two runs on the same companies produce identical facts. A run averages about 13 web requests per company, and 1,000 companies took about 13 minutes.</p>
           <p>The main gap is websites: most small Norwegian companies have none, and many sites never print their organisation number. Kilde would rather miss a site than show one it cannot prove{meta ? `; of the ${meta.companies.toLocaleString("en-GB")} companies here, ${meta.families.official_website.companies} have a verified website` : ""}.</p>
         </Block>
         <Block title="Figures are never computed">

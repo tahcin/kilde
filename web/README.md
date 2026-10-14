@@ -18,7 +18,7 @@ python web/scripts/export_data.py \
   fresh=<fresh-100>/envelopes.jsonl
 ```
 
-Each argument is `tag=path` (`.jsonl` or `.jsonl.gz`); the first file holding an org number wins. The live site uses the version 2 code (45e8ad3) runs of: Builderr's 100-company sample, the 1,000 random companies, the 100-company smoke test and a fresh 100 (seed 1717). It writes into `web/public/data/` (git-ignored, about 13 MB):
+Each argument is `tag=path` (`.jsonl` or `.jsonl.gz`); the first file holding an org number wins. The live site uses the final release runs of code 12b459d: Builderr's 100-company sample rerun (`rel/c6bench`), the 1,000 random companies (`rel/c6/run1000`), the 100-company smoke test (`rel/c6/smoke1`) and a fresh 100 (seed 2020, `rel/c6/fresh`). It writes into `web/public/data/` (git-ignored, about 13 MB):
 
 | File | What |
 |---|---|
@@ -27,7 +27,7 @@ Each argument is `tag=path` (`.jsonl` or `.jsonl.gz`); the first file holding an
 | `llm/<org>.txt.gz` | the same facts as text lines `[org:claim] label: value`, read only by the worker |
 | `meta.json` | totals for the home page |
 
-The script copies values; it never computes or converts a figure. Claims Kilde withheld keep only their state and reason. It refuses an envelope that carries a birth-date field (none do), and refuses a run where one source failed for more than 10% of companies (a DNS or network outage during the run), unless `--allow-failed` is given. Output is deterministic (gzip with a fixed timestamp).
+The build adds a fingerprint of the data to every data URL (`?v=...`), so a redeploy with new data is never hidden behind Cloudflare's edge cache. The script copies values; it never computes or converts a figure. Claims Kilde withheld keep only their state and reason. It refuses an envelope that carries a birth-date field (none do), and refuses a run where one source failed for more than 10% of companies (a DNS or network outage during the run), unless `--allow-failed` is given. Output is deterministic (gzip with a fixed timestamp).
 
 ## 2. Build and run
 

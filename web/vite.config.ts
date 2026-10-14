@@ -1,6 +1,13 @@
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
+import { createHash } from "node:crypto";
+import { existsSync, readFileSync } from "node:fs";
 import { defineConfig, type Plugin } from "vite";
+
+// A fingerprint of the exported data, added to every data URL (?v=...), so a redeploy with new data is never
+// hidden behind Cloudflare's edge cache of the old files.
+const dataFiles = ["public/data/index.json", "public/data/meta.json"].filter((f) => existsSync(f));
+const DATA_VERSION = createHash("sha256").update(dataFiles.map((f) => readFileSync(f)).join("")).digest("hex").slice(0, 10);
 
 /** Preload the Latin subset of the one text face every page opens with, so headlines don't wait for the stylesheet. */
 function preloadFonts(): Plugin {
@@ -17,6 +24,7 @@ function preloadFonts(): Plugin {
 }
 
 export default defineConfig({
+  define: { __DATA_VERSION__: JSON.stringify(DATA_VERSION) },
   plugins: [react(), tailwindcss(), preloadFonts()],
   build: {
     outDir: "dist",

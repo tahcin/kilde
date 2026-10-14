@@ -50,7 +50,7 @@ function Numbers() {
   const items: [string, string][] = [
     [meta ? meta.companies.toLocaleString("en-GB") : "…", "Norwegian companies on this site: 1,000 drawn at random, two 100-company test samples, and Builderr's own sample of 100."],
     [meta ? meta.facts.toLocaleString("en-GB") : "…", "published facts, every one linked to the page it came from, when it was read, and the exact words."],
-    ["0", "wrong-company facts in the last three audit rounds, each a fresh random sample checked by hand against the live sources."],
+    ["0", "wrong-company facts, invented figures or wrong values in the hand audit of the final code, on a fresh random sample checked against the live sources."],
     ["$0", "to build a profile: open public sources only, and no language model anywhere in the agent."],
   ];
   return (
