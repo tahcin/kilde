@@ -7,7 +7,7 @@ import { SourcePop } from "../components/Source";
 import { newsParts, render, socialParts } from "../components/Value";
 import { MAX_PICK, useCompare } from "../lib/compare";
 import { anyOf, avail, latest, one, useCompanies, type Claim, type Company } from "../lib/data";
-import { LEGAL_FORM, STATE, amount, cn, date, displayName, employees, industry, plural, titleCase } from "../lib/format";
+import { LEGAL_FORM, STATE, amount, moneyShort, cn, date, displayName, employees, industry, plural, titleCase } from "../lib/format";
 import { useTitle } from "../lib/title";
 
 type Cell = { claim: Claim | null; body: ReactNode } | null;
@@ -24,7 +24,7 @@ const fact = (f: string, show?: (c: Claim) => ReactNode) => (co: Company): Cell 
 const money = (f: string) => (co: Company): Cell => {
   const c = latest(co, f);
   if (!c) return { claim: null, body: <span className="text-muted">Not filed</span> };
-  return { claim: c, body: <><span className={cn("tnum font-medium", c.v.amount < 0 && "text-bad")}>{c.v.currency} {amount(c.v.amount)}</span><span className="block text-[12px] text-muted">{c.v.year}{c.v.account_type === "group" ? ", group" : ""}</span></> };
+  return { claim: c, body: <><span className={cn("font-medium", c.v.amount < 0 && "text-bad")} title={`${c.v.currency} ${amount(c.v.amount)}`}>{moneyShort(c.v.currency, c.v.amount)}</span><span className="block text-[12px] text-muted">{c.v.year}{c.v.account_type === "group" ? ", group" : ""}</span></> };
 };
 const many = (f: string, noun: string, show: (cs: Claim[]) => ReactNode) => (co: Company): Cell => {
   const cs = avail(co, f);
@@ -70,10 +70,10 @@ const SECTIONS: [string, RowDef[]][] = [
 
 function CellView({ co, cell }: { co: Company; cell: Cell }) {
   if (!cell) return null;
-  const inner = <span className="block min-w-0 break-words text-[14px] leading-snug text-ink [&_a]:pointer-events-none [&_a]:no-underline">{cell.body}</span>;
+  const inner = <span className="block w-full min-w-0 text-[14px] leading-snug text-ink [overflow-wrap:anywhere] [&_a]:pointer-events-none [&_a]:no-underline">{cell.body}</span>;
   if (!cell.claim) return <div className="px-3 py-2.5">{inner}</div>;
   return (
-    <SourcePop co={co} claim={cell.claim} className="group flex w-full flex-col items-start rounded-xl px-3 py-2.5 text-left transition hover:bg-wash/70 data-[state=open]:bg-wash">
+    <SourcePop co={co} claim={cell.claim} className="group flex w-full min-w-0 flex-col items-start rounded-xl px-3 py-2.5 text-left transition hover:bg-wash/70 data-[state=open]:bg-wash">
       {inner}
       <span className="mt-1 flex items-center gap-1 text-[11px] text-muted opacity-70 group-hover:opacity-100"><span className="size-1.5 rounded-full bg-pop" aria-hidden />Source</span>
     </SourcePop>

@@ -120,6 +120,13 @@ export function amount(n: number | string): string {
   const s = Math.abs(x).toLocaleString("en-GB", { maximumFractionDigits: 2 }).replace(/,/g, " ");
   return x < 0 ? `−${s}` : s;
 }
+/** A figure for tight spaces. Whole millions read as "914 million" (the same value, in other units); anything else
+ *  keeps every digit. Never rounds. */
+export function moneyShort(currency: string | undefined, n: number | string): string {
+  const x = Number(n), cur = currency ? `${currency} ` : "";
+  if (Number.isInteger(x) && Math.abs(x) >= 1e6 && x % 1e6 === 0) return `${cur}${amount(x / 1e6)} million`;
+  return `${cur}${amount(n)}`;
+}
 export const orgFmt = (o: string) => o.replace(/^(\d{3})(\d{3})(\d{3})$/, "$1 $2 $3");
 export function host(u: string): string { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return u; } }
 export const bare = (u: string) => String(u ?? "").replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "");

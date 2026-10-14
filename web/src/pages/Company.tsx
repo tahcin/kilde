@@ -6,7 +6,7 @@ import { AskPanel } from "../components/Ask";
 import { SourceChip, SourcePop } from "../components/Source";
 import { FactRow, render } from "../components/Value";
 import { FIN, accounts, anyOf, latest, one, useCompany, type Claim, type Company } from "../lib/data";
-import { LEGAL_FORM, STATE, amount, cn, date, dateTime, displayName, employees, industry, label, orgFmt, plural, titleCase, toneSoft } from "../lib/format";
+import { LEGAL_FORM, STATE, amount, moneyShort, cn, date, dateTime, displayName, employees, industry, label, orgFmt, plural, titleCase, toneSoft } from "../lib/format";
 import { useTitle } from "../lib/title";
 import { CompareToggle } from "./Home";
 
@@ -156,7 +156,7 @@ function Tile({ co, claim, name, children, sub }: { co: Company; claim: Claim | 
     <>
       <span className="block text-[12.5px] text-muted">{name}</span>
       <span className="mt-1.5 block break-words text-[16px] font-semibold leading-tight tracking-[-0.02em] text-ink sm:text-[19px]">{children}</span>
-      {sub && <span className="mt-1 block truncate text-[12px] text-muted">{sub}</span>}
+      {sub && <span className="mt-1 block text-[12px] leading-snug text-muted">{sub}</span>}
     </>
   );
   const cls = "surface block min-w-0 rounded-2xl px-4 py-3.5 text-left";
@@ -167,13 +167,16 @@ function KeyFigures({ co }: { co: Company }) {
   const rev = latest(co, "revenue"), res = latest(co, "annual_result");
   const emp = anyOf(co, "employees_registered")[0] ?? null;
   const web = anyOf(co, "official_website")[0] ?? null;
-  const money = (c: Claim | null) => (c ? <span className="tnum">{c.v.currency} {amount(c.v.amount)}</span> : "Not filed");
+  const money = (c: Claim | null) => (c ? <span title={`${c.v.currency} ${amount(c.v.amount)}`}>{moneyShort(c.v.currency, c.v.amount)}</span> : "Not filed");
   const sub = (c: Claim | null) => (c ? `${c.v.year}, ${c.v.account_type === "group" ? "group" : "company"} accounts` : undefined);
   return (
     <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-4">
       <Tile co={co} claim={rev} name="Revenue" sub={sub(rev)}>{money(rev)}</Tile>
       <Tile co={co} claim={res} name="Annual result" sub={sub(res)}>{money(res)}</Tile>
-      <Tile co={co} claim={emp} name="Employees" sub={emp?.a === "available" ? (emp.d ? `Registered, as of ${date(emp.d)}` : "Registered") : undefined}>{emp?.a === "available" ? employees(emp.v) : "Not registered"}</Tile>
+      <Tile co={co} claim={emp} name="Employees"
+        sub={emp?.a === "available" ? (emp.d ? `Registered, as of ${date(emp.d)}` : "Registered") : emp?.n ? "Employer register (Aa-registeret)" : undefined}>
+        {emp?.a === "available" ? employees(emp.v) : emp?.n ? "None registered" : "Not found"}
+      </Tile>
       <Tile co={co} claim={web} name="Website" sub={web?.a === "available" ? "Verified" : web ? STATE[web.a].word : undefined}>
         {web?.a === "available" ? web.v : <span className="text-muted">None verified</span>}
       </Tile>
