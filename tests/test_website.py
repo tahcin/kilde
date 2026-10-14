@@ -2605,3 +2605,18 @@ def test_feed_plugin_footer_is_not_body_text_and_rest_stub_stays_out_of_the_feed
     ctx = ctx_for(hjemmeside="fjellbekk.no", stiftelsesdato="2020-01-01")
     run(f, ctx)
     assert not [c for c in ctx.claims if c.field == "dated_news" and c.availability == "available"]
+
+
+def test_workplace_collision_ignores_shorter_unrelated_names_but_not_chains():
+    body = "<main><h1>Bella Solsikke</h1><p>Torget 3, 9998 Testby</p></main>"
+    for name, addr, blocked in (("BELL & BELL AS", "Torget 3", False), ("BELLA AS", "Torget 3", False),
+                                ("BELLA SOLSIKKE STORO AS", "Storoveien 1", True),
+                                ("BELA SOLSIKE AS", "Storoveien 1", False), ("BELA SOLSIKE AS", "Torget 3", True)):
+        W._SEARCH.clear()
+        pages = _workplace_site(body)
+        row = {"organisasjonsnummer": FOURTH, "navn": name, "organisasjonsform": {"kode": "AS"},
+               "forretningsadresse": {"adresse": [addr], "postnummer": "9998"}}
+        pages["https://data.brreg.no/enhetsregisteret/api/enheter?navn=bella%20solsikke&size=50"] = (
+            200, json.dumps({"_embedded": {"enheter": [row]}, "page": {"totalPages": 1}}), "application/json")
+        claims = run(FakeFetcher(pages), _workplace_ctx())
+        assert (claims["official_website"].availability != "available") is blocked, name

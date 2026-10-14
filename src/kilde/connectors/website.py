@@ -1739,6 +1739,7 @@ async def _check_workplace(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> Non
     if not name_span or not addr:
         return
     ours = _core_tokens(w["navn"])
+    wp_addr = _addr_key({"beliggenhetsadresse": w["beliggenhetsadresse"]})
     rows, cut = await registry_rows(sp, words)
     if cut:
         v.detail = f"workplace name {w['navn']} is too common in the registry to decide"
@@ -1748,7 +1749,13 @@ async def _check_workplace(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> Non
         if org in (ctx.org, wp_org) or r.get("overordnetEnhet") == ctx.org or not _active(r):
             continue
         theirs = _core_tokens(r.get("navn") or "")
-        if theirs and (theirs <= ours or ours <= theirs or _near(ours, theirs)):
+        # the whole workplace name inside theirs (a chain's 'Bella Solsikke Storo AS'), or the same number of words
+        # each a near match ('Bela Solsike') at the workplace's address; a shorter unrelated name ('Bell & Bell AS',
+        # 'Bella AS') is not it
+        # (as for the legal name: a near-namesake, one letter off, collides only at the same address)
+        long_t, long_o = {w for w in theirs if len(w) >= 3}, {w for w in ours if len(w) >= 3}
+        near = bool(long_t) and len(long_t) == len(long_o) and _near(long_o, long_t)
+        if theirs and (ours <= theirs or (near and _addr_key(r) == wp_addr)):
             owner = r.get("overordnetEnhet")
             v.detail = (f"another registered entity carries the workplace name: {r.get('navn')} ({org}"
                         + (f", workplace of {owner}" if owner else "") + ")")
