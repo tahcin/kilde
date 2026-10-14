@@ -1,8 +1,8 @@
 // Ask, from anywhere: a small floating button in the bottom-right corner opens a compact popup (a bottom sheet on
 // phones). Pages say what it is about (one company, the compared set); elsewhere the visitor picks companies first.
 import * as Dialog from "@radix-ui/react-dialog";
-import { AnimatePresence, motion } from "motion/react";
-import { Maximize2, MessageCircle, Minimize2, Sparkles, X } from "lucide-react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { Maximize2, Minimize2, Sparkles, X } from "lucide-react";
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useLocation } from "react-router";
 import { useCompare } from "../lib/compare";
@@ -92,46 +92,41 @@ function FreeAsk({ panel }: { panel: (cos: Company[]) => ReactNode }) {
   );
 }
 
-const TEASE_KEY = "kilde.teasers";
-const readTease = (): { dismissed?: boolean; shown?: number } => { try { return JSON.parse(sessionStorage.getItem(TEASE_KEY) ?? "{}"); } catch { return {}; } };
-const writeTease = (v: { dismissed?: boolean; shown?: number }) => { try { sessionStorage.setItem(TEASE_KEY, JSON.stringify(v)); } catch { /* storage blocked */ } };
+const BUBBLE_KEY = "kilde.bubble.closed";
+const bubbleClosed = () => { try { return sessionStorage.getItem(BUBBLE_KEY) === "1"; } catch { return false; } };
 
-/** Small chat-preview bubbles above the launcher, a moment after the page loads. Calm: once a session,
- *  gone after ten seconds or the first scroll, never again once closed. */
-function Teasers({ items, onPick }: { items: { text: string; ask?: string }[]; onPick: (q?: string) => void }) {
-  const [show, setShow] = useState(false);
-  const { pathname } = useLocation();
+/** One small speech bubble above the button, its text turning every few seconds through questions worth asking.
+ *  Hover pauses it; reduced motion shows a still "Ask Kilde"; closing it hides it for the rest of the visit. */
+function Bubble({ items, onPick }: { items: { text: string; ask?: string }[]; onPick: (q?: string) => void }) {
+  const reduce = useReducedMotion();
+  const [closed, setClosed] = useState(bubbleClosed);
+  const [i, setI] = useState(0);
+  const [held, setHeld] = useState(false);
+  const key = items.map((x) => x.text).join("|");
+  useEffect(() => { setI(0); }, [key]);
   useEffect(() => {
-    setShow(false);
-    const t0 = readTease();
-    if (t0.dismissed || (t0.shown ?? 0) >= 1) return;
-    const t = setTimeout(() => { setShow(true); writeTease({ ...readTease(), shown: (readTease().shown ?? 0) + 1 }); }, 2500);
-    const hide = setTimeout(() => setShow(false), 12500);
-    const onScroll = () => { if (scrollY > 80) setShow(false); };
-    addEventListener("scroll", onScroll, { passive: true });
-    return () => { clearTimeout(t); clearTimeout(hide); removeEventListener("scroll", onScroll); };
-  }, [pathname, items.map((i) => i.text).join("|")]);  // eslint-disable-line react-hooks/exhaustive-deps
-  const dismiss = () => { setShow(false); writeTease({ ...readTease(), dismissed: true }); };
+    if (reduce || held || items.length < 2) return;
+    const t = setInterval(() => { if (!document.hidden) setI((x) => (x + 1) % items.length); }, 3800);
+    return () => clearInterval(t);
+  }, [reduce, held, key, items.length]);
+  if (closed) return null;
+  const it = reduce ? items[0] : items[i % items.length];
   return (
-    <AnimatePresence>
-      {show && (
-        <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 6 }} transition={{ duration: 0.4, ease: [0.16, 1, 0.3, 1] }}
-          className="relative mb-3 flex max-w-[15.5rem] flex-col items-end gap-1.5 sm:max-w-[18rem]" role="complementary" aria-label="Suggested questions">
-          <button onClick={dismiss} aria-label="Hide suggestions"
-            className="absolute -left-2 -top-2 z-10 grid size-6 place-items-center rounded-full bg-card text-muted shadow-[var(--shadow-soft)] ring-1 ring-rule hover:text-ink">
-            <X className="size-3.5" />
-          </button>
-          {items.map((it, i) => (
-            <motion.button key={it.text} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.25 + i * 0.35, duration: 0.4 }}
-              onClick={() => { dismiss(); onPick(it.ask); }}
-              className={cn("rounded-2xl px-3.5 py-2 text-left text-[13px] leading-snug shadow-[var(--shadow-soft)] ring-1 transition hover:ring-brand/40 sm:text-[13.5px]",
-                i === items.length - 1 ? "rounded-br-md" : "", it.ask ? "bg-card text-brand ring-rule font-medium" : "bg-fam-web text-ink ring-brand/10")}>
-              {it.text}
-            </motion.button>
-          ))}
-        </motion.div>
-      )}
-    </AnimatePresence>
+    <div className="relative mb-3 mr-1" onPointerEnter={() => setHeld(true)} onPointerLeave={() => setHeld(false)} onFocus={() => setHeld(true)} onBlur={() => setHeld(false)}>
+      <button onClick={() => onPick(it.ask)}
+        className="relative block min-h-9 max-w-[12.5rem] rounded-2xl bg-card px-3.5 py-2 text-left text-[12.5px] font-medium leading-snug text-brand shadow-[var(--shadow-soft)] ring-1 ring-rule transition hover:ring-brand/40 sm:max-w-[16rem] sm:text-[13.5px]
+          after:absolute after:-bottom-[6px] after:right-5 after:size-3 after:rotate-45 after:border-b after:border-r after:border-rule after:bg-card">
+        <AnimatePresence mode="wait" initial={false}>
+          <motion.span key={it.text} className="block" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.35 }}>
+            {it.text}
+          </motion.span>
+        </AnimatePresence>
+      </button>
+      <button onClick={() => { setClosed(true); try { sessionStorage.setItem(BUBBLE_KEY, "1"); } catch { /* storage blocked */ } }}
+        aria-label="Hide this hint" className="absolute -left-2 -top-2 grid size-5 place-items-center rounded-full bg-card text-muted shadow-[var(--shadow-soft)] ring-1 ring-rule hover:text-ink">
+        <X className="size-3" />
+      </button>
+    </div>
   );
 }
 
@@ -177,16 +172,17 @@ export function AskLauncher() {
   const [cites, setCites] = useState<Cite[]>([]);
   const [lit, setLit] = useState<string | null>(null);
   const label = scope?.label ?? "Ask Kilde";
-  // The button says who it is about when the name is short enough to fit; otherwise just "Ask Kilde".
-  const buttonLabel = scope && scope.companies.length === 1 && label.length <= 30 ? label : scope && scope.companies.length > 1 ? label : "Ask Kilde";
   const trayUp = picked.length > 0 && pathname !== "/compare";
   useEffect(() => { if (!isOpen) setExpanded(false); }, [isOpen]);
 
-  const one = scope?.companies.length === 1 ? displayName(scope.companies[0].n) : null;
-  const teasers = scope ? (one
-    ? [{ text: `Ask me about ${one}` }, { text: "Is it hiring?", ask: "Is it hiring?" }, { text: "How did it do in its latest accounts?", ask: "How did it do in its latest accounts?" }].slice(0, 2)
-    : [{ text: "Which of these is biggest?", ask: "Which of these is biggest by revenue?" }])
-    : [{ text: "Ask about any Norwegian company" }];
+  const one = scope?.companies.length === 1 ? scope.companies[0] : null;
+  const year = one ? (one.c.find((c) => c.f === "revenue" && c.a === "available" && c.v?.account_type !== "group")?.v?.year as string | undefined) : undefined;
+  const hints = one
+    ? [{ text: "Ask Kilde" }, { text: `Is ${displayName(one.n)} hiring?`, ask: "Is it hiring?" },
+      { text: year ? `How did it do in ${year}?` : "How is it doing?", ask: year ? `How did it do in ${year}?` : "How did it do in its latest accounts?" },
+      { text: "Who runs it?", ask: "Who runs it?" }]
+    : scope ? [{ text: "Ask Kilde" }, { text: "Which is biggest?", ask: "Which of these is biggest by revenue?" }, { text: "Who is hiring?", ask: "Which of these companies are hiring?" }]
+      : [{ text: "Ask Kilde" }, { text: "Ask about any Norwegian company" }];
   const panel = (cos: Company[]) => (
     <AskPanel bare wide={expanded} companies={cos} suggestions={cos.length > 1 ? SUGGEST_MANY : SUGGEST_ONE}
       autoAsk={pending} onAutoAsked={clearPending} onCitations={setCites} onCite={setLit} lit={lit} />
@@ -197,14 +193,12 @@ export function AskLauncher() {
       <div className={cn("pointer-events-none fixed right-4 z-40 flex flex-col items-end sm:right-6",
         trayUp ? "bottom-[calc(env(safe-area-inset-bottom)+5.25rem)] sm:bottom-[calc(env(safe-area-inset-bottom)+1.5rem)]" : "bottom-[calc(env(safe-area-inset-bottom)+1rem)] sm:bottom-[calc(env(safe-area-inset-bottom)+1.5rem)]",
         isOpen && "opacity-0")}>
-        <div className="pointer-events-auto"><Teasers items={teasers} onPick={(q) => open(q)} /></div>
+        <div className="pointer-events-auto"><Bubble items={hints} onPick={(q) => open(q)} /></div>
         <Dialog.Trigger asChild>
-          {/* A speech bubble: rounded, with a small tail at the bottom right, always showing its label. */}
           <button aria-label={label}
-            className="pointer-events-auto relative flex h-12 max-w-[calc(100vw-2rem)] items-center gap-2 rounded-[1.4rem] rounded-br-[0.4rem] bg-brand pl-4 pr-5 text-[14.5px] font-semibold text-on shadow-[0_10px_28px_-8px_rgb(31_86_115/0.55),0_2px_6px_rgb(28_38_43/0.12)] transition hover:bg-brand-2 active:scale-[0.97]
-              after:absolute after:-bottom-[7px] after:right-0 after:size-0 after:border-l-[12px] after:border-t-[8px] after:border-l-transparent after:border-t-brand hover:after:border-t-brand-2">
-            <MessageCircle className="size-5 shrink-0" strokeWidth={2.2} aria-hidden />
-            <span className="truncate">{buttonLabel}</span>
+            className="pointer-events-auto relative grid size-14 place-items-center rounded-full bg-fam-web shadow-[var(--shadow-float)] ring-1 ring-brand/15 transition hover:bg-wash active:scale-95">
+            <Mark />
+            <Sparkles className="absolute right-2.5 top-2.5 size-3.5 text-brand" aria-hidden />
           </button>
         </Dialog.Trigger>
       </div>
