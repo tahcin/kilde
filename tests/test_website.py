@@ -113,8 +113,8 @@ def test_orgnr_in_footer_with_spaces_and_extraction():
             '<a href="https://twitter.com/intent/tweet?text=x">Tweet</a>'
             '<a href="https://www.linkedin.com/company/fjellbekk-trevare/about/?utm_source=site">LinkedIn</a>'
             '<a href="https://www.youtube.com/">YouTube</a>'
-            '<a href="mailto:post@fjellbekk.no">post@fjellbekk.no</a>'
-            '<footer>Fjellbekk Trevare AS · Org.nr: 999 000 002 MVA · Tlf. 41 00 00 01</footer>')
+            '<footer>Fjellbekk Trevare AS · Org.nr: 999 000 002 MVA · Tlf. 41 00 00 01'
+            '<a href="mailto:post@fjellbekk.no">post@fjellbekk.no</a></footer>')
     f = FakeFetcher({"https://fjellbekk.no/": (200, html(body, head=head))})
     ctx = ctx_for(hjemmeside="www.fjellbekk.no")
     claims = run(f, ctx)
@@ -466,7 +466,7 @@ def test_redirect_to_section_of_another_host_is_judged_on_that_page_alone():
 def test_redirect_to_brand_about_page_with_our_orgnr_is_exclusive():
     """Sport-Event shape: the company domain redirects to its brand site's about page, which prints our org number."""
     f = FakeFetcher({"https://turbarna.no/om-oss/": (200, html(f"<p>Turbarna drives av Fjellbekk Trevare AS, org.nr. {OURS}.</p>")),
-                     "https://turbarna.no/": (200, html('<h1>Turbarna</h1><a href="mailto:post@turbarna.no">x</a>'))},
+                     "https://turbarna.no/": (200, html('<h1>Turbarna</h1><footer><a href="mailto:post@turbarna.no">x</a></footer>'))},
                     redirects={"https://fjellbekk.no/": "https://turbarna.no/om-oss/"})
     ctx = ctx_for(hjemmeside="fjellbekk.no")
     claims = run(f, ctx)
@@ -1126,8 +1126,8 @@ def test_privacy_page_controller_naming_another_company_makes_site_not_exclusive
 
 
 def test_privacy_page_processors_do_not_count():
-    body = (f'<footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer><a href="/personvern/">Personvern</a>'
-            '<a href="mailto:post@fjellbekk.no">x</a>')
+    body = (f'<footer>Fjellbekk Trevare AS · Org.nr {OURS}<a href="mailto:post@fjellbekk.no">x</a></footer>'
+            '<a href="/personvern/">Personvern</a>')
     priv = html("<p>Vi bruker Google Ireland Limited og Kvist Analyse AS som databehandlere.</p>")
     claims = run(_site({"https://fjellbekk.no/personvern/": (200, priv)}, body=body), ctx_for(hjemmeside="fjellbekk.no"))
     assert claims["site_contact_email"].value == "post@fjellbekk.no"
@@ -3725,3 +3725,115 @@ def test_leading_form_like_word_stays_part_of_the_other_name():
     assert not on(menu, "BA FJELLBEKK AS")
     assert on(menu + "<p>Partner: BA Fjellbekk</p>", "BA FJELLBEKK AS")
     assert on(menu, "FJELLBEKK AS")
+
+
+# ---------------------------------------------------------------- contact positions and non-news entries
+
+def _pages(*pairs):
+    return [W.parse_page(Snapshot(u, u, 200, "x", html(b).encode(), "text/html")) for u, b in pairs]
+
+
+def test_contact_quoted_in_a_post_is_not_ours_but_the_footer_copy_is():
+    """A notice post reproduces another organisation's hotline; the footer states our own number."""
+    post = ('<div class="post type-post"><h2>Nabovarsel fra Testfestivalen</h2><p>KONTAKTINFORMASJON<br>'
+            'Telefon: 41 55 66 77<br>Spørsmål om festivalen?</p></div>')
+    foot = f'<footer>Fjellbekk Trevare AS · Org.nr {OURS} · Tlf 41 00 00 01</footer>'
+    pages = _pages(("https://fjellbekk.no/", post + foot))
+    _em, ph, _n = W.extract_contacts(pages, "fjellbekk.no", set(), W.Scope(OURS, ["fjellbekk", "trevare"]))
+    assert [n for n, _p, _s in ph] == ["+4741000001"]
+
+
+def test_number_first_quoted_in_an_article_still_counts_from_the_footer():
+    body = ('<article><p>Ring oss på tlf 41 00 00 01 for tilbud.</p></article>'
+            f'<footer>Fjellbekk Trevare AS · Org.nr {OURS} · Tlf 41 00 00 01</footer>')
+    _em, ph, _n = W.extract_contacts(_pages(("https://fjellbekk.no/", body)), "fjellbekk.no", set(),
+                                     W.Scope(OURS, ["fjellbekk", "trevare"]))
+    assert [n for n, _p, _s in ph] == ["+4741000001"]
+
+
+def test_email_loose_in_body_text_is_not_a_site_contact_but_a_contact_block_is():
+    loose = '<p>Vi svarer på spørsmål om kjøkken, skriv til <a href="mailto:post@fjellbekk.no">oss</a> i dag.</p>'
+    em, _ph, _n = W.extract_contacts(_pages(("https://fjellbekk.no/", loose)), "fjellbekk.no", set(),
+                                     W.Scope(OURS, ["fjellbekk", "trevare"]))
+    assert em == []
+    block = '<div class="col"><p>Telefon: 41 00 00 01 E-post: <a href="mailto:post@fjellbekk.no">post@fjellbekk.no</a></p></div>'
+    em, _ph, _n = W.extract_contacts(_pages(("https://fjellbekk.no/", block)), "fjellbekk.no", set(),
+                                     W.Scope(OURS, ["fjellbekk", "trevare"]))
+    assert [a for a, _p, _s in em] == ["post@fjellbekk.no"]
+
+
+def test_registry_phone_counts_wherever_it_appears():
+    post = '<div class="post type-post"><p>Ring Fjellbekk Trevare på tlf 41 00 00 01.</p></div>'
+    _em, ph, _n = W.extract_contacts(_pages(("https://fjellbekk.no/", post)), "fjellbekk.no", {"41000001"},
+                                     W.Scope(OURS, ["fjellbekk", "trevare"]))
+    assert [n for n, _p, _s in ph] == ["+4741000001"]
+
+
+def test_contact_beside_another_organisations_email_or_web_address_is_not_ours():
+    """Another organisation's line on our contact page: its own email or web address sits in the same block."""
+    other = (f'<footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>'
+             '<div class="kontakt"><p>Mail: nabo@testfestival.no Telefon: 41 55 66 77</p></div>'
+             '<div class="kontakt"><p>Klager: telefon 41 22 33 44 eller www.klageorganet.no</p></div>')
+    pages = _pages(("https://fjellbekk.no/kontakt", other))
+    _em, ph, _n = W.extract_contacts(pages, "fjellbekk.no", set(), W.Scope(OURS, ["fjellbekk", "trevare"]))
+    assert ph == []
+    ours = (f'<div class="kontakt"><p>Fjellbekk Trevare AS · Org.nr {OURS} · Telefon: 41 00 00 01 · '
+            'post@fjellbekk.no · fjellbekk.com · Design: webbyraa.no</p></div>')
+    em, ph, _n = W.extract_contacts(_pages(("https://fjellbekk.no/kontakt", ours)), "fjellbekk.no", set(),
+                                    W.Scope(OURS, ["fjellbekk", "trevare"]))
+    assert [n for n, _p, _s in ph] == ["+4741000001"] and [a for a, _p, _s in em] == ["post@fjellbekk.no"]
+
+
+def test_org_number_abbreviation_is_not_another_domain():
+    assert W._card_other_domain("Fjellbekk Trevare AS tlf 41 00 00 01 Org.no. 999 000 002", {"fjellbekk.no"}) is None
+    assert W._card_other_domain("Mail: nabo@testfestival.no Telefon: 41 55 66 77", {"fjellbekk.no"}) == "testfestival.no"
+
+
+def test_footer_widget_article_and_wordpress_page_article_are_not_posts():
+    body = ('<article class="col-md-12"><div class="post-9 page type-page hentry"><p>Telefon: 41 00 00 01</p></div></article>'
+            '<footer><article class="widget widget_text"><p>E-post: post@fjellbekk.no</p></article></footer>')
+    pages = _pages(("https://fjellbekk.no/", body))
+    for needle in ("41 00 00 01", "post@fjellbekk.no"):
+        assert not W._in_post_block(W._element_for(pages[0], needle), pages[0])
+
+
+def test_feed_entries_under_faq_events_and_artists_are_not_news():
+    head = '<link rel="alternate" type="application/rss+xml" href="/feed/">'
+    items = [("Ny verkstedhall åpnet", "https://fjellbekk.no/2026/03/ny-hall/"),
+             ("Hva koster et kjøkken?", "https://fjellbekk.no/faq/hva-koster/"),
+             ("Ofte stilte spørsmål om levering", "https://fjellbekk.no/sporsmal/levering/"),
+             ("Sommerkonsert i hallen", "https://fjellbekk.no/konserter/sommer/"),
+             ("Bandet Testlyd", "https://fjellbekk.no/artister/testlyd/"),
+             ("Kjøkkendag for alle", "https://fjellbekk.no/?post_type=arrangement&p=77"),
+             ("Ledig stilling som snekker", "https://fjellbekk.no/stillinger/snekker/")]
+    rss = '<?xml version="1.0"?><rss><channel><title>Fjellbekk</title>' + "".join(
+        f"<item><title>{t}</title><link>{u.replace('&', '&amp;')}</link><pubDate>Mon, 02 Mar 2026 10:00:00 +0100</pubDate></item>"
+        for t, u in items) + "</channel></rss>"
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(_site({"https://fjellbekk.no/feed/": (200, rss, "application/rss+xml")}, head=head), ctx)
+    assert [c.value for c in ctx.claims if c.field == "dated_news"] == ["Ny verkstedhall åpnet (2026-03-02T10:00:00+01:00)"]
+
+
+def test_date_led_event_titles_are_not_news():
+    assert W.date_led_title("12.03.2026 Konsert i parken")
+    assert W.date_led_title("Fredag 14. mars: Quiz i hallen")
+    assert W.date_led_title("2026-05-01 Dugnad")
+    assert not W.date_led_title("Oppsummering styremøte 05.03.2024")
+    assert not W.date_led_title("Ny verkstedhall åpnet")
+
+
+def test_search_overlay_listings_and_dates_inside_headings_are_not_news():
+    """A listing page whose only dated entries are concerts in a search overlay, dated in their own titles."""
+    overlay = ('<div class="search-overlay"><ul><li class="search-result"><a href="https://fjellbekk.no/?post_type=artister&p=11">'
+               '<h3>Testlyd - Hallen 2026-10-01</h3></a></li></ul></div>')
+    listing = ('<ul><li><a href="https://fjellbekk.no/nyheter/ny-hall/"><h3>Ny verkstedhall åpnet</h3></a>'
+               '<span>02.03.2026</span></li></ul>')
+    for body, want in ((overlay, []), (overlay + listing, ["Ny verkstedhall åpnet (2026-03-02)"])):
+        page = W.parse_page(Snapshot("https://fjellbekk.no/nyheter/", "https://fjellbekk.no/nyheter/", 200, "x",
+                                     html(body).encode(), "text/html"))
+        assert body != overlay or W.inline_news(page) == []
+        got = [f"{v['title']} ({v['date']})" for v, _s in W.news_items(page, "fjellbekk.no", W.Scope(OURS, ["fjellbekk"]))]
+        assert got == want
+    page = W.parse_page(Snapshot("https://fjellbekk.no/", "https://fjellbekk.no/", 200, "x",
+                                 html('<div><h3>Testlyd - Hallen 2026-10-01</h3><p>Billetter</p></div>').encode(), "text/html"))
+    assert W.inline_news(page) == []

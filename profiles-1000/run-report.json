@@ -2,12 +2,12 @@
   "run_id": "profiles-1000",
   "agent": "Kilde",
   "version": "1.0.0",
-  "commit": "5bfbb24c63f27bb8ed5c85f7ec69abe51cfef7a1",
-  "started_at": "2026-10-14T11:20:16Z",
-  "completed_at": "2026-10-14T11:32:15Z",
+  "commit": "12b459db53ce9cc2f4c90a52e05bb1b71b85a4ec",
+  "started_at": "2026-10-14T15:28:13Z",
+  "completed_at": "2026-10-14T15:40:48Z",
   "expected_count": 1000,
   "emitted_envelopes": 1000,
-  "runtime_ms": 738468,
+  "runtime_ms": 775414,
   "publication_gate": {
     "withheld": 8,
     "notes": [
@@ -21,30 +21,30 @@
       "932686791 site_contact_email: email domain hotmail.com differs from the verified site hansenmultiservice.no and the registry email"
     ]
   },
-  "website_retries": 29,
+  "website_retries": 31,
   "company_runtime_ms": {
-    "p50": 15409,
-    "p95": 38583,
-    "max": 128969
+    "p50": 16312,
+    "p95": 37653,
+    "max": 127874
   },
   "operations": {
-    "requests": 12608,
+    "requests": 12765,
     "max_requests": 20000,
-    "dns_lookups": 19584,
+    "dns_lookups": 19517,
     "cache_hits": 0,
     "by_host": {
-      "data.brreg.no": 6378,
+      "data.brreg.no": 6443,
       "sgregister.dibk.no": 188,
       "api.finanstilsynet.no": 75,
       "api.gleif.org": 38,
-      "pam-stilling-feed.nav.no": 23,
-      "hans-helseth.no": 20,
+      "vannmeisling.no": 36,
+      "pam-stilling-feed.nav.no": 24,
+      "hans-helseth.no": 23,
       "puerfons.no": 20,
       "harry-martinsen.no": 20,
       "msm.no": 20,
       "byggevarervest.no": 19,
       "www.funkworks.no": 19,
-      "vannmeisling.no": 19,
       "www.civilmanagement.no": 19,
       "berggynekologi.no": 18,
       "stereoprod.no": 18,
@@ -84,7 +84,7 @@
     "financials": 1.0,
     "leadership": 0.996,
     "locations": 0.752,
-    "web_presence": 0.144,
+    "web_presence": 0.149,
     "hiring": 0.022,
     "activity": 1.0
   }
