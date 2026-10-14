@@ -3328,3 +3328,11 @@ def test_cap_reached_inside_a_candidate_check_stays_failed(monkeypatch):
              "https://fjellbekktrevare.no/om-oss": (200, home)}
     claims = run(FakeFetcher(pages), ctx_for())
     assert claims["official_website"].availability in ("failed", "ambiguous")
+
+
+def test_owner_phrase_after_a_name_describes_that_company_not_the_site():
+    page = W.parse_page(Snapshot("https://fjellbekk.no/om-oss", "https://fjellbekk.no/om-oss", 200, "x",
+                                 html("<p>Ved hjelp av hovedeierne, Kvist Invest AB, som eies av en stiftelse, vokser vi.</p>"
+                                      "<p>Fjellbekk er Lyng Bil AS sin avdeling i Testby.</p>").encode(), "text/html"))
+    names = {n[0]: n for n in W.other_company_names([page], ["fjellbekk", "trevare"])}
+    assert not names["kvist invest"][4] and names["lyng bil"][4]

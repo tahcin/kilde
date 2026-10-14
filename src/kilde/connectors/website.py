@@ -2586,6 +2586,10 @@ BIO_BEFORE = re.compile(r"(?i)\b(?:ceo|cfo|cto|coo|daglig leder|adm\.? dir\.?|ad
                         r"bakgrunn|background|tidligere|formerly|previously)\b[^.!?]{0,40}$")
 
 
+# after a name: 'Kvist AS sin avdeling' (its department) names the owner; 'Kvist AB, som eies av ...' does not
+OWNER_AFTER = re.compile(r"(?i)^\W{0,3}(?:sin|sitt|sine)\s+(?:avdeling|filial|datterselskap|nettside|nettsted|butikk|kontor)")
+
+
 def _supplier_or_bio(before: str, after: str) -> bool:
     """A company named as the site's supplier or data processor ('Adjoy AS er leverandør', 'servere som driftes av
     X AS'), or as a person's employer in a bio ('CEO of Norway King Crab AS and Troika Seafood AS')."""
@@ -2706,7 +2710,8 @@ def other_company_names(pages: list[Page], words: list[str]) -> list[tuple[str, 
                 if CREDIT.search(before) or (not is_title and " ".join(run) and " ".join(run) in offsite):
                     continue  # a web agency or partner credit
                 key = (" ".join(ws), m.group(2).lower())
-                ctx_hit = _owner_statement(txt[max(0, m.start() - 60):m.start()], txt[m.start():m.end() + 16])
+                ctx_hit = _owner_statement(txt[max(0, m.start() - 60):m.start()], txt[m.start():m.end() + 10]) or \
+                    bool(OWNER_AFTER.match(txt[m.end():m.end() + 30]))
                 mention = m.group(0).strip()
                 if _supplier_or_bio(txt[max(0, m.start() - 60):m.start()], txt[m.end():m.end() + 40]):
                     side.add(key)
