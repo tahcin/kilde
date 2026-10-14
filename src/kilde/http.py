@@ -29,7 +29,7 @@ from .model import Snapshot, utc_now
 
 USER_AGENT = f"KildeSignalpost/{__version__} (+https://github.com/tahcin/kilde)"
 ROBOTS_TOKEN = "KildeSignalpost"
-MAX_BYTES = 3_000_000
+MAX_BYTES = 6_000_000  # one-page sites inline their images as base64 and put the footer after 3 MB
 
 
 def redact_personal(snap: "Snapshot") -> "Snapshot":

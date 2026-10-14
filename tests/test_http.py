@@ -44,3 +44,8 @@ def test_retry_after_header_forms():
     assert retry_after(None) == 2.0 and retry_after("1") == 1.0 and retry_after("120") == 5.0
     assert retry_after("Wed, 21 Oct 2015 07:28:00 GMT") == 0.0  # a date in the past: no wait
     assert retry_after("soon") == 2.0
+
+
+def test_page_byte_cap_leaves_room_for_inline_images():
+    from kilde import http
+    assert http.MAX_BYTES >= 6_000_000
