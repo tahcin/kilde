@@ -350,7 +350,7 @@ function SectionChips({ items, active }: { items: NavItem[]; active: string }) {
     if (el && box) box.scrollTo({ left: el.offsetLeft - box.clientWidth / 2 + el.clientWidth / 2, behavior: "smooth" });
   }, [active]);
   return (
-    <nav aria-label="On this page" className="sticky top-[4.4rem] z-30 -mx-4 mb-2 border-y border-rule/70 bg-paper/90 backdrop-blur-md md:-mx-8 lg:hidden">
+    <nav aria-label="On this page" className="sticky top-[4.4rem] z-30 -mx-4 mb-4 mt-6 border-y border-rule/70 bg-paper/90 backdrop-blur-md md:-mx-8 lg:hidden">
       <div ref={bar} className="flex gap-1.5 overflow-x-auto px-4 py-2 [scrollbar-width:none] md:px-8">
         {items.map((it) => {
           const on = it.id === active, f = it.fam ? FAM[it.fam] : null;
@@ -419,8 +419,8 @@ export default function CompanyPage() {
     <div className="wrap pb-10 pt-8 sm:pt-12">
       <Header co={co} />
       <div className="mt-8"><KeyFigures co={co} /></div>
-      <div className="mt-6"><SectionChips items={toc} active={active} /></div>
-      <div className="grid grid-cols-1 gap-6 lg:mt-0 lg:grid-cols-[minmax(0,1fr)_17rem] lg:gap-6">
+      <SectionChips items={toc} active={active} />
+      <div className="grid grid-cols-1 gap-6 lg:mt-6 lg:grid-cols-[minmax(0,1fr)_17rem] lg:gap-6">
         <div id="summary" className="min-w-0 scroll-mt-36 lg:col-start-1 lg:scroll-mt-24">
           <Summary co={co} />
           <AskLink className="mt-3 ml-1">Ask about this company</AskLink>
