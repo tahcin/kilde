@@ -1865,7 +1865,10 @@ def _corroborator(pages: list[Page], ctx: CompanyContext, name: str) -> tuple[Pa
                 if not word[:1].isupper() or _in_hostname(text, m.start(2), m.end(2)):
                     continue
                 if len(place) >= 5 or m.group(1):
-                    return p, _window(p.text, m.start(), m.end(), 40), p.text[m.start():m.end()].strip()
+                    # quote only what matches the registry: the place word, plus the post code when it is ours
+                    pc = re.sub(r"\D", "", m.group(1) or "")
+                    a = m.start() if pc and pc == (addr.get("postnummer") or "") else m.start(2)
+                    return p, _window(p.text, m.start(), m.end(), 40), p.text[a:m.end()].strip()
         for person in people:
             ws = person.split()
             rx = re.compile(r"(?<![\wæøåÆØÅ])" + re.escape(ws[0]) + r"(?:[  ]+[\wæøåÆØÅ.\-]+){0,2}?[  ]+"
@@ -1941,7 +1944,8 @@ async def _check_legal_name_unique(sp: "_Spend", ctx: CompanyContext, v: Verdict
     (lp, lspan, lcore), (cp, cspan, ccore) = got
     v.status, v.method = "proven", "legal_name_unique"
     v.detail = (f"the exact registered legal name '{lcore}' is on the site, its domain is that name, no other registered "
-                f"entity carries the name, and the site shows '{ccore}' from the registry")
+                f"entity carries the name, and the site shows '{ccore}', which the registry holds as the company's "
+                f"post town, municipality or a current role holder")
     v.proof = [(lp, lspan, lcore), (cp, cspan, ccore)]
 
 
@@ -2437,7 +2441,8 @@ class Scope:
         if self.sisters:
             out.append("it names sister companies " + ", ".join(f"{k} ({v})" for k, v in self.sisters.items()))
         if self.dominant:
-            out.append("it is presented by other companies " + ", ".join(f"{k} ({v})" for k, v in self.dominant.items()))
+            out.append("it is presented by other companies " + ", ".join(f"{k} ({v})" if v else k
+                                                                         for k, v in self.dominant.items()))
         if self.codeclared:
             out.append("other registered companies declare the same website: "
                        + ", ".join(f"{n} ({o})" for o, n in sorted(self.codeclared.items())))

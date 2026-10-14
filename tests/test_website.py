@@ -3395,3 +3395,15 @@ def test_site_served_from_a_builder_host_is_published_on_our_domain():
     claims = run(f, ctx_for(hjemmeside="fjellbekk.no"))
     assert claims["official_website"].value == "fjellbekk.no"
     assert claims["official_website_url"].value == "https://fjellbekk.no/"
+
+
+def test_reasons_never_print_empty_parentheses():
+    sc = W.Scope(OURS, ["fjellbekk"], dominant={"another registered entity at our address shares our name: x as (1)": ""})
+    assert "()" not in sc.reasons()
+
+
+def test_corroborator_quotes_only_what_matches_the_registry():
+    ctx = ctx_for(forretningsadresse={"adresse": ["Telthusbakken 5"], "postnummer": "0172", "poststed": "OSLO", "kommune": "OSLO"})
+    page = W.parse_page(Snapshot("https://x.no/", "https://x.no/", 200, "x", html("<p>Sørengkaia 62, 0194 Oslo</p>").encode(), "text/html"))
+    got = W._corroborator([page], ctx, "FJELLBEKK TREVARE AS")
+    assert got and got[2] == "Oslo"
