@@ -77,13 +77,18 @@ DEMO_CATEGORIES = {"tienda", "sin-categoria", "sin-categorizar", "non-classe", "
                    "geen-categorie", "sem-categoria", "bez-kategorii", "allgemein", "shop-demo", "demo"}
 
 
-def body_word_count(html_text: str | None) -> int | None:
+def body_word_count(html_text: str | None, own_url: str | None = None) -> int | None:
     """Visible words in a post body or excerpt (tags, entities and the [...] read-more marker removed);
-    None when the source gave no body at all."""
+    None when the source gave no body at all. A paragraph that links the post itself is a feed plugin's
+    footer ("The post X appeared first on Y", "La entrada X se publicó primero en Y") and is not body text."""
     if html_text is None:
         return None
     import html as _html
-    text = _html.unescape(re.sub(r"<[^>]+>", " ", str(html_text)))
+    raw = str(html_text)
+    if own_url:
+        key = re.escape(own_url.rstrip("/")) + r"/?[\"']"
+        raw = re.sub(r"(?is)<p\b[^>]*>(?:(?!</p>).)*?href=[\"']" + key + r"(?:(?!</p>).)*</p>", " ", raw)
+    text = _html.unescape(re.sub(r"<[^>]+>", " ", raw))
     text = re.sub(r"\[(?:…|\.\.\.)\]", " ", text)
     return len(re.findall(r"[^\W\d_]{2,}", text))
 

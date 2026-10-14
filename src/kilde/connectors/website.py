@@ -2902,7 +2902,9 @@ def news_items(page: Page, domain: str, scope: Scope, limit: int = 5) -> list[tu
         if scope.shared and not (scope.url_ours(u) or scope.accept(block, page)):
             continue
         span = _clean(block.get_text(" ", strip=True), 300)
-        items[u] = ({"title": title, "url": u, "date": found[0], "date_text": found[1]}, span or found[1])
+        full = _iso_with_offset(found[1]) if re.match(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}", found[1]) else None
+        when = full if full and full[:10] == found[0] and re.search(r"([+-]\d{2}:\d{2})$", full) else found[0]
+        items[u] = ({"title": title, "url": u, "date": when, "date_text": found[1]}, span or found[1])
     ranked = sorted(items.values(), key=lambda x: x[0]["date"], reverse=True)
     return ranked[:limit]
 
@@ -3610,15 +3612,23 @@ def _iso_with_offset(raw: str) -> str | None:
         return None
     try:
         if re.match(r"^\d{4}-\d{2}-\d{2}", raw):
-            d = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            # fractions of a second (up to nanoseconds from some CMSs) are dropped: the value is to the second
+            d = datetime.fromisoformat(re.sub(r"(T\d{2}:\d{2}:\d{2})\.\d+", r"\1", raw).replace("Z", "+00:00"))
         else:
             from email.utils import parsedate_to_datetime
             d = parsedate_to_datetime(raw)
     except (ValueError, TypeError, IndexError):
         return None
     if d.tzinfo is None:
-        return d.date().isoformat() if len(raw) <= 10 else d.isoformat()
-    return d.isoformat()
+        return d.date().isoformat() if len(raw) <= 10 else d.replace(microsecond=0).isoformat()
+    return d.replace(microsecond=0).isoformat()
+
+
+def _cdata(s: str) -> str:
+    """An XML element's content as markup: CDATA unwrapped, or entity-escaped HTML unescaped once."""
+    import html as _html
+    m = re.fullmatch(r"\s*<!\[CDATA\[(.*?)\]\]>\s*", s, re.S)
+    return m.group(1) if m else _html.unescape(s)
 
 
 def _xml_text(s: str) -> str:
@@ -3659,7 +3669,7 @@ def parse_feed(raw: str) -> list[dict]:
         bm = re.search(r"<(content:encoded|description|summary|content)\b[^>]*>(.*?)</\1>", b, re.S | re.I)
         out.append({"title": _xml_text(t.group(1)), "url": url.strip(), "datetime": when,
                     "title_span": t.group(0), "date_span": dm.group(0),
-                    "body_words": body_word_count(_xml_text(bm.group(2))) if bm else None})
+                    "body_words": body_word_count(_cdata(bm.group(2)), url.strip()) if bm else None})
     return out
 
 
@@ -3710,7 +3720,7 @@ def _wp_posts(raw: str) -> list[dict]:
         pos = max(pos, tpos, dpos)
         body = (r.get("excerpt") or {}).get("rendered") if isinstance(r.get("excerpt"), dict) else None
         out.append({"title": title, "url": r["link"], "datetime": when, "title_span": tspan, "date_span": dspan,
-                    "body_words": body_word_count(body)})
+                    "body_words": body_word_count(body, r["link"])})
     return out
 
 
@@ -3912,9 +3922,11 @@ async def collect_dated_news(sp: "_Spend", ctx: CompanyContext, pages: list[Page
         # a hacked site's feed full of spam is not company news: drop the whole feed
         if any(SPAM.search(it["title"]) for it in items):
             return []
-        stubs = stub_posts(items)  # bodiless filler posts (a demo product beside "Hello world!")
+        # bodiless filler posts (a demo product beside "Hello world!"); a stub found in one source (the REST
+        # list) stays a stub when a feed lists it again
+        stubs = stub_posts(items) | set(ctx.facts.get("website_stub_posts") or [])
         if stubs:
-            ctx.facts["website_stub_posts"] = sorted(set(ctx.facts.get("website_stub_posts") or []) | stubs)
+            ctx.facts["website_stub_posts"] = sorted(stubs)
         return [it for it in items if it["url"] not in stubs]
 
     def keep(items: list[dict], snap: Snapshot) -> None:

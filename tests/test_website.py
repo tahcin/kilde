@@ -2401,7 +2401,7 @@ def test_card_listing_ties_title_date_and_link_to_the_same_item_and_reads_page_o
            '<li><a rel="prev" href="/aktuelt?page={p}"><span></span></a></li>'
            '<li><a rel="next" href="/aktuelt?page={n}"><span></span></a></li></ul></nav>')
     page1 = html('<main><h1>Aktuelt</h1><div class="article-list-items">'
-                 + _card("ny-selger", "Ny selger i teamet vårt", "2026-09-09T16:30:25.4448Z", "9. september 2026")
+                 + _card("ny-selger", "Ny selger i teamet vårt", "2026-09-09T16:30:25.444893748Z", "9. september 2026")
                  + _card("sommerapent", "Sommeråpent i butikken", "2026-06-03T11:40:19.7892Z", "3. juni 2026")
                  + _card("ny-maskin", "Ny maskin på verkstedet", "2026-03-18T06:07:10.7479Z", "18. mars 2026")
                  + '</div>' + nav.format(p=1, n=2) + '</main>')
@@ -2414,13 +2414,16 @@ def test_card_listing_ties_title_date_and_link_to_the_same_item_and_reads_page_o
     run(f, ctx)
     news = [c for c in ctx.claims if c.field == "dated_news"]
     got = {c.match["detail"].split(" ")[0].rsplit("/", 1)[-1]: c.value for c in news}
-    assert got == {"ny-selger": "Ny selger i teamet vårt (2026-09-09)", "sommerapent": "Sommeråpent i butikken (2026-06-03)",
-                   "ny-maskin": "Ny maskin på verkstedet (2026-03-18)",
-                   "presisjon": "Presisjon som grunnlag (2025-03-05)", "sterk-partner": "Sterk partner for fremtiden (2025-02-25)"}
+    # the card's own <time datetime> (fractions dropped, offset kept)
+    assert got == {"ny-selger": "Ny selger i teamet vårt (2026-09-09T16:30:25+00:00)",
+                   "sommerapent": "Sommeråpent i butikken (2026-06-03T11:40:19+00:00)",
+                   "ny-maskin": "Ny maskin på verkstedet (2026-03-18T06:07:10+00:00)",
+                   "presisjon": "Presisjon som grunnlag (2025-03-05T19:54:20+00:00)",
+                   "sterk-partner": "Sterk partner for fremtiden (2025-02-25T07:36:46+00:00)"}
     assert f.calls.index("https://fjellbekk.no/aktuelt") < f.calls.index("https://fjellbekk.no/aktuelt?page=2")
     for c in news:  # the quoted title and date are the claimed item's own
         spans = " ".join(e.claim_span for e in ctx.evidence if e.id in c.evidence_ids)
-        assert c.value.rsplit(" (", 1)[0] in spans or c.value[-11:-1] in spans
+        assert c.value.rsplit(" (", 1)[0] in spans or c.value.rsplit(" (", 1)[1][:19] in spans
 
 
 def test_list_without_item_containers_drops_dates_it_cannot_tie_to_one_link():
@@ -2575,3 +2578,30 @@ def test_bodiless_posts_with_real_titles_on_page_builder_sites_stay_news():
                        {"title": "Hello world!", "url": "https://x.no/hello-world/", "body_words": 15}]) == {"https://x.no/a/"}
     # unknown body (a titles-only feed) never decides
     assert stub_posts([{"title": "Purevegg", "url": "https://x.no/p/", "body_words": None}]) == set()
+
+
+def test_feed_plugin_footer_is_not_body_text_and_rest_stub_stays_out_of_the_feed():
+    footer = ('<p>The post <a href="https://fjellbekk.no/demo/purevegg/">Purevegg</a> appeared first on '
+              '<a href="https://fjellbekk.no">Fjellbekk</a>.</p>')
+    rss = ('<rss><channel><item><title>Purevegg</title><link>https://fjellbekk.no/demo/purevegg/</link>'
+           '<pubDate>Thu, 03 Oct 2024 11:39:31 +0000</pubDate>'
+           f'<description><![CDATA[{footer}]]></description></item>'
+           '<item><title>Nytt verksted i Testby</title><link>https://fjellbekk.no/nytt-verksted/</link>'
+           '<pubDate>Thu, 03 Oct 2024 11:39:31 +0000</pubDate><description><![CDATA[<p>Vi har flyttet inn i et nytt '
+           'og større verksted på Testby.</p>' + footer.replace("demo/purevegg", "nytt-verksted") + ']]></description></item>'
+           '</channel></rss>')
+    items = W.parse_feed(rss)
+    assert [x["body_words"] for x in items] == [0, 11]
+    from kilde.templates import stub_posts
+    assert stub_posts(items) == {"https://fjellbekk.no/demo/purevegg/"}
+    # the REST list found only a stub and "Hello world!", so the feed is read next: the stub stays out of it
+    wp = json.dumps([_wp_row("Purevegg", "demo/purevegg", "2024-10-03", ""),
+                     _wp_row("Hello world!", "hello-world", "2024-09-17", "<p>Welcome to WordPress. This is your first post.</p>")])
+    body = f'<link href="/wp-content/a.css"><footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>'
+    f = _site({"https://fjellbekk.no/wp-json/wp/v2/posts?per_page=20&_fields=title,link,date,date_gmt,excerpt":
+               (200, wp, "application/json"),
+               "https://fjellbekk.no/feed/": (200, rss.replace("<item><title>Nytt", "<itemX><title>Nytt").replace(
+                   "</item></channel>", "</itemX></channel>"), "application/rss+xml")}, body=body)
+    ctx = ctx_for(hjemmeside="fjellbekk.no", stiftelsesdato="2020-01-01")
+    run(f, ctx)
+    assert not [c for c in ctx.claims if c.field == "dated_news" and c.availability == "available"]
