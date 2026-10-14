@@ -3717,6 +3717,9 @@ async def sitemap_activity(f: Fetcher, sp: _Spend, ctx: CompanyContext, home: Pa
                 ctx.facts["website_sitemap_note"] = "sitemap lastmod looks generated at request time; not used"
                 return
             dated = [x for x in dated if not re.search(r"/(tag|tags|kategori|category|author|forfatter)/", x[0], re.I)]
+            # a lastmod on the run's own day is usually stamped when the sitemap is generated: two runs a few
+            # minutes apart would quote different times, so today's stamps are never used
+            dated = [x for x in dated if x[1] != today]
             dated, bulk_note = drop_bulk_lastmods(dated)
             if bulk_note:
                 ctx.facts["website_sitemap_bulk"] = bulk_note

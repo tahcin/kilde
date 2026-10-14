@@ -3344,3 +3344,19 @@ def test_hosting_supplier_named_inside_the_matched_words_is_not_the_operator():
                                       "informasjon, se deres erklæring.</p>").encode(), "text/html"))
     n = [x for x in W.other_company_names([page], ["fjellbekk", "trevare"]) if x[0] == "kvist media"]
     assert n and not n[0][4] and not n[0][2]
+
+
+def test_sitemap_lastmods_on_the_run_day_are_not_page_updates():
+    """Framtid Media shape: a few entries stamped with the time the sitemap was generated, today."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    body = f"<footer>Org nr {OURS}</footer>"
+    sm = ('<?xml version="1.0"?><urlset>'
+          + "".join(f"<url><loc>https://fjellbekk.no/p{i}</loc><lastmod>2025-0{i}-15</lastmod></url>" for i in range(1, 8))
+          + f"<url><loc>https://fjellbekk.no/</loc><lastmod>{now}</lastmod></url></urlset>")
+    f = FakeFetcher({"https://fjellbekk.no/": (200, html(body)),
+                     "https://fjellbekk.no/sitemap.xml": (200, sm, "application/xml")})
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(f, ctx)
+    acts = [c.as_of for c in ctx.claims if c.field == "site_page_updated"]
+    assert acts and now[:10] not in acts
