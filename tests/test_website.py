@@ -3459,3 +3459,59 @@ def test_client_sharing_our_phone_is_not_a_presenter():
     claims = run(_site(rows, body=body), ctx_for(hjemmeside="fjellbekk.no", telefon="41000001"))
     assert claims["official_website"].value == "fjellbekk.no"
     assert claims["social_profile"].availability == "available"
+
+
+# ---------------------------------------------------------------- our subsidiary's workplace at our address
+def _parent_site_with_workplace(owner: str, tree_children: list[str]):
+    """Our registry-declared site, and a workplace named like us at our address that belongs to `owner`."""
+    body = "<h1>Fjellbekk Trevare ASA</h1><footer>Fjellbekk Trevare ASA · Lyngveien 12B, 9999 Testby</footer>"
+    unit = {"organisasjonsnummer": "999000088", "navn": "FJELLBEKK TREVARE AS AVD TESTBY", "overordnetEnhet": owner,
+            "beliggenhetsadresse": {"adresse": ["Lyngveien 12B"], "postnummer": "9999"}}
+    tree = json.dumps({"organisasjonsnummer": OURS,
+                       "children": [{"organisasjonsnummer": c, "children": []} for c in tree_children]})
+    pages = {"https://fjellbekk.no/": (200, html(body)),
+             W.BRREG_API + "/underenheter?navn=fjellbekk%20trevare&size=50":
+                 (200, json.dumps({"_embedded": {"underenheter": [unit]}}), "application/json"),
+             f"https://data.brreg.no/enhetsregisteret/api/konsernstruktur/{OURS}": (200, tree, "application/json")}
+    return FakeFetcher(pages), ctx_for(navn="FJELLBEKK TREVARE ASA", hjemmeside="www.fjellbekk.no", erIKonsern=True)
+
+
+def test_workplace_of_our_own_subsidiary_at_our_address_leaves_our_registry_site_ours():
+    f, ctx = _parent_site_with_workplace(OTHER, [OTHER])
+    claims = run(f, ctx)
+    assert claims["official_website"].value == "fjellbekk.no"
+
+
+def test_workplace_of_an_unrelated_company_at_our_address_still_shares_our_registry_site():
+    f, ctx = _parent_site_with_workplace(SISTER, [OTHER])
+    claims = run(f, ctx)
+    assert claims["official_website"].availability == "ambiguous"
+    assert claims["related_website"].value["domain"] == "fjellbekk.no"
+
+
+def _parent_site_with_codeclaring_namesake(tree_children: list[str]):
+    """Our registry-declared site, also declared by a company named like us at our address."""
+    body = "<h1>Fjellbekk Trevare ASA</h1><footer>Fjellbekk Trevare ASA · Lyngveien 12B, 9999 Testby</footer>"
+    row = {"organisasjonsnummer": OTHER, "navn": "FJELLBEKK SERVICE AS", "hjemmeside": "www.fjellbekk.no",
+           "forretningsadresse": {"adresse": ["Lyngveien 12B"], "postnummer": "9999"}}
+    tree = json.dumps({"organisasjonsnummer": OURS,
+                       "children": [{"organisasjonsnummer": c, "children": []} for c in tree_children]})
+    rows = json.dumps({"_embedded": {"enheter": [row]}})
+    pages = {"https://fjellbekk.no/": (200, html(body)),
+             W.BRREG_API + "/enheter?navn=fjellbekk&forretningsadresse.postnummer=9999&size=50":
+                 (200, rows, "application/json"),
+             W.BRREG_API + "/enheter?hjemmeside=fjellbekk.no&size=100": (200, rows, "application/json"),
+             f"https://data.brreg.no/enhetsregisteret/api/konsernstruktur/{OURS}": (200, tree, "application/json")}
+    return FakeFetcher(pages), ctx_for(navn="FJELLBEKK TREVARE ASA", hjemmeside="www.fjellbekk.no", erIKonsern=True)
+
+
+def test_our_subsidiary_at_our_address_declaring_our_site_leaves_it_ours():
+    f, ctx = _parent_site_with_codeclaring_namesake([OTHER])
+    assert run(f, ctx)["official_website"].value == "fjellbekk.no"
+
+
+def test_unrelated_namesake_at_our_address_declaring_our_site_still_shares_it():
+    f, ctx = _parent_site_with_codeclaring_namesake([SISTER])
+    claims = run(f, ctx)
+    assert claims["official_website"].availability == "ambiguous"
+    assert claims["related_website"].value["domain"] == "fjellbekk.no"

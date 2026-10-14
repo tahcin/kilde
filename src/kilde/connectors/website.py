@@ -811,6 +811,7 @@ class Verdict:
     final_url: str | None = None
     variant: list[str] | None = None  # set when the name matched only through a shortened name variant
     namesake: tuple[str, str] | None = None  # another registered entity with our name (registry-declared site)
+    namesake_owner: str = ""  # the company that namesake is or belongs to (a workplace's owning company)
     ignore_orgs: set = field(default_factory=set)  # our own group's org numbers, never "another company" here
     cross: bool = False         # redirected to another registered domain
     path_scoped: bool = False   # the site is one section of a host that serves others (chain or portal)
@@ -827,7 +828,7 @@ class Verdict:
 def judge(v: Verdict, org: str, e: dict, registry_host: str | None) -> None:
     """Decide the identity status of a candidate from the pages fetched so far."""
     pages = v.pages
-    v.others, v.method, v.proof, v.namesake = {}, None, [], None
+    v.others, v.method, v.proof, v.namesake, v.namesake_owner = {}, None, [], None, ""
     # (a) exact: our org number on any page
     for p in pages:
         span = find_orgnr(p, org)
@@ -1683,6 +1684,9 @@ async def _check_collision(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> Non
     if conflict and not (v.method == "registry_website_and_name" and "shared" in conflict):
         if v.method == "registry_website_and_name":
             v.namesake = (conflict, "")
+            if conflict.startswith("another registered entity at our address"):
+                row = _COLOC_ROW.get(ctx.org) or {}
+                v.namesake_owner = row.get("overordnetEnhet") or row.get("organisasjonsnummer") or ""
             v.detail = f"{v.detail}; {conflict}"
         else:
             v.status, v.method, v.detail = "name_only", None, conflict
@@ -1721,6 +1725,7 @@ async def _check_collision(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> Non
                 f"{'address' if our_addr and _addr_key(r) == our_addr else 'phone'}")
         if v.method == "registry_website_and_name":
             v.namesake = (r.get("navn") or "", org)
+            v.namesake_owner = r.get("overordnetEnhet") or org
             v.detail = f"{v.detail}; {what}"
             return
         v.status, v.method, v.detail = "name_only", None, what
@@ -1761,6 +1766,7 @@ async def _check_collision(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> Non
             # The company declared this website itself, so it stays its website, but the site may equally speak
             # for the namesake (often a subsidiary): nothing is derived from it.
             v.namesake = (r.get("navn") or "", owner or org)
+            v.namesake_owner = owner or org
             v.detail = f"{v.detail}; {what}"
             return
         v.status, v.method = "name_only", None
@@ -3881,7 +3887,9 @@ async def prepare_scope(sp: _Spend, ctx: CompanyContext, v: Verdict) -> Scope:
         # our staff bodies (pension fund, sports and staff clubs) and group mailboxes on other domains do not take
         # the site away from us. They do not get it either: a subsidiary still sees a related website.
         def ours_or_staff(org: str, name: str) -> bool:
-            return org in group or bool(STAFF_BODIES.search(name or ""))
+            # a registered namesake that is a workplace of one of our subsidiaries is ours too
+            own_unit = bool(v.namesake and name == v.namesake[0].lower() and v.namesake_owner in group)
+            return org in group or own_unit or bool(STAFF_BODIES.search(name or ""))
         others = {k: x for k, x in others.items() if k not in group}
         sisters = {k: x for k, x in sisters.items() if not ours_or_staff(str(x), k)}
         dominant = {k: x for k, x in dominant.items() if not ours_or_staff(str(x), k)
