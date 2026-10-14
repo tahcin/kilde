@@ -40,8 +40,8 @@ Options: `--previous <envelopes.jsonl>` (refresh against an earlier run), `--sta
 ## Results
 
 - [`smoke/`](smoke/): the 100-company smoke test Builderr asks for, produced from a clean clone with the command above, with the HTML report, every saved snapshot, and a second run showing identical facts.
-- [`profiles-1000/`](profiles-1000/): 1,000 company profiles from a clean clone (about 14 requests per company, $0).
-- [EVAL.md](EVAL.md): sixteen evaluation rounds on fresh random samples, each audited against live sources, version 1 against version 2, independent judge reviews, the determinism drill, and a benchmark against Builderr's own 100-company sample.
+- [`profiles-1000/`](profiles-1000/): 1,000 company profiles from a clean clone (about 13 requests per company, $0).
+- [EVAL.md](EVAL.md): seventeen evaluation rounds on fresh random samples, each audited against live sources, version 1 against version 2, independent judge reviews, the determinism drill, and a benchmark against Builderr's own 100-company sample.
 
 ## Envelope
 
@@ -62,7 +62,7 @@ Options: `--previous <envelopes.jsonl>` (refresh against an earlier run), `--sta
   "summary": {"text": "...", "sentences": [{"text": "...", "claim_ids": ["c1"]}], "unknowns": ["..."]},
   "changes": [],
   "errors": [],
-  "operations": {"requests": 14, "third_party_cost_usd": 0, "llm_calls": 0}
+  "operations": {"requests": 13, "third_party_cost_usd": 0, "llm_calls": 0}
 }
 ```
 
@@ -115,7 +115,7 @@ Every run can diff against the previous envelopes (`--previous`, or automaticall
 
 Every request goes through one budgeted client. Defaults: 20 outbound HTTP requests per company and 30 minutes per batch (`--time-budget 1800`), both configurable. Identity, roles, accounts and workplaces for every company run first; external sources share what is left. Each step has a timeout; a step that times out rolls back anything it published half-way, and timed-out website steps get one unhurried second pass. DNS or network failures are reported as `failed`, never as absence. Transient failures (timeouts, HTTP 429 and 5xx, failed registry searches) end as `failed` and are retried in a second pass, so a slow site never turns into a different answer on the next run. When time or requests run out, the remaining facts are marked `failed` with the reason and every envelope is still written.
 
-Measured from a fresh clone (version 2): 1,000 companies in 20.8 minutes with 14,128 requests (about 14 per company), while other runs shared the connection; 100 companies in about 4 minutes with 1,515 requests. Details in [EVAL.md](EVAL.md). The run report gives HTTP requests and DNS lookups separately; DNS lookups are used only to drop name-derived domains that do not exist before any HTTP request. Fetches to private, loopback, link-local or other non-public addresses are refused, including on redirects, and each redirect hop must be allowed by its own host's robots.txt. Two runs of the same batch produce identical facts (Builderr runs each entry twice and compares).
+Measured from a fresh clone (version 2): 1,000 companies with 12,608 requests (about 13 per company), in 12.3 minutes while other runs shared the connection (about 12 to 20 minutes depending on network); 100 companies in about 4 minutes with 1,373 requests. Details in [EVAL.md](EVAL.md). The run report gives HTTP requests and DNS lookups separately; DNS lookups are used only to drop name-derived domains that do not exist before any HTTP request. Fetches to private, loopback, link-local or other non-public addresses are refused, including on redirects, and each redirect hop must be allowed by its own host's robots.txt. Two runs of the same batch produce identical facts (Builderr runs each entry twice and compares).
 
 | Item | Cost |
 |---|---|
