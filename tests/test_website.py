@@ -2476,3 +2476,66 @@ def test_chain_sitemap_gives_no_site_page_updates():
     run(f, ctx)
     assert not [c for c in ctx.claims if c.field == "site_page_updated" and c.availability == "available"]
     assert "bulk" in ctx.facts["website_sitemap_bulk"]
+
+
+WP = "999000045"
+
+
+def _workplace_ctx(**rec) -> CompanyContext:
+    ctx = ctx_for(navn="LYNGSTAD BELLA SOLSIKKE AS", **rec)
+    ctx.facts["workplaces"] = [{"organisasjonsnummer": WP, "navn": "BELLA SOLSIKKE",
+                                "beliggenhetsadresse": {"adresse": ["Torget 3"], "postnummer": "9998", "poststed": "TESTBY"}}]
+    return ctx
+
+
+def _workplace_site(body: str) -> dict:
+    return {"https://bellasolsikke.no/": (200, html(body, title="Bella Solsikke"))}
+
+
+def test_workplace_name_gives_domain_candidates_after_the_legal_name():
+    ctx = _workplace_ctx()
+    cands = W.candidates(ctx)
+    srcs = [s for _d, s, _u in cands]
+    assert [d for d, s, _u in cands if s == "guess_workplace"] == ["bellasolsikke.no", "bella-solsikke.no", "bellasolsikke.com"]
+    assert srcs.index("guess_workplace") > max(i for i, s in enumerate(srcs) if s == "guess")
+    # a workplace named like the company, or by a single common word, gives no extra guesses
+    ctx.facts["workplaces"] = [{"organisasjonsnummer": WP, "navn": "LYNGSTAD BELLA SOLSIKKE AS"},
+                               {"organisasjonsnummer": THIRD, "navn": "FRISOR"}]
+    assert not [d for d, s, _u in W.candidates(ctx) if s == "guess_workplace"]
+
+
+def test_workplace_site_proven_by_workplace_name_and_location_address():
+    body = "<main><h1>Bella Solsikke</h1><p>Besøksadresse: Torget 3, 9998 Testby</p><a href='mailto:post@bellasolsikke.no'>e</a></main>"
+    f = FakeFetcher(_workplace_site(body))
+    ctx = _workplace_ctx()
+    claims = run(f, ctx)
+    site = claims["official_website"]
+    assert site.availability == "available" and site.value == "bellasolsikke.no"
+    assert site.match["method"] == "workplace_address_and_name"
+    spans = " | ".join(e.claim_span for e in ctx.evidence if e.id in site.evidence_ids)
+    assert "Torget 3" in spans and "Bella Solsikke" in spans
+
+
+@pytest.mark.parametrize("body,namesake", [
+    # the workplace's name without its registered address
+    ("<main><h1>Bella Solsikke</h1><p>Storgata 1, 9998 Testby</p></main>", None),
+    # another company's organisation number on the site
+    (f"<main><h1>Bella Solsikke</h1><p>Torget 3, 9998 Testby</p><footer>Org.nr {OTHER}</footer></main>", None),
+    # another registered entity carries the workplace name (a chain or a namesake): never ours by name
+    ("<main><h1>Bella Solsikke</h1><p>Torget 3, 9998 Testby</p></main>", "BELLA SOLSIKKE KJEDEN AS"),
+])
+def test_workplace_site_needs_address_no_other_number_and_no_namesake(body, namesake):
+    pages = _workplace_site(body)
+    if namesake:
+        row = {"organisasjonsnummer": FOURTH, "navn": namesake, "organisasjonsform": {"kode": "AS"},
+               "forretningsadresse": {"adresse": ["Torget 3"], "postnummer": "9998"}}
+        pages["https://data.brreg.no/enhetsregisteret/api/enheter?navn=bella%20solsikke&size=50"] = (
+            200, json.dumps({"_embedded": {"enheter": [row]}, "page": {"totalPages": 1}}), "application/json")
+    ctx = _workplace_ctx()
+    claims = run(FakeFetcher(pages), ctx)
+    assert claims["official_website"].availability != "available"
+    got = next(x for x in ctx.facts["website_candidates"] if x["domain"] == "bellasolsikke.no")
+    if namesake:
+        assert "carries the workplace name" in got["detail"]
+    else:
+        assert got["status"] in ("no_match", "other_company")

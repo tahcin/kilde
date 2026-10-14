@@ -1115,6 +1115,7 @@ async def check_candidate(f: Fetcher, sp: _Spend, ctx: CompanyContext, v: Verdic
     await _check_variant(sp, ctx, v)
     await _check_collision(sp, ctx, v)
     await _check_legal_name_unique(sp, ctx, v)
+    await _check_workplace(sp, ctx, v)
 
 
 def _related_name_operates(pages: list[Page], words: list[str]) -> bool:
@@ -1661,7 +1662,100 @@ def candidates(ctx: CompanyContext) -> list[tuple[str, str, str | None]]:
         nm = old.get("navn") if isinstance(old, dict) else old
         for d in name_domains(nm or "", e)[:2]:
             add(d, "guess")
+    for d in workplace_domains(ctx):  # last: a registered workplace's own name (a restaurant, a shop)
+        add(d, "guess_workplace")
     return out
+
+
+WORKPLACE_NAMES = 2    # workplaces whose names give domain guesses
+WORKPLACE_DOMAINS = 3  # guesses per workplace name: joined .no, hyphenated .no, joined .com
+
+
+def _workplace_label(name: str) -> str | None:
+    """The domain label a workplace name gives (all its words joined), or None when the name is too weak to
+    stand for a site: a single common word, digits only, or under six letters."""
+    words = [w for w in name_words(name) if not w.isdigit()]
+    if not words or (len(words) == 1 and (_translit(words[0]) in COMMON_NOUNS or words[0] in GENERIC_WORDS)):
+        return None
+    lab = _ascii_variants(words)[0]
+    joined = "".join(lab)
+    return joined if len(re.sub(r"[^a-z]", "", joined)) >= 6 else None
+
+
+def workplace_domains(ctx: CompanyContext) -> list[str]:
+    """Domain guesses from the names of the company's registered workplaces (underenheter) whose names differ
+    from the legal name: 'BELLA BAMBINA' of 'EIK BELLA BAMBINA AS' gives bellabambina.no. Full names only
+    (never a shortened part), in registry order, at most WORKPLACE_NAMES names and WORKPLACE_DOMAINS each."""
+    e = ctx.registry or {}
+    legal = _workplace_label(e.get("navn") or "") or ""
+    out: list[str] = []
+    names = 0
+    for w in ctx.facts.get("workplaces") or []:
+        lab = _workplace_label(w.get("navn") or "")
+        if not lab or lab == legal or names >= WORKPLACE_NAMES:
+            continue
+        names += 1
+        words = _ascii_variants([x for x in name_words(w["navn"]) if not x.isdigit()])[0]
+        for d in ("".join(words) + ".no", "-".join(words) + ".no", "".join(words) + ".com")[:WORKPLACE_DOMAINS]:
+            if d not in out:
+                out.append(d)
+                ctx.facts.setdefault("website_workplace_domains", {})[d] = w.get("organisasjonsnummer")
+    return out
+
+
+async def _check_workplace(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> None:
+    """A domain guessed from a registered workplace's name is ours when the site prints that workplace's full
+    name and its registered location address (street, number and postcode), prints no other organisation
+    number, and no other registered entity or another company's workplace carries the workplace's name (a
+    chain or franchise under that name, or a namesake elsewhere): the same registry name search that guards
+    name-and-address proofs for the legal name, with no exception for shared addresses."""
+    if v.source != "guess_workplace" or v.cross or v.path_scoped or v.others or v.namesake or v.method:
+        return
+    if v.status not in ("no_match", "name_only") or (v.status == "name_only" and not str(v.detail or "").startswith("legal name shown")):
+        return
+    e = ctx.registry or {}
+    if ((e.get("organisasjonsform") or {}).get("kode") or "").upper() in NON_OPERATING:
+        return
+    wp_org = (ctx.facts.get("website_workplace_domains") or {}).get(bare(v.domain))
+    w = next((x for x in ctx.facts.get("workplaces") or [] if x.get("organisasjonsnummer") == wp_org), None)
+    if not w or not w.get("beliggenhetsadresse"):
+        return
+    label = re.sub(r"[^a-z0-9]", "", bare(v.pages[0].host).split(".")[0]) if v.pages else ""
+    if label != _workplace_label(w["navn"]):
+        return  # the site's own domain must be the workplace's whole name
+    words = [x for x in name_words(w["navn"]) if not x.isdigit()]
+    name_span = name_page = None
+    for p in v.pages:
+        s, conflict = name_check(p.text, words)
+        if s and not conflict:
+            name_span, name_page = s, p
+            break
+    addr = None
+    for p in v.pages:
+        s, core = find_address_core(p, {"forretningsadresse": w["beliggenhetsadresse"]})
+        if s:
+            addr = (p, s, core)
+            break
+    if not name_span or not addr:
+        return
+    ours = _core_tokens(w["navn"])
+    rows, cut = await registry_rows(sp, words)
+    if cut:
+        v.detail = f"workplace name {w['navn']} is too common in the registry to decide"
+        return
+    for r in rows:
+        org = r.get("organisasjonsnummer")
+        if org in (ctx.org, wp_org) or r.get("overordnetEnhet") == ctx.org or not _active(r):
+            continue
+        theirs = _core_tokens(r.get("navn") or "")
+        if theirs and (theirs <= ours or ours <= theirs or _near(ours, theirs)):
+            owner = r.get("overordnetEnhet")
+            v.detail = (f"another registered entity carries the workplace name: {r.get('navn')} ({org}"
+                        + (f", workplace of {owner}" if owner else "") + ")")
+            return
+    v.status, v.method = "proven", "workplace_address_and_name"
+    v.detail = f"registered workplace {w['navn']} ({wp_org}): its name and location address shown on its own domain"
+    v.proof = [addr, (name_page, name_span, _match_core(name_span, words))]
 
 
 # ---------------------------------------------------------------- extraction

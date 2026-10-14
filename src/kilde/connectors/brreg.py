@@ -270,6 +270,10 @@ async def fetch_subunits(f: Fetcher, ctx: CompanyContext) -> None:
                               span='"totalElements":0')
         ctx.mark("registered_workplace", "locations", "not_available", ev, note="No registered sub-units")
         return
+    # active workplaces as registered (name and location address), for website candidates by workplace name
+    ctx.facts["workplaces"] = [{"organisasjonsnummer": u.get("organisasjonsnummer"), "navn": u.get("navn"),
+                                "beliggenhetsadresse": u.get("beliggenhetsadresse")}
+                               for u in items if not u.get("nedleggelsesdato") and u.get("navn")]
     for u in items:
         if u.get("nedleggelsesdato"):
             continue
