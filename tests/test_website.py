@@ -2432,3 +2432,47 @@ def test_list_without_item_containers_drops_dates_it_cannot_tie_to_one_link():
     page = W.parse_page(Snapshot(url="https://fjellbekk.no/nyheter", final_url="https://fjellbekk.no/nyheter", status=200,
                                  retrieved_at=utc_now(), content=listing.encode(), content_type="text/html"))
     assert W.news_items(page, "fjellbekk.no", W.Scope(OURS, ["fjellbekk"])) == []
+
+
+def _dated(rows):
+    return [(f"https://fjellbekk.no{p}", d, d) for p, d in rows]
+
+
+def test_bulk_lastmod_days_and_chain_sections_are_not_page_updates():
+    # chain platform: 60 service pages pushed on one day plus a supplier section, a few own pages on other days
+    chain = ([(f"/tjenester/t{i}", "2026-10-05") for i in range(60)] + [(f"/tjenester/n{i}", "2026-10-12") for i in range(3)]
+             + [(f"/leverandorer/l{i}", "2026-10-05") for i in range(8)] + [("/leverandorer", "2026-10-12")]
+             + [(f"/produkt/p{i}", f"2026-0{1 + i % 8}-1{i % 9}") for i in range(80)] + [("/om-oss", "2026-09-01")])
+    kept, note = W.drop_bulk_lastmods(_dated(chain))
+    paths = {urlsplit(u).path for u, _, _ in kept}
+    assert note and "2026-10-05" in note and "/tjenester" in note
+    assert not any(p.startswith(("/tjenester", "/leverandorer")) for p in paths)  # section and its index page
+    assert "/om-oss" in paths and "/produkt/p3" in paths
+    # mostly stamped in bulk: nothing from the sitemap is a page update
+    mostly = [(f"/tjenester/t{i}", "2026-10-05") for i in range(40)] + [(f"/x{i}", f"2026-0{1 + i}-01") for i in range(5)]
+    assert W.drop_bulk_lastmods(_dated(mostly))[0] == []
+    small_refresh = [(f"/side{i}", "2026-09-28") for i in range(12)] + [("/en/a", "2026-10-01"), ("/b", "2026-07-02")]
+    assert W.drop_bulk_lastmods(_dated(small_refresh))[0] == []
+
+
+def test_ordinary_and_large_active_sitemaps_keep_their_dates():
+    spread = [(f"/p{i}", f"2026-{1 + i % 9:02d}-{1 + i % 27:02d}") for i in range(40)]
+    assert W.drop_bulk_lastmods(_dated(spread)) == (_dated(spread), None)
+    # a 1,000-page site touching 80 pages (8%) on its busiest day is an active site, not a platform push
+    big = [(f"/kunnskap/a{i}", "2026-05-08") for i in range(80)] + \
+        [(f"/kunnskap/b{i}", f"2026-{1 + i % 9:02d}-{1 + i % 28:02d}") for i in range(920)]
+    kept, note = W.drop_bulk_lastmods(_dated(big))
+    assert note is None and len(kept) == 1000
+    assert W.drop_bulk_lastmods(_dated(spread[:5]))[1] is None  # too few URLs to judge
+
+
+def test_chain_sitemap_gives_no_site_page_updates():
+    body = f"<footer>Org nr {OURS}</footer>"
+    rows = [(f"/tjenester/t{i}", "2026-10-05") for i in range(30)] + [(f"/tjenester/n{i}", "2026-10-13") for i in range(4)]
+    sm = ('<?xml version="1.0"?><urlset>' + "".join(f"<url><loc>https://fjellbekk.no{p}</loc><lastmod>{d}</lastmod></url>"
+                                                   for p, d in rows) + "</urlset>")
+    f = FakeFetcher({"https://fjellbekk.no/": (200, html(body)), "https://fjellbekk.no/sitemap.xml": (200, sm, "application/xml")})
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(f, ctx)
+    assert not [c for c in ctx.claims if c.field == "site_page_updated" and c.availability == "available"]
+    assert "bulk" in ctx.facts["website_sitemap_bulk"]

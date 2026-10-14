@@ -19,6 +19,7 @@ eight HTTP requests.
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import re
 import unicodedata
@@ -2989,6 +2990,53 @@ def _activity_blocked(ctx: CompanyContext, field_name: str) -> bool:
     return False
 
 
+BULK_MIN_URLS = 10      # a day stamped on at least this many URLs ...
+BULK_MIN_SHARE = 0.25   # ... that are at least this share of the sitemap is a bulk regeneration
+BULK_MANY_URLS = 25     # and 25 or more URLs on one day is one when they are at least a tenth of the sitemap
+BULK_MANY_SHARE = 0.1   # (a large active site touching 3-8% of its pages on a busy day is not)
+BULK_SECTION_SHARE = 0.5  # a path section mostly stamped on bulk days is platform or chain content
+BULK_SITE_SHARE = 0.5     # and a sitemap mostly stamped on bulk days gives no page update at all
+
+
+def drop_bulk_lastmods(dated: list[tuple[str, str, str]]) -> tuple[list[tuple[str, str, str]], str | None]:
+    """Sitemap lastmod values that show a platform, not the company, at work. A day carried by many URLs at
+    once (a theme or CMS regeneration, a chain pushing shared pages to every member site) is not a page
+    update, and neither is any page in a path section that is mostly stamped on such days (the section is
+    shared content: a chain's service or supplier pages, refreshed again on other days by the chain).
+    Thresholds from sitemaps seen across 1,000-company runs: chain sites put 52-55% of 300 URLs on one day,
+    template refreshes on small sites 70-90%, CMS migrations 25-40% of 80-470 URLs and chain pushes 11-14%
+    (25-45 URLs); an active 1,000-page site put at most 8% (84 URLs) on its busiest day, which stays."""
+    if len(dated) < BULK_MIN_URLS:
+        return dated, None
+    days = collections.Counter(d for _, d, _ in dated)
+    bulk = {d for d, n in days.items()
+            if (n >= BULK_MANY_URLS and n / len(dated) >= BULK_MANY_SHARE)
+            or (n >= BULK_MIN_URLS and n / len(dated) >= BULK_MIN_SHARE)}
+    if not bulk:
+        return dated, None
+
+    def section(u: str) -> str:
+        parts = [x for x in urlsplit(u).path.split("/") if x]
+        return parts[0].lower() if len(parts) > 1 else ""  # top-level pages are judged one by one
+
+    per: dict[str, list[int]] = {}
+    for loc, d, _ in dated:
+        per.setdefault(section(loc), [0, 0])
+        per[section(loc)][0] += 1
+        per[section(loc)][1] += d in bulk
+    shared = {sec for sec, (n, b) in per.items() if sec and n >= 5 and b / n >= BULK_SECTION_SHARE}
+    n_bulk = sum(days[d] for d in bulk)
+    if n_bulk / len(dated) >= BULK_SITE_SHARE:
+        kept = []  # most of the sitemap is stamped in bulk: its lastmod values are the platform's, page by page too
+    else:
+        kept = [x for x in dated if x[1] not in bulk and section(x[0]) not in shared
+                and urlsplit(x[0]).path.strip("/").lower() not in shared]  # a shared section's own index page
+    note = (f"{n_bulk} of {len(dated)} sitemap URLs share bulk lastmod day(s) {', '.join(sorted(bulk))}"
+            + (f"; sections {', '.join('/' + x for x in sorted(shared))} are platform or chain content" if shared else "")
+            + "; not used as page updates")
+    return kept, note
+
+
 async def sitemap_activity(f: Fetcher, sp: _Spend, ctx: CompanyContext, home: Page, domain: str,
                            scope: Scope | None = None) -> None:
     scope = scope or Scope("", [])
@@ -3026,6 +3074,9 @@ async def sitemap_activity(f: Fetcher, sp: _Spend, ctx: CompanyContext, home: Pa
                 ctx.facts["website_sitemap_note"] = "sitemap lastmod looks generated at request time; not used"
                 return
             dated = [x for x in dated if not re.search(r"/(tag|tags|kategori|category|author|forfatter)/", x[0], re.I)]
+            dated, bulk_note = drop_bulk_lastmods(dated)
+            if bulk_note:
+                ctx.facts["website_sitemap_bulk"] = bulk_note
             floor = _date_floor(ctx)
             early = [x for x in dated if x[1] < floor]
             if early:
