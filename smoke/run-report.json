@@ -2,28 +2,26 @@
   "run_id": "smoke-100",
   "agent": "Kilde",
   "version": "1.0.0",
-  "commit": "853e897cb12a14899658a5045fd91955af3f70aa",
-  "started_at": "2026-10-14T10:28:15Z",
-  "completed_at": "2026-10-14T10:30:56Z",
+  "commit": "5bfbb24c63f27bb8ed5c85f7ec69abe51cfef7a1",
+  "started_at": "2026-10-14T11:20:16Z",
+  "completed_at": "2026-10-14T11:24:10Z",
   "expected_count": 100,
   "emitted_envelopes": 100,
-  "runtime_ms": 163526,
+  "runtime_ms": 236959,
   "publication_gate": {
-    "withheld": 1,
-    "notes": [
-      "913170539 social_profile: social handle 'company/arctic-feed-ingredients-as' names another legal entity (sas)"
-    ]
+    "withheld": 0,
+    "notes": []
   },
-  "website_retries": 4,
+  "website_retries": 6,
   "company_runtime_ms": {
-    "p50": 29179,
-    "p95": 54710,
-    "max": 65208
+    "p50": 25156,
+    "p95": 50470,
+    "max": 128951
   },
   "operations": {
-    "requests": 1346,
+    "requests": 1373,
     "max_requests": 2000,
-    "dns_lookups": 1997,
+    "dns_lookups": 2031,
     "cache_hits": 0,
     "by_host": {
       "data.brreg.no": 637,
@@ -43,12 +41,12 @@
       "njordenergi.no": 13,
       "www.openstudio.no": 13,
       "www.utecomfort.no": 12,
-      "www.rides.no": 10,
+      "www.rides.no": 11,
       "api.gleif.org": 6,
       "eddagrafisk.no": 6,
       "api.finanstilsynet.no": 5,
-      "birkas.no": 5,
       "k33.com": 5,
+      "birkas.no": 5,
       "clarionhotelstavanger.com": 5,
       "dogman.no": 5
     },
