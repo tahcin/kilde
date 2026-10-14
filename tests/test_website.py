@@ -2923,3 +2923,23 @@ def test_one_word_name_in_lower_case_with_legal_form():
     assert not W.name_check("kontakt: fjellbekkverk lyngveien 12b", ["fjellbekkverk"])[0]  # run-together token
     assert not W.name_check("post@fjellbekkverk.no as", ["fjellbekkverk"])[0]
     assert not W.name_check("se fjellbekktrevare as", ["fjellbekk", "trevare"])[0]  # several words run together
+
+
+@pytest.mark.parametrize("inbox,exclusive", [
+    ("fjellbekk@ebilag.toko.no", True),       # e-invoice scan inbox
+    ("faktura.fjellbekk@tripletex.no", True),  # accounting platform
+    ("kvittering@faktura.example-regnskap.no", True),  # a 'faktura' inbox subdomain
+    ("post@nabosnekker.no", False),            # a genuine other company's address still counts
+])
+def test_service_mail_domains_do_not_make_a_site_shared(inbox, exclusive):
+    body = (f'<h1>Fjellbekk Trevare</h1><footer>Fjellbekk Trevare AS, org.nr. {OURS} '
+            f'<a href="mailto:post@fjellbekktrevare.no">post</a> Faktura: <a href="mailto:{inbox}">{inbox}</a></footer>')
+    f = FakeFetcher({"https://fjellbekktrevare.no/": (200, html(body))})
+    ctx = ctx_for(hjemmeside="fjellbekktrevare.no")
+    run(f, ctx)
+    assert ctx.facts["website_exclusive"] is exclusive
+
+
+def test_service_mail_domain():
+    assert W.service_mail_domain("ebilag.toko.no") and W.service_mail_domain("vipps.no")
+    assert not W.service_mail_domain("nabosnekker.no") and not W.service_mail_domain("ebilag-snekker.no")

@@ -1230,7 +1230,7 @@ def _declared_host(e: dict, host: str) -> bool:
     hj = host_of((e.get("hjemmeside") or "").strip()) if (e.get("hjemmeside") or "").strip() else ""
     mail = (e.get("epostadresse") or "").strip().lower()
     dom = mail.rsplit("@", 1)[1] if "@" in mail else ""
-    if dom in FREE_MAIL or any(dom.endswith("." + x) for x in FREE_MAIL) or INVOICE_MAIL.search(dom or "-"):
+    if dom in FREE_MAIL or any(dom.endswith("." + x) for x in FREE_MAIL) or service_mail_domain(dom):
         dom = ""
     return any(d and same_site(bare(host), bare(d)) for d in (hj, dom))
 
@@ -1253,6 +1253,33 @@ COMMON_NOUNS = {"forsikring", "bank", "sparebank", "kraft", "energi", "entrepren
 
 INVOICE_MAIL = re.compile(r"(?i)poweroffice|tripletex|fiken|visma|ehf|24sevenoffice|uni-?economy|xledger|"
                           r"conta|cloudflare|wpengine|invoice|faktura\.")
+# Mail domains of e-invoice inboxes, accounting, payroll, payment and booking platforms: an address there
+# (faktura@..., an EHF scan inbox on ebilag.toko.no) is a service the company uses, not another organisation.
+SERVICE_MAIL_DOMAINS = {
+    "toko.no", "tripletex.no", "fiken.no", "visma.com", "visma.net", "visma.no", "vismaonline.com",
+    "eaccounting.no", "uni-economy.no", "unimicro.no", "unieconomy.no", "poweroffice.no", "poweroffice.net",
+    "24sevenoffice.com", "24sevenoffice.no", "conta.no", "xledger.net", "xledger.no", "sendregning.no",
+    "e-conomic.no", "e-conomic.com", "dnbregnskap.no", "duett.no", "mamut.no", "zirius.no", "logiq.no",
+    "accountor.no", "azets.com", "azets.no", "hogia.no", "huldt-lillevik.no", "zenegy.com", "zenegy.no",
+    "kontali.no", "regnskapnorge.no", "aksesspunkt.no", "peppol.eu", "peppol.no", "ehf.no", "edi.no",
+    "pagero.com", "pagero.no", "basware.com", "tungsten-network.com", "inexchange.se", "inexchange.no",
+    "vipps.no", "vippsmobilepay.com", "stripe.com", "nets.eu", "klarna.com", "paypal.com", "svea.com",
+    "timma.no", "bookmyday.no", "simplybook.me", "calendly.com", "bokadirekt.se", "hano.no", "planway.com",
+    "easytimer.no", "mailgun.org", "sendgrid.net", "mailchimp.com", "mcsv.net",
+}
+SERVICE_MAIL_LABEL = re.compile(r"(?i)^(ebilag|bilag|e-?faktura|faktura|invoice|invoices|inbox|scan|ehf|peppol)$")
+
+
+def service_mail_domain(dom: str) -> bool:
+    """The mail domain belongs to an invoicing, accounting, payroll, payment or booking service."""
+    d = bare((dom or "").lower().strip("."))
+    if not d:
+        return False
+    if INVOICE_MAIL.search(d) or any(d == x or d.endswith("." + x) for x in SERVICE_MAIL_DOMAINS):
+        return True
+    return d.count(".") >= 2 and bool(SERVICE_MAIL_LABEL.match(d.split(".")[0]))
+
+
 NON_OPERATING = {"ESEK", "SAM", "BRL"}  # owners' sections, co-owned properties, housing co-ops
 _NAME_SEARCH: dict[str, list[dict]] = {}
 
@@ -3611,7 +3638,7 @@ async def prepare_scope(sp: _Spend, ctx: CompanyContext, v: Verdict) -> Scope:
         for a in p.soup.find_all("a", href=re.compile(r"^mailto:", re.I)):
             dom = unquote(a["href"][7:]).split("?")[0].strip().lower().rsplit("@", 1)[-1]
             if not re.fullmatch(r"[a-z0-9.\-]+\.[a-z]{2,}", dom) or dom in FREE_MAIL or same_site(dom, home.host) \
-                    or (reg_mail and same_site(dom, reg_mail)) or INVOICE_MAIL.search(dom):
+                    or (reg_mail and same_site(dom, reg_mail)) or service_mail_domain(dom):
                 continue
             label = re.sub(r"[^a-z0-9]", "", dom.split(".")[-2] if dom.count(".") >= 1 else dom)
             site_label = re.sub(r"[^a-z0-9]", "", bare(home.host).split(".")[0])
