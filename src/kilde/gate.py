@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 
 from .model import CompanyContext
 from .templates import template_post
+from .words import generic_word, person_handle, social_tokens
 
 DERIVED = {"site_contact_email", "site_contact_phone", "social_profile", "site_page_updated", "site_news",
            "careers_page", "hiring_signal", "dated_news", "website_description", "website_title", "structured_data_organization"}
@@ -54,6 +55,20 @@ def registered_domain(url_or_host: str) -> str:
 def distinctive_tokens(name: str) -> list[str]:
     toks = [fold(t) for t in re.findall(r"[\wæøåÆØÅ]+", name)]
     return [t for t in toks if len(t) >= 3 and fold(t) not in {fold(g) for g in GENERIC} and not t.isdigit()]
+
+
+LEGAL_FORMS = {"as", "asa", "sa", "da", "ans", "ba", "nuf", "ks", "enk", "sti", "iks", "kf"}
+
+
+def _places(reg: dict) -> set[str]:
+    """Place words (counties, regions, larger towns, the registry municipality and post town), folded."""
+    from .connectors.website import REGIONS
+    out = set(REGIONS)
+    for key in ("forretningsadresse", "beliggenhetsadresse", "postadresse"):
+        a = reg.get(key) or {}
+        for k in ("kommune", "poststed"):
+            out |= {fold(w) for w in re.findall(r"[a-zæøåäöü]+", (a.get(k) or "").lower()) if len(w) >= 3}
+    return out
 
 
 def _digits(s: str) -> str:
@@ -177,6 +192,10 @@ def check(ctx: CompanyContext) -> list[str]:
         return notes
     own_forms = {fold(t) for t in re.findall(r"[\wæøå]+", reg.get("navn", "").lower())}
     label_alnum = re.sub(r"[^a-z0-9]", "", label)
+    # social handles: only tokens that identify this company (no trade, industry, place or person-name word)
+    places = _places(reg)
+    name_ws = [w for w in re.findall(r"[\wæøåÆØÅ]+", (reg.get("navn") or "").lower()) if fold(w) not in LEGAL_FORMS]
+    stoks = social_tokens(name_ws, places)
     # 3. Social profiles from the site must name the company: the handle carries a distinctive token of
     #    the legal name or the site's domain label, or is a pure numeric ID. Site builders and agencies
     #    leave their own profiles in templates (a Surftown-built site linked Surftown's profiles).
@@ -186,9 +205,13 @@ def check(ctx: CompanyContext) -> list[str]:
         handle = fold(str(c.value).split("/", 1)[1] if "/" in str(c.value) else str(c.value))
         handle_alnum = re.sub(r"[^a-z0-9]", "", handle)
         numeric_id = bool(re.search(r"(profile\.php\?id=\d+|channel/uc[\w-]{10,}|/\d{6,}$|-\d{9,}$|^\d{9,}$)", handle))
-        named = any(re.sub(r"[^a-z0-9]", "", t) in handle_alnum for t in tokens if len(t) >= 4) or \
-            (len(label_alnum) >= 3 and label_alnum in handle_alnum) or \
+        named = any(t in handle_alnum for t in stoks) or \
+            (len(label_alnum) >= 3 and label_alnum in handle_alnum and not generic_word(label_alnum)
+             and label_alnum not in places) or \
             (tokens and re.sub(r"[^a-z0-9]", "", "".join(tokens)) in handle_alnum)
+        if person_handle(handle_alnum, name_ws, places) and not numeric_id:
+            withhold(c, f"social handle '{handle}' is a person's name from the legal name, not a company profile")
+            continue
         if not (named or numeric_id):
             withhold(c, f"social handle '{handle}' does not carry the company's name or its site's domain (possible template or agency link)")
             continue

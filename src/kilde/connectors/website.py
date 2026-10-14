@@ -37,6 +37,7 @@ from ..http import Blocked, BudgetExhausted, Fetcher
 from ..spans import contains_core
 from ..templates import body_word_count, is_template_url, stub_posts, template_post
 from ..model import COMPANY_OWNED, CompanyContext, Evidence, Snapshot
+from ..words import generic_word, person_handle, social_tokens
 
 METHOD = "website_identity_v1"
 EXTRACT = "website_extract_v1"
@@ -2336,6 +2337,7 @@ class Scope:
     ours_printed: bool = False  # our org number in an operator position, no other operator: the site is ours
     group_root: bool = False  # we are the top parent of a registry group, on our own proven domain
     addr: tuple | None = None  # (street regex, postcode) of our registered address
+    handle_namesakes: list = field(default_factory=list)  # registered names that social handles on the site carry
 
     def __post_init__(self) -> None:
         ours_t = [_translit(w) for w in self.words]
@@ -2780,8 +2782,23 @@ def _mixed_block(page: Page, keys: set[str]) -> bool:
     return False
 
 
+def _social_keys(words: list[str], domains: set[str], places: set[str] | None = None) -> set[str]:
+    """What a site-linked social handle must contain to name us: a distinctive token of the legal name (never a
+    trade, industry, form, place or person-name word: 'radio' is shared by Radio Sandefjord and Radio Tønsberg),
+    the whole name run together, or the site's domain label when that label is not itself only such a word."""
+    pl = set(places or ()) | REGIONS
+    keys = set(social_tokens(words, pl))
+    keys.add(re.sub(r"[^a-z0-9]", "", _translit("".join(words))))
+    for d in domains:
+        lab = re.sub(r"[^a-z0-9]", "", (d or "").split(".")[0])
+        if lab and not generic_word(lab) and lab not in pl and lab not in GENERIC_WORDS:
+            keys.add(lab)
+    return {k for k in keys if len(k) >= 4}
+
+
 def collect_socials(pages: list[Page], words: list[str], domains: set[str], scope: Scope | None = None,
-                    other_names: list[str] | None = None) -> tuple[list[tuple[str, str, Page, str]], list[str]]:
+                    other_names: list[str] | None = None,
+                    places: set[str] | None = None) -> tuple[list[tuple[str, str, Page, str]], list[str]]:
     """Social profile links from the verified site's pages and JSON-LD sameAs.
 
     A link is kept when its handle carries the company's name or domain; or, for handle-less ids
@@ -2829,11 +2846,7 @@ def collect_socials(pages: list[Page], words: list[str], domains: set[str], scop
                     c = clean_social(s)
                     if c and not (scope.sisters and scope.names_sister(s)):
                         found.setdefault(c[0], {}).setdefault(c[1], [p, s[:300], True, True])
-    keys = {re.sub(r"[^a-z0-9]", "", _translit(w)) for w in words if len(w) >= 4 and _translit(w) not in REGIONS
-            and w not in GENERIC_WORDS and w not in FORM_NAME_WORDS}
-    keys.add(re.sub(r"[^a-z0-9]", "", _translit("".join(words))))
-    keys |= {re.sub(r"[^a-z0-9]", "", d.split(".")[0]) for d in domains if d}
-    keys = {k for k in keys if len(k) >= 4}
+    keys = _social_keys(words, domains, places)
     out = []
     for plat in sorted(found):
         urls = found[plat]
@@ -2844,7 +2857,7 @@ def collect_socials(pages: list[Page], words: list[str], domains: set[str], scop
             segs = [x for x in path.split("/") if x]
             raw_handle = segs[1] if len(segs) >= 2 and segs[0] in ("people", "p") else (segs[-1] if segs else "")
             handle = re.sub(r"[^a-z0-9]", "", _translit(unquote(raw_handle)))
-            if _names_other_company(handle, words, other_names, scope.group_root) or any(
+            if person_handle(handle, words, set(places or ()) | REGIONS) or _names_other_company(handle, words, other_names, scope.group_root) or any(
                     re.sub(r"[^a-z0-9]", "", b) in handle for b in BUILDER_BRANDS if not any(
                         re.sub(r"[^a-z0-9]", "", b) in k for k in keys)):
                 dropped.append(u)  # another company's, or the site builder's or web agency's own profile
@@ -3714,9 +3727,54 @@ async def prepare_scope(sp: _Spend, ctx: CompanyContext, v: Verdict) -> Scope:
     sc = Scope(ctx.org, words, others, sisters, dominant, v.cross, v.path_scoped, other_mail, codeclared, addr=addr)
     sc.dominant_kind = kinds
     sc.ours_printed = ours_printed
+    sc.handle_namesakes = await _handle_namesakes(sp, ctx, v.pages, words)
     if own_proof and _group_handle_linked(v.pages, words):
         sc.group_root = bool(await _group_members(sp, ctx))  # one cached registry lookup, only when needed
     return sc
+
+
+HANDLE_FILLER = {"norge", "norway", "official", "offisiell", "offisielt", "hjem", "home", "page", "side"}
+HANDLE_LABELS = 3  # registry name checks per company for social handles that extend a word of our name
+
+
+def _handle_labels(pages: list[Page], words: list[str]) -> list[str]:
+    """Registered-name labels that social handles on the site may spell: a word of our name (often a generic one,
+    'radio') joined with another word ('radiotonsberg' as 'radio tonsberg'), in page order."""
+    ours = [re.sub(r"[^a-z0-9]", "", _translit(w)) for w in words]
+    ours = [w for w in ours if len(w) >= 3]
+    full = "".join(ours)
+    out: list[str] = []
+    for p in pages:
+        for a in p.soup.find_all("a", href=True):
+            c = clean_social(unwrap_redirect(a["href"]))
+            if not c:
+                continue
+            segs = [x for x in urlsplit(c[1]).path.split("/") if x]
+            h = re.sub(r"[^a-z0-9]", "", _translit(unquote(segs[-1] if segs else "")))
+            if not h or (full and full in h):
+                continue
+            for w in ours:
+                rest, lab = "", ""
+                if h.startswith(w):
+                    rest = h[len(w):]
+                    lab = f"{w} {rest}"
+                elif h.endswith(w):
+                    rest = h[:-len(w)]
+                    lab = f"{rest} {w}"
+                if len(rest) >= 4 and not rest.isdigit() and rest not in ours and rest not in HANDLE_FILLER \
+                        and lab not in out:
+                    out.append(lab)
+    return out
+
+
+async def _handle_namesakes(sp: "_Spend", ctx: CompanyContext, pages: list[Page], words: list[str]) -> list[str]:
+    """Other registered companies whose names social handles on our site spell ('radio tonsberg' for RADIO
+    TØNSBERG AS on Radio Sandefjord's site): such a profile is theirs, not ours."""
+    labels = _handle_labels(pages, words)[:HANDLE_LABELS]
+    if not labels:
+        return []
+    got = await confirm_sisters(sp, ctx, labels, limit=HANDLE_LABELS)
+    return [lab for lab in labels if lab in got]
 
 
 def _group_handle_linked(pages: list[Page], words: list[str]) -> bool:
@@ -3952,7 +4010,8 @@ def emit_site(ctx: CompanyContext, v: Verdict, scope: Scope | None = None) -> li
     reg = ctx.registry or {}
     doms = {domain, host_of(reg.get("hjemmeside") or ""), (reg.get("epostadresse") or "@").rsplit("@", 1)[1]}
     doms = {bare(d) for d in doms if d and d not in FREE_MAIL and not is_platform(d)}
-    socials, dropped = collect_socials(v.pages, words, doms, scope)
+    socials, dropped = collect_socials(v.pages, words, doms, scope, list(scope.handle_namesakes),
+                                       places=_places(ctx.registry or {}))
     if dropped:
         ctx.facts["website_social_dropped"] = dropped
     for plat, u, p, s in socials:

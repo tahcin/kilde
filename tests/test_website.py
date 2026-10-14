@@ -3015,3 +3015,52 @@ def test_date_contradicted_rules():
     item["title"] = "Sommerfest 2025"
     assert W.date_contradicted(item, "2026-10-14")
     assert W.date_contradicted(item, "2024-10-14") is None  # 2025 had not come yet: a plan, not a reuse
+
+
+def _sister_search(label: str, name: str, org: str = OTHER) -> dict:
+    from urllib.parse import quote
+    return {f"https://data.brreg.no/enhetsregisteret/api/enheter?navn={quote(label)}&size=20":
+            (200, json.dumps({"_embedded": {"enheter": [{"organisasjonsnummer": org, "navn": name}]}}), "application/json")}
+
+
+def test_generic_industry_word_does_not_name_a_social_handle():
+    """Radio Sandefjord shape: the sister station's handles share only the trade word 'radio' with our name."""
+    body = (f'<footer>Radio Testby AS · Org.nr {OURS}'
+            '<a href="https://www.instagram.com/radiofjellbyen/">ig</a>'
+            '<a href="https://x.com/radiofjellbyen">x</a>'
+            '<a href="https://www.facebook.com/radiotestby/">fb</a></footer>')
+    f = FakeFetcher({"https://radiotestby.no/": (200, html(body, title="Radio Testby"))})
+    ctx = ctx_for(navn="RADIO TESTBY AS", hjemmeside="radiotestby.no")
+    run(f, ctx)
+    assert [str(c.value) for c in ctx.claims if c.field == "social_profile"] == ["facebook.com/radiotestby"]
+
+
+def test_handle_spelling_another_registered_company_is_dropped():
+    """A handle that joins our distinctive word with another word that makes a registered company's name is
+    that company's profile; without such a company it stays ours."""
+    body = (f'<footer>Fjellbekk Trevare AS · Org.nr {OURS}'
+            '<a href="https://www.instagram.com/fjellbekkmaling/">ig</a></footer>')
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(_site(_sister_search("fjellbekk maling", "FJELLBEKK MALING AS"), body=body), ctx)
+    assert not [c for c in ctx.claims if c.field == "social_profile" and c.availability == "available"]
+    W._SISTER_CACHE.clear()
+    W._SEARCH.clear()
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(_site(body=body), ctx)
+    assert [str(c.value) for c in ctx.claims if c.field == "social_profile"] == ["instagram.com/fjellbekkmaling"]
+
+
+def test_person_name_handle_is_not_the_company_profile():
+    body = (f'<footer>Lisa Husby Kunst AS · Org.nr {OURS}'
+            '<a href="https://www.instagram.com/lisa.husby.kunst/">ig</a></footer>')
+    f = FakeFetcher({"https://lisahusbykunst.no/": (200, html(body, title="Lisa Husby Kunst"))})
+    ctx = ctx_for(navn="LISA HUSBY KUNST AS", hjemmeside="lisahusbykunst.no")
+    run(f, ctx)
+    assert not [c for c in ctx.claims if c.field == "social_profile" and c.availability == "available"]
+
+
+def test_social_keys_leave_out_trade_place_and_person_words():
+    keys = W._social_keys(["radio", "sandefjord"], {"radiosandefjord.no"})
+    assert keys == {"radiosandefjord"}
+    assert "radio" not in W._social_keys(["radio", "fjellbekk"], set())
+    assert W._social_keys(["espen", "mortensen", "invest"], {"invest.no"}) == {"espenmortenseninvest"}

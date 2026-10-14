@@ -211,3 +211,21 @@ def test_legal_name_site_accepts_capital_a_form_but_not_lower_case():
     ctx = _legal_ctx("https://fjelltopproer.no/", "Fjelltopp Rør as", reg)
     gate.check(ctx)
     assert not ctx.claims_for("official_website")
+
+
+def test_social_handle_with_only_a_trade_word_of_our_name_is_withheld():
+    from kilde.connectors.website import canonical_social
+    ctx = ctx_with("https://www.radiotestfjord.no/", {"navn": "RADIO TESTFJORD AS",
+                                                      "forretningsadresse": {"poststed": "TESTFJORD"}},
+                   [("social_profile", canonical_social("instagram", "https://instagram.com/radiofjellbyen")),
+                    ("social_profile", canonical_social("facebook", "https://facebook.com/radiotestfjord"))])
+    gate.check(ctx)
+    assert [c.availability for c in ctx.claims if c.field == "social_profile"] == ["ambiguous", "available"]
+
+
+def test_person_name_handle_is_withheld_by_the_gate():
+    from kilde.connectors.website import canonical_social
+    ctx = ctx_with("https://www.lisahusbykunst.no/", {"navn": "LISA HUSBY KUNST AS"},
+                   [("social_profile", canonical_social("instagram", "https://instagram.com/lisa.husby.kunst"))])
+    gate.check(ctx)
+    assert [c.availability for c in ctx.claims if c.field == "social_profile"] == ["ambiguous"]
