@@ -229,3 +229,12 @@ def test_person_name_handle_is_withheld_by_the_gate():
                    [("social_profile", canonical_social("instagram", "https://instagram.com/lisa.husby.kunst"))])
     gate.check(ctx)
     assert [c.availability for c in ctx.claims if c.field == "social_profile"] == ["ambiguous"]
+
+
+def test_our_legal_form_at_the_end_of_a_handle_is_not_a_foreign_form():
+    from kilde.connectors.website import canonical_social
+    ctx = ctx_with("https://www.arcticfeed.no/", {"navn": "ARCTIC FEED INGREDIENTS AS"},
+                   [("social_profile", canonical_social("linkedin", "https://www.linkedin.com/company/arctic-feed-ingredients-as")),
+                    ("social_profile", canonical_social("instagram", "https://instagram.com/arcticfeedingredientsas"))])
+    gate.check(ctx)
+    assert [c.availability for c in ctx.claims if c.field == "social_profile"] == ["available", "available"]

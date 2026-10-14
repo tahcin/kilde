@@ -219,6 +219,16 @@ def check(ctx: CompanyContext) -> list[str]:
         # a form glued to the end of the handle counts once, as its longest match ('entraasa' ends in asa, not sa)
         glued = max((f for f in FOREIGN_FORMS if handle_alnum.endswith(f) and len(handle_alnum) > len(f) + 3),
                     key=len, default=None)
+        # the ending is read on token boundaries first ('arctic-feed-ingredients-as' ends in 'as', not 'sas'),
+        # then right after our own name run together ('ingredientsas' after 'ingredients' is our 'as')
+        toks = [t for t in re.split(r"[-_.]+", handle) if t]
+        name_sq = re.sub(r"[^a-z0-9]", "", "".join(fold(w) for w in name_ws))
+        if len(toks) > 1 and toks[-1] in FOREIGN_FORMS:
+            glued = toks[-1]
+        elif name_sq and name_sq in handle_alnum:
+            rest = handle_alnum[handle_alnum.rfind(name_sq) + len(name_sq):]
+            if rest in FOREIGN_FORMS or not rest:
+                glued = rest or None
         forms = set(re.findall(r"(?<![a-z])(" + "|".join(FOREIGN_FORMS) + r")(?![a-z])", re.sub(r"[^a-z]+", " ", handle))) | \
             ({glued} if glued else set())
         if forms - own_forms:
