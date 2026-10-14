@@ -25,3 +25,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/kilde"]
+
+[tool.hatch.build.targets.sdist]
+# The website (web/) is a separate Node project; it is never part of the Python package.
+exclude = ["/web"]

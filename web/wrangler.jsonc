@@ -1,0 +1,24 @@
+// kilde.tahcin.tech: the built site (dist/, including the exported data under dist/data) served from Cloudflare's
+// asset store, with worker/index.ts in front of /api/* only. Build first: `pnpm build`, then `pnpm wrangler deploy`.
+// Secrets (never in this file): ANTHROPIC_API_KEY and IP_SALT, set with `wrangler secret put`.
+{
+  "name": "kilde",
+  "compatibility_date": "2026-10-01",
+  "account_id": "4627bf18a59329110c2a7a42c5562620",
+  "main": "worker/index.ts",
+  "assets": { "directory": "./dist", "binding": "ASSETS", "not_found_handling": "single-page-application", "run_worker_first": ["/api/*"] },
+  "routes": [{ "pattern": "kilde.tahcin.tech", "custom_domain": true }],
+  "workers_dev": false,
+  "durable_objects": { "bindings": [{ "name": "GUARD", "class_name": "Guard" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Guard"] }],
+  "vars": {
+    // The switch for /api/ask: set to "false" and redeploy to turn asking off at once.
+    "ASK_ENABLED": "true",
+    // Local runs add their own: wrangler dev --var ALLOWED_ORIGINS:http://localhost:8787
+    "ALLOWED_ORIGINS": "https://kilde.tahcin.tech",
+    "LIMIT_PER_IP": "10",
+    "LIMIT_PER_DAY": "600",
+    "LIMIT_USD_PER_DAY": "2"
+  },
+  "observability": { "enabled": false }
+}
