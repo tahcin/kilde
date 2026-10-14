@@ -3360,3 +3360,11 @@ def test_sitemap_lastmods_on_the_run_day_are_not_page_updates():
     run(f, ctx)
     acts = [c.as_of for c in ctx.claims if c.field == "site_page_updated"]
     assert acts and now[:10] not in acts
+
+
+def test_product_maker_in_a_shop_listing_is_not_a_presenter():
+    page = W.parse_page(Snapshot("https://fjellbekk.no/om-oss", "https://fjellbekk.no/om-oss", 200, "x",
+                                 html("<p>Se våre produkter.</p><div class='product'><span>Kvist Lader AS</span><h3>Kvist GO</h3><b>13 999 kr</b></div>"
+                                      "<footer>Drives av Lyng Drift AS</footer>").encode(), "text/html"))
+    names = {n[0]: n for n in W.other_company_names([page], ["fjellbekk", "trevare"])}
+    assert not names["kvist lader"][2] and names["drives av lyng drift"][4]

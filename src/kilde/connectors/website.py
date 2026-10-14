@@ -2590,10 +2590,15 @@ BIO_BEFORE = re.compile(r"(?i)\b(?:ceo|cfo|cto|coo|daglig leder|adm\.? dir\.?|ad
 OWNER_AFTER = re.compile(r"(?i)^\W{0,3}(?:sin|sitt|sine)\s+(?:avdeling|filial|datterselskap|nettside|nettsted|butikk|kontor)")
 
 
+PRODUCT_AFTER = re.compile(r"(?i)^[^.!?|]{0,40}?(?<![\d.,])\d{1,3}(?:[ \u00a0.]?\d{3})*(?:,\d{2}|,-)?\s?(?:kr|nok|,-)(?![a-zæøå])")
+
+
 def _supplier_or_bio(before: str, after: str) -> bool:
     """A company named as the site's supplier or data processor ('Adjoy AS er leverandør', 'servere som driftes av
-    X AS'), or as a person's employer in a bio ('CEO of Norway King Crab AS and Troika Seafood AS')."""
-    return bool(SUPPLIER_AFTER.search(after) or SUPPLIER_BEFORE.search(before) or BIO_BEFORE.search(before))
+    X AS'), as a person's employer in a bio ('CEO of Norway King Crab AS and Troika Seafood AS'), or as the maker
+    of a product in a shop listing ('Zaptec Charger AS Zaptec GO 13 999 kr')."""
+    return bool(SUPPLIER_AFTER.search(after) or SUPPLIER_BEFORE.search(before) or BIO_BEFORE.search(before)
+                or PRODUCT_AFTER.search(after))
 
 
 def _owner_statement(before: str, at: str) -> bool:
