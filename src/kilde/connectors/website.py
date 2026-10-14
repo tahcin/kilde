@@ -2349,8 +2349,11 @@ def _in_chrome(a) -> bool:
     for parent in a.parents:
         if parent.name in ("footer", "header", "nav"):
             return True
-        marks = " ".join(parent.get("class") or []) + " " + (parent.get("id") or "") if hasattr(parent, "get") else ""
-        if re.search(r"footer|header|social|some|navbar|topbar", marks, re.I):
+        if parent.name in ("html", "body", "[document]"):
+            break  # page-wide classes ('ast-header-break-point' on <body>) say nothing about this link
+        marks = _block_marks(parent) if hasattr(parent, "get") else ""
+        if re.search(r"footer|header|social|navbar|topbar", marks, re.I) or \
+                re.search(r"(?i)(^|[\s_-])some([\s_-]|$)", marks):
             return True
     return False
 
@@ -3352,6 +3355,9 @@ def find_date(block, slash: str | None = None) -> tuple[str, str] | None:
 NEWS_PATH = re.compile(r"/(nyheter|nyhet|news|aktuelt|blogg?|artikler|presse|nytt|siste-nytt|arkiv)(/|$)", re.I)
 
 
+CARD_DEPTH = 9  # ancestors climbed from a post link to its card (page builders nest a card 6 to 8 deep)
+
+
 def news_items(page: Page, domain: str, scope: Scope, limit: int = 5) -> list[tuple[dict, str]]:
     """Dated posts on a news or blog listing page: ({title, url, date}, span)."""
     listing = urlsplit(page.url).path.rstrip("/")
@@ -3371,7 +3377,7 @@ def news_items(page: Page, domain: str, scope: Scope, limit: int = 5) -> list[tu
         # post's card (a link of its own with a heading or a date) is a list of items: the date and title
         # there may belong to the neighbour, so the item is dropped rather than stitched together.
         block, found = a, None
-        for level in range(6):
+        for level in range(CARD_DEPTH + 1):
             if level:
                 if block.parent is None:
                     break
@@ -4594,6 +4600,12 @@ def date_contradicted(item: dict, today: str) -> str | None:
     return None
 
 
+# project, reference, product and portfolio pages carry publish dates too, but they describe work, not news
+NOT_NEWS_PAGE = re.compile(r"(?i)/(prosjekt|prosjekter|prosjekta|projects?|referanser|referanse|references?|"
+                           r"portfolio|portefolje|cases?|kundecase|produkter|produkt|products?|tjenester|services?|"
+                           r"ansatte|team|people|events?|arrangement(er)?|kalender)/")
+
+
 def _news_ok(item: dict, floor: str, domain: str) -> bool:
     day = item["datetime"][:10]
     today = datetime.now(timezone.utc).date().isoformat()
@@ -4605,7 +4617,8 @@ def _news_ok(item: dict, floor: str, domain: str) -> bool:
     elif path in ("", "/") and re.fullmatch(r"p=\d+", urlsplit(item["url"]).query):
         path = "/?p"  # a WordPress post under plain permalinks (/?p=1042)
     return (floor <= day <= today and same_site(host_of(item["url"]), domain) and path not in ("", "/")
-            and not NOT_POST.search(path + "/") and not SAMPLE_POST.match(item["title"])
+            and not NOT_POST.search(path + "/") and not NOT_NEWS_PAGE.search(unquote(path) + "/")
+            and not SAMPLE_POST.match(item["title"])
             and not PLACEHOLDER.search(item["title"]) and not PLACEHOLDER_SLUG.search(item["url"])
             and not template_post(item["title"], item["url"]) and len(item["title"]) >= 4)
 
@@ -4768,6 +4781,8 @@ async def collect_dated_news(sp: "_Spend", ctx: CompanyContext, pages: list[Page
             if not found and not scope.shared:
                 await _undated_listing(sp, page, domain, floor, found)
             ctx.facts["website_dated_news_checked"] = (ctx.facts.get("website_dated_news_checked") or [])[:2] + [page.url]
+            if NEWS_PATH.search(urlsplit(page.url).path + "/") or listings:
+                ctx.facts["website_news_section"] = page.url
             if found or not listings:
                 break
         # listing dates are dates only: read the article page for the full datetime while the budget allows
@@ -4781,6 +4796,8 @@ async def collect_dated_news(sp: "_Spend", ctx: CompanyContext, pages: list[Page
                 if got and got[0][:10] == it["datetime"][:10]:
                     it.update(datetime=got[0], date_span=got[1], title_span=it["title"])
                     found[url] = (it, art.snap, None)
+    if not found and ctx.facts.get("website_news_section") and not scope.shared:
+        await _sitemap_posts(sp, ctx, origin, domain, floor, found)
     if not found:
         for p in pages[:1]:  # dated items listed on the front page itself
             for it in inline_news(p):
@@ -4808,6 +4825,47 @@ async def collect_dated_news(sp: "_Spend", ctx: CompanyContext, pages: list[Page
                                 method="website_news_v2", licence=LICENCE) for x in spans]
         ctx.add_claim("dated_news", "activity", f"{it['title']} ({it['datetime']})", evs, as_of=it["datetime"][:10],
                       match={"method": "verified_site_news", "detail": f"{it['url']} on the verified site"})
+
+
+POST_SITEMAPS = ("/post-sitemap.xml", "/wp-sitemap-posts-post-1.xml")
+SITEMAP_POSTS = 3  # newest posts read from a posts sitemap when the news listing gave no dated item
+
+
+async def _sitemap_posts(sp: "_Spend", ctx: CompanyContext, origin: str, domain: str, floor: str,
+                         found: dict) -> None:
+    """A news section whose listing cannot be read (cards built by script, no dates on the cards): the site's
+    posts sitemap names the posts, and each post page states its own publication date (article:published_time,
+    JSON-LD datePublished or time[datetime]). Only posts under a news or blog path, newest lastmod first."""
+    for path in POST_SITEMAPS:
+        if not sp.can(1):
+            return
+        try:
+            snap = await sp.get(origin + path)
+        except (BudgetExhausted, _OutOfRequests):
+            raise
+        except Exception:
+            continue
+        if snap.status != 200 or b"<urlset" not in snap.content[:2000]:
+            continue
+        urls, _subs = parse_sitemap(snap.content)
+        posts = sorted(((lm, u) for u, lm in urls if same_site(host_of(u), domain) and not NOT_POST.search(urlsplit(u).path)
+                        and not PLACEHOLDER_SLUG.search(u) and urlsplit(u).path.strip("/")), reverse=True)
+        ctx.facts["website_dated_news_checked"] = (ctx.facts.get("website_dated_news_checked") or [])[:3] + [origin + path]
+        for _lm, u in posts[:SITEMAP_POSTS]:
+            if not sp.can(1):
+                return
+            art, _st = await _fetch_page(sp, u)
+            if not art or not same_site(art.host, domain):
+                continue
+            got = article_datetime(art)
+            h1 = art.soup.find("h1")
+            title = _clean(h1.get_text(" ", strip=True), 200) if h1 else None
+            if not got or not title or len(title) < 8:
+                continue
+            it = {"title": title, "url": u, "datetime": got[0], "title_span": title, "date_span": got[1]}
+            if _news_ok(it, floor, domain) and u not in found:
+                found[u] = (it, art.snap, None)
+        return
 
 
 # ---------------------------------------------------------------- hiring signal
@@ -5115,6 +5173,10 @@ async def fetch_website(f: Fetcher, ctx: CompanyContext) -> None:
                         checked = ", ".join(ctx.facts.get(f"website_{fld}_checked", [])[:6]) or "the verified site"
                         if starved or f.budget.remaining_requests() <= RESERVE:
                             ctx.mark(fld, sec, "failed", note=f"budget_exhausted: checked {checked}")
+                        elif fld == "dated_news" and ctx.facts.get("website_news_section"):
+                            ctx.mark(fld, sec, "not_available",
+                                     note=f"the verified site {dom} has a news section ({ctx.facts['website_news_section']}), "
+                                          f"but no dated post could be read from it; checked {checked}")
                         else:
                             ctx.mark(fld, sec, "not_available",
                                      note=f"none found on the verified site {dom}; checked {checked}")

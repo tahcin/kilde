@@ -3243,3 +3243,43 @@ def test_single_first_name_surname_or_trade_word_is_never_guessed():
     assert not any(d.split(".")[0] in ("maria", "schei", "brudesalong") for d in doms)
     assert W.name_domains("HAUGEN AS") == []
     assert "sunwind.no" in W.name_domains("SUNWIND GYLLING AS")
+
+
+def test_news_cards_under_page_wide_header_classes_and_deep_builder_cards():
+    """stw.no shape: <body class="ast-header-break-point"> and Elementor cards nesting the date 6 levels from
+    the link, with plain <time>text</time>."""
+    card = ('<div class="e-loop-item"><div class="w"><div class="w2"><div class="w3"><h2><a href="/blogg/{slug}/">{t}</a>'
+            '</h2></div></div><div class="info"><div><div><ul><li><span><time>{d}</time></span></li></ul></div></div></div>'
+            '</div></div>')
+    body = ''.join(card.format(slug=f"post-{i}", t=f"Nyhet nummer {i} fra oss", d=d)
+                   for i, d in enumerate(["september 18, 2026", "juli 3, 2026"]))
+    page = W.parse_page(Snapshot("https://fjellbekk.no/blogg/", "https://fjellbekk.no/blogg/", 200, "x",
+                                 f'<html><body class="blog ast-header-break-point"><main>{body}</main></body></html>'.encode(),
+                                 "text/html"))
+    got = [x[0]["date"] for x in W.news_items(page, "fjellbekk.no", W.Scope(OURS, ["fjellbekk"]))]
+    assert got == ["2026-09-18", "2026-07-03"]
+
+
+def test_english_long_date_with_time_and_zone():
+    from bs4 import BeautifulSoup
+    block = BeautifulSoup("<a href='/news/x'><span>14 October 2026 | 08:15 (CEST)</span><h3>Big news today</h3></a>", "html.parser")
+    assert W.find_date(block)[0] == "2026-10-14"
+
+
+def test_project_pages_are_not_news():
+    ok = {"title": "Einunna bru er ferdig", "datetime": "2025-09-05T14:04:19+02:00"}
+    assert not W._news_ok(dict(ok, url="https://fjellbekk.no/prosjekter/vei/einunna-bru/"), "2000-01-01", "fjellbekk.no")
+    assert W._news_ok(dict(ok, url="https://fjellbekk.no/aktuelt/einunna-bru/"), "2000-01-01", "fjellbekk.no")
+
+
+def test_news_section_without_readable_dates_uses_the_posts_sitemap():
+    head = '<meta name="generator" content="WordPress 6.5">'
+    listing = html('<h1>Blogg</h1><div id="app"></div>')
+    smap = ('<?xml version="1.0"?><urlset><url><loc>https://fjellbekk.no/blogg/ny-hall/</loc><lastmod>2026-05-02</lastmod></url>'
+            '</urlset>')
+    art = html('<h1>Vi har bygget ny hall</h1>', head='<meta property="article:published_time" content="2026-05-01T10:00:00+02:00">')
+    body = f'<a href="/blogg/">Blogg</a><footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>'
+    f = _site({"https://fjellbekk.no/blogg/": (200, listing), "https://fjellbekk.no/post-sitemap.xml": (200, smap, "application/xml"),
+               "https://fjellbekk.no/blogg/ny-hall/": (200, art)}, body=body, head=head)
+    claims = run(f, ctx_for(hjemmeside="fjellbekk.no"))
+    assert claims["dated_news"].value == "Vi har bygget ny hall (2026-05-01T10:00:00+02:00)"
