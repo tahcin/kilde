@@ -437,3 +437,21 @@ def test_motor_vehicle_dealers_are_checked_for_finanstilsynet_licences():
     assert _maybe_licensed({"naeringskode1": {"kode": "47.810"}})
     assert _maybe_licensed({"naeringskode1": {"kode": "45.111"}})
     assert not _maybe_licensed({"naeringskode1": {"kode": "41.200"}})
+
+
+def test_each_accounts_year_quotes_its_own_record_even_with_a_repeated_id():
+    import json as _j
+    from kilde.connectors.accounts import _record_anchor
+    from kilde.spans import region
+    recs = [{"id": 1, "regnskapsperiode": {"fraDato": f"{y}-01-01", "tilDato": f"{y}-12-31"}, "regnskapstype": "SELSKAP",
+             "resultatregnskapResultat": {"driftsresultat": {"driftsinntekter": {"sumDriftsinntekter": 0.0}}}}
+            for y in (2025, 2024, 2023)]
+    raw = _j.dumps(recs)
+    regions = {raw[slice(*region(raw, _record_anchor(r)))] for r in recs}
+    assert len(regions) == 3 and all('"tilDato": "%d-12-31"' % y in "".join(regions) for y in (2025, 2024, 2023))
+
+
+def test_wikidata_statement_span_starts_with_its_value():
+    from kilde.connectors.wikidata import stmt_span
+    s = stmt_span("P2002", {"id": "Q1$x", "rank": "normal", "mainsnak": {"datavalue": {"value": "fjellbekk"}}})
+    assert s.startswith('{"value"') and "fjellbekk" in s

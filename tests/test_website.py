@@ -1094,7 +1094,7 @@ def test_spam_feed_and_sample_posts_are_dropped():
 
 # ---------------------------------------------------------------- round 4 audit (Elpro, Biri)
 def _hjem(host, rows):
-    return {f"https://data.brreg.no/enhetsregisteret/api/enheter?hjemmeside={host}&size=20":
+    return {f"https://data.brreg.no/enhetsregisteret/api/enheter?hjemmeside={host}&size=100":
             (200, json.dumps({"_embedded": {"enheter": rows}}), "application/json")}
 
 
@@ -1317,6 +1317,11 @@ def test_company_careers_page_inviting_open_applications_is_kept():
     ctx = ctx_for(hjemmeside="fjellbekk.no")
     run(_site({"https://fjellbekk.no/ledige-stillinger": (200, jobs)}, body=body), ctx)
     assert [c.value for c in ctx.claims if c.field == "hiring_signal"] == ["https://fjellbekk.no/ledige-stillinger"]
+    c = next(c for c in ctx.claims if c.field == "hiring_signal")
+    assert "no openings listed on" in c.note and "no openings" in c.match["detail"]
+    from kilde.synthesis import summarise
+    ctx.add_claim("legal_name", "identity", "FJELLBEKK TREVARE AS", ctx.evidence[0])
+    assert "listed no openings" in summarise(ctx, [])["text"]
 
 
 def test_open_data_seed_is_a_candidate_with_no_special_trust(monkeypatch):
@@ -3100,7 +3105,7 @@ def test_social_keys_leave_out_trade_place_and_person_words():
 
 
 def _hjem(host: str, rows: list[dict]) -> dict:
-    return {f"https://data.brreg.no/enhetsregisteret/api/enheter?hjemmeside={host}&size=20":
+    return {f"https://data.brreg.no/enhetsregisteret/api/enheter?hjemmeside={host}&size=100":
             (200, json.dumps({"_embedded": {"enheter": rows}}), "application/json")}
 
 
@@ -3360,3 +3365,97 @@ def test_sitemap_lastmods_on_the_run_day_are_not_page_updates():
     run(f, ctx)
     acts = [c.as_of for c in ctx.claims if c.field == "site_page_updated"]
     assert acts and now[:10] not in acts
+
+
+def test_product_maker_in_a_shop_listing_is_not_a_presenter():
+    page = W.parse_page(Snapshot("https://fjellbekk.no/om-oss", "https://fjellbekk.no/om-oss", 200, "x",
+                                 html("<p>Se våre produkter.</p><div class='product'><span>Kvist Lader AS</span><h3>Kvist GO</h3><b>13 999 kr</b></div>"
+                                      "<footer>Drives av Lyng Drift AS</footer>").encode(), "text/html"))
+    names = {n[0]: n for n in W.other_company_names([page], ["fjellbekk", "trevare"])}
+    assert not names["kvist lader"][2] and names["drives av lyng drift"][4]
+
+
+def test_our_own_shareholder_named_on_our_site_is_not_its_operator():
+    """Noralg shape: 'Noralg AS er et norsk selskap eid av H-D-B Holding AS' beside our printed org number."""
+    owners = set()
+    page = W.parse_page(Snapshot("https://fjellbekk.no/", "https://fjellbekk.no/", 200, "x",
+                                 html("<p>Fjellbekk Trevare AS er et norsk selskap eid av Kvist Holding AS.</p>").encode(),
+                                 "text/html"))
+    W.other_company_names([page], ["fjellbekk", "trevare"], owners)
+    assert owners == {"kvist holding as"}
+    body = (f"<p>Fjellbekk Trevare AS er et norsk selskap eid av Kvist Holding AS.</p>"
+            f"<footer>Fjellbekk Trevare AS · Org.nr {OURS}<a href='https://www.instagram.com/fjellbekktrevare'>ig</a></footer>")
+    rows = {W.BRREG_SEARCH + "?navn=kvist%20holding&size=20":
+            (200, json.dumps({"_embedded": {"enheter": [{"organisasjonsnummer": OTHER, "navn": "KVIST HOLDING AS"}]}}),
+             "application/json")}
+    claims = run(_site(rows, body=body), ctx_for(hjemmeside="fjellbekk.no"))
+    assert claims["official_website"].value == "fjellbekk.no"
+    assert claims["social_profile"].availability == "available"
+
+
+def test_site_served_from_a_builder_host_is_published_on_our_domain():
+    body = f"<footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>"
+    f = FakeFetcher({"https://r1293376.website.abc.service.one/": (200, html(body))},
+                    redirects={"https://fjellbekk.no/": "https://r1293376.website.abc.service.one/"})
+    claims = run(f, ctx_for(hjemmeside="fjellbekk.no"))
+    assert claims["official_website"].value == "fjellbekk.no"
+    assert claims["official_website_url"].value == "https://fjellbekk.no/"
+
+
+def test_reasons_never_print_empty_parentheses():
+    sc = W.Scope(OURS, ["fjellbekk"], dominant={"another registered entity at our address shares our name: x as (1)": ""})
+    assert "()" not in sc.reasons()
+
+
+def test_corroborator_quotes_only_what_matches_the_registry():
+    ctx = ctx_for(forretningsadresse={"adresse": ["Telthusbakken 5"], "postnummer": "0172", "poststed": "OSLO", "kommune": "OSLO"})
+    page = W.parse_page(Snapshot("https://x.no/", "https://x.no/", 200, "x", html("<p>Sørengkaia 62, 0194 Oslo</p>").encode(), "text/html"))
+    got = W._corroborator([page], ctx, "FJELLBEKK TREVARE AS")
+    assert got and got[2] == "Oslo"
+
+
+def test_broken_tel_link_missing_the_country_code_is_not_a_foreign_number():
+    assert W.norm_phone("tel:+53742551") is None
+    assert W.norm_phone("tel:+4753742551") == "+4753742551"
+    assert W.norm_phone("tel:+46812345678") == "+46812345678"
+    assert W.norm_phone("53 74 25 51") == "+4753742551"
+
+
+def test_published_page_url_drops_error_and_tracking_parameters():
+    v = W.Verdict("vibbotest.no", "registry")
+    assert W.public_url(v, "https://vibbotest.no/x?error=true&message=login_required&status=500") == "https://vibbotest.no/"
+    assert W.public_url(v, "https://vibbotest.no/side?page_id=12&utm_source=fb#top") == "https://vibbotest.no/side?page_id=12"
+
+
+def test_invoice_scanning_inboxes_and_clients_are_not_other_presenters():
+    assert W.service_mail_domain("compello.com") and W.service_mail_domain("einvoice.kvist.no")
+    page = W.parse_page(Snapshot("https://fjellbekk.no/", "https://fjellbekk.no/", 200, "x",
+                                 html("<p>Fjellbekk er et faktureringsselskap og en tjenesteleverandør til Kvist Strøm AS.</p>"
+                                      "<footer>© 2026 Fjellbekk Trevare AS</footer>").encode(), "text/html"))
+    n = {x[0]: x for x in W.other_company_names([page], ["fjellbekk", "trevare"])}
+    assert not n["kvist strom"][2] and not n["kvist strom"][4]
+
+
+def test_four_letter_acronym_is_guessed_alone_after_the_whole_name():
+    doms = W.name_domains("TTSS BYGGSERVICE AS")
+    assert doms.index("ttss.no") > doms.index("ttssbyggservice.com") and "ttss.com" in doms
+    assert "berg.no" not in W.name_domains("BERG BYGG AS") and "lyng.no" not in W.name_domains("LYNG MALING AS")
+
+
+def test_entities_declaring_a_section_of_the_site_do_not_co_declare_it():
+    """DNB shape: funds declare www.dnb.no/fond; the bank declares www.dnb.no."""
+    assert W._declares_section({"hjemmeside": "www.fjellbekk.no/fond"})
+    assert not W._declares_section({"hjemmeside": "www.fjellbekk.no"}) and not W._declares_section({"hjemmeside": "https://fjellbekk.no/"})
+
+
+def test_client_sharing_our_phone_is_not_a_presenter():
+    """Tellier Service shape: we are a service provider to a client whose registry phone is ours."""
+    body = ("<p>Fjellbekk Trevare er et faktureringsselskap og en tjenesteleverandør til Kvist Strøm AS.</p>"
+            f"<footer>© 2026 Fjellbekk Trevare AS · Org.nr {OURS} · tlf 41 00 00 01"
+            "<a href='https://www.instagram.com/fjellbekktrevare'>ig</a></footer>")
+    rows = {W.BRREG_SEARCH + "?navn=kvist%20strom&size=20":
+            (200, json.dumps({"_embedded": {"enheter": [{"organisasjonsnummer": OTHER, "navn": "KVIST STRØM AS",
+                                                          "telefon": "41 00 00 01"}]}}), "application/json")}
+    claims = run(_site(rows, body=body), ctx_for(hjemmeside="fjellbekk.no", telefon="41000001"))
+    assert claims["official_website"].value == "fjellbekk.no"
+    assert claims["social_profile"].availability == "available"

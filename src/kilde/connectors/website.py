@@ -33,7 +33,7 @@ import dns.exception
 import dns.resolver
 from bs4 import BeautifulSoup
 
-from ..http import Blocked, BudgetExhausted, Fetcher
+from ..http import Blocked, BudgetExhausted, Fetcher, RobotsUnreachable
 from ..spans import contains_core
 from ..templates import body_word_count, is_template_url, stub_posts, template_post
 from ..model import COMPANY_OWNED, CompanyContext, Evidence, Snapshot
@@ -363,7 +363,9 @@ def name_domains(name: str, e: dict | None = None) -> list[str]:
     distinct = [w for w in plain if w not in GENERIC_WORDS and _translit(w) not in places]
     first_alone = None
     if len(plain) > 1 and distinct and distinct[0] not in COMMON_LABELS and (
-            len(distinct[0]) >= 5 or (len(distinct[0]) >= 4 and re.search(r"\d", distinct[0]))):
+            len(distinct[0]) >= 5 or (len(distinct[0]) >= 4 and (re.search(r"\d", distinct[0]) or (
+                distinct[0].isalpha() and not person_word(distinct[0]) and not generic_word(distinct[0])
+                and distinct[0] == distinct[0].lower() and not re.search(r"[aeiouyæøå]", distinct[0][1:]))))):
         first_alone = _ascii_variants([distinct[0]])[0][0]  # SUNWIND GYLLING as sunwind; 2TAL ... as 2tal
         extra.append(first_alone)
         SHORT_FORMS.add(first_alone)
@@ -813,6 +815,7 @@ class Verdict:
     cross: bool = False         # redirected to another registered domain
     path_scoped: bool = False   # the site is one section of a host that serves others (chain or portal)
     transient: list[str] = field(default_factory=list)  # pages of this site that failed transiently (timeout, 429, 5xx)
+    alias_host: str | None = None  # the company's own domain when it is served from a site builder's technical host
 
     def summary(self) -> dict[str, Any]:
         return {"domain": self.domain, "source": self.source, "status": self.status, "method": self.method,
@@ -1055,6 +1058,8 @@ STATUS_RANK = {"unreachable": 0, "no_dns": 0, "parked": 3, "blocked": 4, "http_4
 async def _fetch_page(sp: _Spend, url: str) -> tuple[Page | None, str]:
     try:
         snap = await sp.get(url)
+    except RobotsUnreachable:
+        return None, "unreachable"  # robots.txt could not be read: try again later (or over http), never "blocked"
     except Blocked:
         return None, "blocked"
     except (BudgetExhausted, _OutOfRequests):
@@ -1157,6 +1162,10 @@ async def check_candidate(f: Fetcher, sp: _Spend, ctx: CompanyContext, v: Verdic
         return
     v.pages = [home]
     v.cross = not same_site(final, bare(v.domain))
+    if v.cross and BUILDER_TECH_HOST.search(final) and urlsplit(home.url).path in ("", "/"):
+        # the company's own domain redirects to its site builder's technical host (r123.website.x.service.one):
+        # the site is still the requested domain, and that domain is what gets published
+        v.cross, v.alias_host = False, bare(v.domain)
     e = ctx.registry or {}
     if v.cross and _declared_host(e, final) and urlsplit(home.url).path in ("", "/"):
         # a redirect to the front page of the registry's own website or email domain stays within the company
@@ -1249,7 +1258,7 @@ def _related_name_operates(pages: list[Page], words: list[str]) -> bool:
     owner or controller sentence, copyright or imprint block)."""
     ours = {_translit(w) for w in words}
     distinct = {w for w in ours if len(w) >= 3 and w not in GENERIC_WORDS and not w.isdigit()} or ours
-    return any(op and set(n.split()) & distinct for n, _sfx, _pos, op, _strong in other_company_names(pages, words))
+    return any(op and set(n.split()) & distinct for n, _sfx, _pos, op, _strong, *_r in other_company_names(pages, words))
 
 
 def _domain_has_name(host: str, e: dict) -> bool:
@@ -1301,8 +1310,11 @@ SERVICE_MAIL_DOMAINS = {
     "vipps.no", "vippsmobilepay.com", "stripe.com", "nets.eu", "klarna.com", "paypal.com", "svea.com",
     "timma.no", "bookmyday.no", "simplybook.me", "calendly.com", "bokadirekt.se", "hano.no", "planway.com",
     "easytimer.no", "mailgun.org", "sendgrid.net", "mailchimp.com", "mcsv.net",
+    "compello.com", "compello.no", "unit4.com", "unit4.no", "tietoevry.com", "tieto.com", "autoinvoice.no",
+    "autoinvoice.com", "visma-autoinvoice.com", "efaktura.no", "invoicecloud.no", "evry.com",
 }
-SERVICE_MAIL_LABEL = re.compile(r"(?i)^(ebilag|bilag|e-?faktura|faktura|invoice|invoices|inbox|scan|ehf|peppol)$")
+SERVICE_MAIL_LABEL = re.compile(r"(?i)^(ebilag|bilag|e-?faktura|faktura|invoice|invoices|e-?invoice|inbox|scan|ehf|peppol|"
+                                r"autoinvoice)$")
 
 
 def service_mail_domain(dom: str) -> bool:
@@ -1860,7 +1872,10 @@ def _corroborator(pages: list[Page], ctx: CompanyContext, name: str) -> tuple[Pa
                 if not word[:1].isupper() or _in_hostname(text, m.start(2), m.end(2)):
                     continue
                 if len(place) >= 5 or m.group(1):
-                    return p, _window(p.text, m.start(), m.end(), 40), p.text[m.start():m.end()].strip()
+                    # quote only what matches the registry: the place word, plus the post code when it is ours
+                    pc = re.sub(r"\D", "", m.group(1) or "")
+                    a = m.start() if pc and pc == (addr.get("postnummer") or "") else m.start(2)
+                    return p, _window(p.text, m.start(), m.end(), 40), p.text[a:m.end()].strip()
         for person in people:
             ws = person.split()
             rx = re.compile(r"(?<![\wæøåÆØÅ])" + re.escape(ws[0]) + r"(?:[  ]+[\wæøåÆØÅ.\-]+){0,2}?[  ]+"
@@ -1886,7 +1901,7 @@ def legal_name_unique_page(v: Verdict, ctx: CompanyContext) -> tuple[tuple, tupl
     words = name_words(name)
     ours = {_translit(w) for w in words}
     distinct = {w for w in ours if len(w) >= 3 and w not in GENERIC_WORDS and not w.isdigit()} or ours
-    for other, _suffix, _positional, operator, _strong in other_company_names(v.pages, words):
+    for other, _suffix, _positional, operator, _strong, *_r in other_company_names(v.pages, words):
         ws = set(other.split())
         if ws & distinct:
             return None  # a sister, parent or namesake with our words ('Eurotec Entreprenør AS' on eurotec.no)
@@ -1936,7 +1951,8 @@ async def _check_legal_name_unique(sp: "_Spend", ctx: CompanyContext, v: Verdict
     (lp, lspan, lcore), (cp, cspan, ccore) = got
     v.status, v.method = "proven", "legal_name_unique"
     v.detail = (f"the exact registered legal name '{lcore}' is on the site, its domain is that name, no other registered "
-                f"entity carries the name, and the site shows '{ccore}' from the registry")
+                f"entity carries the name, and the site shows '{ccore}', which the registry holds as the company's "
+                f"post town, municipality or a current role holder")
     v.proof = [(lp, lspan, lcore), (cp, cspan, ccore)]
 
 
@@ -2432,7 +2448,8 @@ class Scope:
         if self.sisters:
             out.append("it names sister companies " + ", ".join(f"{k} ({v})" for k, v in self.sisters.items()))
         if self.dominant:
-            out.append("it is presented by other companies " + ", ".join(f"{k} ({v})" for k, v in self.dominant.items()))
+            out.append("it is presented by other companies " + ", ".join(f"{k} ({v})" if v else k
+                                                                         for k, v in self.dominant.items()))
         if self.codeclared:
             out.append("other registered companies declare the same website: "
                        + ", ".join(f"{n} ({o})" for o, n in sorted(self.codeclared.items())))
@@ -2590,10 +2607,31 @@ BIO_BEFORE = re.compile(r"(?i)\b(?:ceo|cfo|cto|coo|daglig leder|adm\.? dir\.?|ad
 OWNER_AFTER = re.compile(r"(?i)^\W{0,3}(?:sin|sitt|sine)\s+(?:avdeling|filial|datterselskap|nettside|nettsted|butikk|kontor)")
 
 
+PRODUCT_AFTER = re.compile(r"(?i)^[^.!?|]{0,40}?(?<![\d.,])\d{1,3}(?:[ \u00a0.]?\d{3})*(?:,\d{2}|,-)?\s?(?:kr|nok|,-)(?![a-zæøå])")
+
+
+OWNS_US = re.compile(r"(?i)\b(?:hel|del)?(?:eid|eies|eiet|owned)\s+(?:av|by)\s*$")
+
+
+def _owns_us(before: str, our_rx: re.Pattern | None) -> bool:
+    """The sentence says our company is owned by this one ('Noralg AS er et norsk selskap eid av H-D-B Holding
+    AS'): a shareholder of ours, which says nothing about who runs the site."""
+    sent = re.split(r"[.!?]\s", before)[-1]
+    return bool(our_rx and OWNS_US.search(sent) and our_rx.search(sent))
+
+
+CLIENT_BEFORE = re.compile(r"(?i)(?:leverandør|leverandor|tjenesteleverandør|underleverandør|supplier|provider|"
+                           r"leverer\s+\w+(?:\s+\w+)?|jobber|arbeider)\s+(?:til|for|to|på vegne av|on behalf of)\s+"
+                           r"(?:\w+\s+){0,2}$|(?:våre|vare|our)\s+(?:kunder|kunde|clients?|customers?|oppdragsgivere)\b[^.!?]{0,40}$|"
+                           r"(?:kunde|client|customer|oppdragsgiver)\s*:\s*$")
+
+
 def _supplier_or_bio(before: str, after: str) -> bool:
     """A company named as the site's supplier or data processor ('Adjoy AS er leverandør', 'servere som driftes av
-    X AS'), or as a person's employer in a bio ('CEO of Norway King Crab AS and Troika Seafood AS')."""
-    return bool(SUPPLIER_AFTER.search(after) or SUPPLIER_BEFORE.search(before) or BIO_BEFORE.search(before))
+    X AS'), as a person's employer in a bio ('CEO of Norway King Crab AS and Troika Seafood AS'), or as the maker
+    of a product in a shop listing ('Zaptec Charger AS Zaptec GO 13 999 kr')."""
+    return bool(SUPPLIER_AFTER.search(after) or SUPPLIER_BEFORE.search(before) or BIO_BEFORE.search(before)
+                or PRODUCT_AFTER.search(after) or CLIENT_BEFORE.search(before))
 
 
 def _owner_statement(before: str, at: str) -> bool:
@@ -2663,7 +2701,8 @@ def _operator_text(p: Page) -> str:
     return " | ".join(parts)
 
 
-def other_company_names(pages: list[Page], words: list[str]) -> list[tuple[str, str, bool]]:
+def other_company_names(pages: list[Page], words: list[str],
+                        owners: set[str] | None = None) -> list[tuple[str, str, bool]]:
     """Other legal names (with a legal-form suffix) on the site, as (name words, suffix, positional).
     Positional means an operator position: page title, header, footer, contact or imprint block, an about,
     contact or privacy page, a copyright line or an ownership or controller sentence. Names inside links to
@@ -2672,6 +2711,7 @@ def other_company_names(pages: list[Page], words: list[str]) -> list[tuple[str, 
     best: dict[tuple[str, str], int] = {}
     side: set[tuple[str, str]] = set()
     owned: set[tuple[str, str]] = set()
+    our_rx = name_regex(words) if words else None
     for p in pages:
         optext = _operator_text(p)
         ownertext = _owner_text(p)
@@ -2715,6 +2755,8 @@ def other_company_names(pages: list[Page], words: list[str]) -> list[tuple[str, 
                 mention = m.group(0).strip()
                 g1 = m.group(1)
                 lead = g1[:g1.rfind(run[0])] if run and run[0] in g1 else ""
+                if owners is not None and _owns_us(txt[max(0, m.start() - 120):m.start()] + lead, our_rx):
+                    owners.add(f"{key[0]} {key[1]}")
                 if _supplier_or_bio(txt[max(0, m.start() - 60):m.start()] + lead, txt[m.end():m.end() + 40]):
                     side.add(key)
                 elif ctx_hit or is_title:
@@ -2726,7 +2768,8 @@ def other_company_names(pages: list[Page], words: list[str]) -> list[tuple[str, 
             best[k] = max(best.get(k, 0), v)
     for k in side - owned:
         best[k] = 1  # a supplier, data processor or a person's other employer: named, never presenting the site
-    return [(k[0], k[1], best[k] >= 2, best[k] >= 3, best[k] >= 4) for k in sorted(best, key=lambda k: -best[k])]
+    return [(k[0], k[1], best[k] >= 2, best[k] >= 3, best[k] >= 4, k in side - owned)
+            for k in sorted(best, key=lambda k: -best[k])]
 
 
 STAFF_ONLY = re.compile(r"(?i)bedriftsidrettslag|bedriftsklubb|personalforening|velferdsforening|fagforening|"
@@ -2778,6 +2821,7 @@ async def confirm_dominant(sp: "_Spend", ctx: CompanyContext, names: list[tuple]
     for lab, suffix, positional, *rest in ordered:
         operator = bool(rest and rest[0])
         stated = bool(len(rest) > 1 and rest[1])
+        side = bool(len(rest) > 2 and rest[2])  # named as our supplier, client, product maker or a person's employer
         if suffix in FOREIGN_SUFFIX:
             if positional or set(lab.split()) & ours:
                 out[f"{lab} {suffix}"] = "foreign"
@@ -2791,6 +2835,8 @@ async def confirm_dominant(sp: "_Spend", ctx: CompanyContext, names: list[tuple]
             continue
         row = _ROW_CACHE.get(got[lab]) or {}
         tie = _tied(row, e, site_host)
+        if side and not positional and tie != "shares our distinctive name words":
+            continue  # a client or supplier sharing our phone or address (we run its customer service) presents nothing
         if positional or tie:
             key = f"{lab} {suffix}"
             out[key] = got[lab]
@@ -3008,7 +3054,9 @@ def norm_phone(raw: str) -> str | None:
     if intl:
         if d.startswith("47"):
             return "+" + d if len(d) == 10 and d[2] in "2345679" else None
-        return "+" + d if 7 <= len(d) <= 15 else None
+        # a bare + before eight digits ('tel:+53742551') is a Norwegian number missing its 47, not a foreign one:
+        # it is never published as written (the number shown in the page text is read on its own)
+        return "+" + d if 9 <= len(d) <= 15 else None
     if len(d) == 8 and d[0] in "2345679":
         return "+47" + d
     return None
@@ -3784,7 +3832,8 @@ async def prepare_scope(sp: _Spend, ctx: CompanyContext, v: Verdict) -> Scope:
     others = {k: (x[1] if isinstance(x, tuple) else x) for k, x in others.items()}
     sisters = await confirm_sisters(sp, ctx, sister_labels(v.pages, words))
     kinds: dict[str, str] = {}
-    named = [n for n in other_company_names(v.pages, words) if n[0] not in sisters][:6]
+    our_owners: set[str] = set()
+    named = [n for n in other_company_names(v.pages, words, our_owners) if n[0] not in sisters][:6]
     dominant = await confirm_dominant(sp, ctx, named, limit=3, site_host=home.host, kinds=kinds)
     positional_names = {f"{n[0]} {n[1]}" for n in named if n[2]}
     if v.namesake:
@@ -3878,6 +3927,11 @@ async def prepare_scope(sp: _Spend, ctx: CompanyContext, v: Verdict) -> Scope:
         if len(full) >= 6 and full in re.sub(r"[^a-z0-9]", "", bare(home.host).split(".")[0]):
             # on a domain named after us, a registry-confirmed sister's number beside ours is a group footer
             op_others -= {str(x) for x in sisters.values()}
+        # a company stated to own us ('Noralg AS er ... eid av H-D-B Holding AS') is our shareholder, not the
+        # site's operator, when the site prints our org number in an operator position
+        for k in dominant:
+            if k in our_owners and kinds.get(k) == "stated":
+                kinds[k] = "owner"
         stated = [k for k in dominant if kinds.get(k) == "stated"]
         if not op_others and not stated and not codeclared:
             ours_printed = True
@@ -3892,7 +3946,7 @@ async def prepare_scope(sp: _Spend, ctx: CompanyContext, v: Verdict) -> Scope:
                 kinds[f"contact on {d}"] = "mention"
             # companies only named in passing (suppliers, clients, partners, a person's other employer) are not
             # presenters on a site that prints our org number as its operator: they no longer block derived facts
-            dominant = {k: x for k, x in dominant.items() if kinds.get(k) != "mention" or k in sisters
+            dominant = {k: x for k, x in dominant.items() if kinds.get(k) not in ("mention", "owner") or k in sisters
                         or k.startswith(("org number ", "contact on ", "foreign group number "))}
             for k in dominant:
                 kinds[k] = "mention"
@@ -4065,7 +4119,7 @@ async def _declared_by_other(sp: "_Spend", ctx: CompanyContext, dom: str) -> boo
         if not sp.can_registry():
             return True
         try:
-            snap = await sp.get(f"https://data.brreg.no/enhetsregisteret/api/enheter?hjemmeside={host}&size=20",
+            snap = await sp.get(f"https://data.brreg.no/enhetsregisteret/api/enheter?hjemmeside={host}&size=100",
                                 robots=False, headers={"Accept": "application/json"})
         except (BudgetExhausted, _OutOfRequests):
             raise
@@ -4139,7 +4193,7 @@ async def _codeclared(sp: "_Spend", ctx: CompanyContext, home: Page) -> dict[str
         rows = []
         if sp.can_registry():
             try:
-                snap = await sp.get(f"https://data.brreg.no/enhetsregisteret/api/enheter?hjemmeside={host}&size=20",
+                snap = await sp.get(f"https://data.brreg.no/enhetsregisteret/api/enheter?hjemmeside={host}&size=100",
                                     robots=False, headers={"Accept": "application/json"})
                 if snap.status == 200:
                     rows = (snap.json().get("_embedded") or {}).get("enheter") or []
@@ -4151,9 +4205,17 @@ async def _codeclared(sp: "_Spend", ctx: CompanyContext, home: Page) -> dict[str
     out = {}
     for r in rows:
         hj = bare(host_of(r.get("hjemmeside") or ""))
-        if hj == host and r.get("organisasjonsnummer") != ctx.org and _active(r):
+        if hj == host and r.get("organisasjonsnummer") != ctx.org and _active(r) and not _declares_section(r):
             out[r["organisasjonsnummer"]] = r.get("navn") or ""
     return out
+
+
+def _declares_section(r: dict) -> bool:
+    """The entity declares a section of the site (www.dnb.no/fond for a fund the bank manages), not its front
+    page: a page of the site, which does not make the whole site its own."""
+    raw = (r.get("hjemmeside") or "").strip()
+    path = urlsplit(raw if "//" in raw else "https://" + raw).path.strip("/")
+    return bool(path)
 
 
 DERIVED_FIELDS = (("website_description", SECTION), ("site_contact_email", SECTION), ("site_contact_phone", SECTION),
@@ -4164,8 +4226,9 @@ DERIVED_FIELDS = (("website_description", SECTION), ("site_contact_email", SECTI
 def emit_site(ctx: CompanyContext, v: Verdict, scope: Scope | None = None) -> list[Page]:
     home = v.pages[0]
     domain = bare(home.host)
+    pub_host = v.alias_host or home.host  # the company's own domain, never a site builder's technical host
     scope = scope or Scope(ctx.org, name_words((ctx.registry or {}).get("navn") or ""))
-    url = canonical_url(home)
+    url = public_url(v, canonical_url(home))
     proof_evs = [ctx.add_evidence(p.snap, source_class=COMPANY_OWNED, span=bytes_exact(p.snap, s, core or ctx.org),
                                   method=METHOD, licence=LICENCE, core=core)
                  for p, s, core in v.proof]
@@ -4174,11 +4237,11 @@ def emit_site(ctx: CompanyContext, v: Verdict, scope: Scope | None = None) -> li
     if scope.shared:
         path = urlsplit(home.url).path
         if path not in ("", "/") and scope.slug and scope.slug in _translit(unquote(path)).replace("_", "-"):
-            url = home.url.split("?")[0].split("#")[0]  # our own section of the shared site
+            url = public_url(v, home.url.split("?")[0].split("#")[0])  # our own section of the shared site
         m["detail"] = f"{m['detail']}; {scope.describe()}"
         ctx.facts["website_shared"] = {"others": sorted(scope.others), "sisters": scope.sisters}
     if v.cross or v.path_scoped:
-        url = home.url.split("#")[0]  # the exact page that proves us, not the host's front page
+        url = public_url(v, home.url.split("#")[0])  # the exact page that proves us, not the host's front page
     # A company's own domain stays official only when other companies are merely mentioned there (clients,
     # partners, projects, staff clubs). An operator, a namesake, contacts on another organisation's domain,
     # a redirect, a section page, a co-declaring company or another org number make it a related website.
@@ -4190,7 +4253,7 @@ def emit_site(ctx: CompanyContext, v: Verdict, scope: Scope | None = None) -> li
         # company's, but nothing is derived from it
         m["detail"] = f"{m['detail']}; not exclusive: {scope.reasons()}"
         m["url"] = url
-        ctx.add_claim("official_website", SECTION, site_domain(home.host), proof_evs, confidence=conf, match=m,
+        ctx.add_claim("official_website", SECTION, site_domain(pub_host), proof_evs, confidence=conf, match=m,
                       note="Only the website itself is published; facts from this site are withheld because "
                            + scope.reasons())
         for fld, sec in DERIVED_FIELDS:
@@ -4206,7 +4269,7 @@ def emit_site(ctx: CompanyContext, v: Verdict, scope: Scope | None = None) -> li
         m["detail"] = f"{m['detail']}; not exclusive: {scope.reasons()}"
         m["url"] = url
         ctx.add_claim("related_website", SECTION,
-                      {"url": url, "domain": site_domain(home.host),
+                      {"url": url, "domain": site_domain(pub_host),
                        "relationship": "page on a shared or group site", "other_organisation_numbers": others},
                       proof_evs, confidence=conf, match=m,
                       note="The page is proven to name this company, but the site also serves others: " + scope.reasons())
@@ -4218,7 +4281,7 @@ def emit_site(ctx: CompanyContext, v: Verdict, scope: Scope | None = None) -> li
             ctx.mark(fld, sec, "ambiguous", note=why)
         return v.pages
     m["url"] = url
-    ctx.add_claim("official_website", SECTION, site_domain(home.host), proof_evs, confidence=conf, match=m)
+    ctx.add_claim("official_website", SECTION, site_domain(pub_host), proof_evs, confidence=conf, match=m)
     ctx.add_claim("official_website_url", SECTION, url, proof_evs, confidence=conf, match=dict(m))
     site_match = {"method": "verified_site", "detail": f"from {domain}, proven by {v.method}"}
     for p in v.pages:
@@ -4325,6 +4388,30 @@ def canonical_social(platform: str, url: str) -> CanonicalSocial:
     if p.path.endswith("profile.php") and ids:
         value = f"facebook.com/profile.php?id={ids[0]}"
     return CanonicalSocial(value, platform, url)
+
+
+BUILDER_TECH_HOST = re.compile(r"(?i)(^|\.)(service\.one|webhosting\.one|wixsite\.com|webnode\.(page|no|com)|"
+                               r"squarespace\.com|weebly\.com|jimdofree\.com|jimdosite\.com|godaddysites\.com|"
+                               r"mozello\.com|site123\.me|strikingly(site)?\.com|webflow\.io|netlify\.app|vercel\.app|"
+                               r"github\.io|business\.site|my\.canva\.site|framer\.(website|app)|carrd\.co)$")
+
+
+NOISE_PARAM = re.compile(r"(?i)^(utm_.*|fbclid|gclid|msclkid|mc_[a-z]+|ref|source|sessionid|session|sid|token|"
+                         r"error|error_description|message|status|state|code|returnurl|return_to|redirect.*|next|"
+                         r"login_required|_ga|_gl)$")
+ERROR_PARAM = re.compile(r"(?i)(^|&)(error|status)=|login_required")
+
+
+def public_url(v: "Verdict", url: str) -> str:
+    """The URL to publish: on the company's own domain when the site is served from a builder's technical host;
+    session, tracking and error parameters dropped, and the requested address instead of an error or login
+    redirect ('?error=true&message=login_required&status=500')."""
+    p = urlsplit(url.split("#")[0])
+    if p.query and ERROR_PARAM.search(p.query):
+        p = urlsplit(f"https://{bare(v.domain)}/")
+    query = urlencode([(k, x) for k, x in parse_qsl(p.query, keep_blank_values=True) if not NOISE_PARAM.match(k)])
+    host = v.alias_host or p.netloc
+    return urlunsplit((p.scheme or "https", host, p.path or "/", query, ""))
 
 
 def site_domain(host: str) -> str:
@@ -5073,6 +5160,15 @@ async def collect_hiring(sp: "_Spend", ctx: CompanyContext, pages: list[Page], d
         return
     url = page.url.split("#")[0]
     head = page.soup.title.get_text(" ", strip=True) if page.soup.title else url
+    none_now = NO_OPENINGS.search(page.text[:12000])
+    if none_now:
+        day = (page.snap.retrieved_at or "")[:10]
+        ctx.add_claim("hiring_signal", "hiring", url, [_ev(ctx, page, _clean(head, 200) or url),
+                                                      _ev(ctx, page, none_now.group(0))],
+                      match=dict(site_match, detail=f"careers page; no openings listed on {day}"),
+                      note=f"Careers page; no openings listed on {day} ('{none_now.group(0)}')")
+        ctx.facts["website_careers_no_openings"] = day
+        return
     ctx.add_claim("hiring_signal", "hiring", url, _ev(ctx, page, _clean(head, 200) or url), match=site_match)
     postings: dict[str, tuple[str, str]] = {}
     ours = _squash((ctx.registry or {}).get("navn") or "")
@@ -5098,6 +5194,11 @@ async def collect_hiring(sp: "_Spend", ctx: CompanyContext, pages: list[Page], d
         title, span = postings[purl]
         ctx.add_claim("hiring_signal", "hiring", purl, _ev(ctx, page, span),
                       match={"method": "posting_on_verified_careers_page", "detail": title[:200]})
+
+
+NO_OPENINGS = re.compile(r"(?i)(ingen ledige stillinger|ingen ledige jobber|ingen utlyste stillinger|"
+                         r"har (for tiden|for øyeblikket|per i dag|i dag) ingen ledige|for tiden ingen ledige|"
+                         r"no (current )?(open positions|vacancies|openings)|there are (currently )?no (open )?(positions|vacancies))")
 
 
 # ---------------------------------------------------------------- entry point

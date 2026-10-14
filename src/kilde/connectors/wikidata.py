@@ -241,7 +241,8 @@ def wd_date(v: Any) -> str | None:
 
 def stmt_span(p: str, s: dict, quals: Iterable[str] = ()) -> str:
     q = {k: _quals(s, k) for k in quals if _quals(s, k)}
-    out: dict[str, Any] = {"property": p, "id": s.get("id"), "rank": s.get("rank"), "value": _value(s)}
+    # the value first: the first quoted pair is the claim's own span, so it must carry the value itself
+    out: dict[str, Any] = {"value": _value(s), "property": p, "id": s.get("id"), "rank": s.get("rank")}
     if q:
         out["qualifiers"] = q
     return _dump(out)

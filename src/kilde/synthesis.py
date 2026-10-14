@@ -69,6 +69,17 @@ def money(amount: Any, cur: str | None) -> str:
     return f"{sign}{s} {cur or ''}".strip()
 
 
+def _months(v: dict) -> int | None:
+    """Length of an accounts period in whole months, from its start and end dates."""
+    a, b = str(v.get("period_start") or ""), str(v.get("period_end") or "")
+    if len(a) < 10 or len(b) < 10:
+        return None
+    try:
+        return (int(b[:4]) - int(a[:4])) * 12 + int(b[5:7]) - int(a[5:7]) + (1 if int(b[8:10]) >= 28 else 0)
+    except ValueError:
+        return None
+
+
 def distinct(claims: list[Claim], *keys: str) -> list[Claim]:
     """One claim per distinct entity: counts in sentences are of companies, places, ads or awards, never of
     registry lines (a company can be listed twice in one source). Claims without the key stay as they are."""
@@ -184,7 +195,14 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
         prev_rev = next((c for c in ctx.claims_for("revenue") if c.value.get("year") == prev_year
                          and rev and c.value["account_type"] == rev.value["account_type"]), None)
         if rev and prev_rev:
-            say(f"Filed revenue the year before ({prev_year}) was {money(prev_rev.value['amount'], prev_rev.value['currency'])}.", prev_rev)
+            m_now, m_prev = _months(rev.value), _months(prev_rev.value)
+            if m_now and m_prev and m_now != m_prev:
+                # periods of different length are not comparable side by side: say how long each was
+                say(f"Filed revenue the year before ({prev_year}) was {money(prev_rev.value['amount'], prev_rev.value['currency'])}, "
+                    f"for a {m_prev}-month period ({prev_rev.value.get('period_start')} to {prev_rev.value.get('period_end')}); "
+                    f"the {latest} figure covers {m_now} months.", prev_rev, rev)
+            else:
+                say(f"Filed revenue the year before ({prev_year}) was {money(prev_rev.value['amount'], prev_rev.value['currency'])}.", prev_rev)
 
     ceo, chair = first(ctx, "ceo"), first(ctx, "board_chair")
     if ceo and chair and ceo.value.get("name") == chair.value.get("name"):
@@ -278,16 +296,23 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
     if jobs:
         newest = max(jobs, key=lambda c: c.value.get("published") or "")
         indexed, _x = ctx.source_total("job_ad", len(jobs))
+        via_unit = any(c.value.get("employer_orgnr") and c.value.get("employer_orgnr") != ctx.org for c in jobs)
+        whose = ("its organisation number or that of a registered sub-unit" if via_unit
+                 else "its organisation number")
         if indexed > len(jobs):
-            lead = (f"NAV's feed holds {indexed} active job ads with its organisation number; the {len(jobs)} re-checked "
+            lead = (f"NAV's feed holds {indexed} active job ads with {whose}; the {len(jobs)} re-checked "
                     f"in this run are shown, and the newest of them")
         else:
-            lead = f"NAV lists {len(jobs)} active job ad{'s' if len(jobs) != 1 else ''} with its organisation number; the newest"
-        say(f"{lead}, \"{newest.value.get('title')}\", was published {(newest.value.get('published') or '')[:10]}.", *jobs[:5])
+            lead = f"NAV lists {len(jobs)} active job ad{'s' if len(jobs) != 1 else ''} with {whose}; the newest"
+        say(f"{lead}, \"{newest.value.get('title')}\", was published {(newest.value.get('published') or '')[:10]}.", *jobs)
 
     careers = ctx.claims_for("hiring_signal")
     if careers and not jobs:
-        say(f"Its verified website has a careers page ({careers[0].value}).", careers[0])
+        if "no openings" in (careers[0].note or "") or "no openings" in str((careers[0].match or {}).get("detail", "")):
+            say(f"Its verified website has a careers page ({careers[0].value}) that listed no openings when it was read.",
+                careers[0])
+        else:
+            say(f"Its verified website has a careers page ({careers[0].value}).", careers[0])
     news = sorted(ctx.claims_for("dated_news"), key=lambda c: c.as_of or "", reverse=True)
     if news:
         title = str(news[0].value).rsplit(" (", 1)[0]

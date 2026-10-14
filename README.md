@@ -79,7 +79,7 @@ For every published (`available`) claim, `claim_span` is copied verbatim from th
 | Brønnøysund Enhetsregisteret API | identity, legal form, addresses, industry, sector, registered employees, share capital, register memberships, status flags, registry website, email and phone, group parent and subsidiaries, sub-units (workplaces), roles (general manager, board, auditor, accountant), signature rules | org number in the endpoint | NLOD 2.0, open API, no key |
 | Brønnøysund update feed | dated registry changes in the last 12 months, with the fields that changed | org number filter | NLOD 2.0 |
 | Regnskapsregisteret API | filed accounts for the last three years: revenue, operating result, salary costs, profit before tax, annual result, total assets, cash, equity, debt, audit status; list of filed annual-report PDFs | org number in the endpoint | NLOD 2.0 |
-| The company's own website | official website, contact email and phone, social profiles it links to, dated news posts, careers page or job postings, description | the site prints the org number, or shows the registry phone or the full registered address with the company name, or is the registry-listed website and shows the name, or one of the stricter name proofs (below); then exclusivity and name-collision checks | company-owned pages; robots.txt obeyed (RFC 9309), at most 16 requests per company |
+| The company's own website | official website, contact email and phone, social profiles it links to, dated news posts, careers page or job postings, description | the site prints the org number, or shows the registry phone or the full registered address with the company name, or is the registry-listed website and shows the name, or one of the stricter name proofs (below); then exclusivity and name-collision checks | company-owned pages; robots.txt obeyed (RFC 9309) on every redirect hop too, at most 16 requests per company |
 | NAV job ads (pam-stilling-feed) | active job ads with title, location, published and expiry dates | employer org number in the ad (workplace numbers mapped to the parent through Enhetsregisteret) | NAV API terms; public token fetched at run time |
 | TED (EU procurement journal) | public contracts won, procurement notices published as a buyer | winner or buyer national ID equals the org number | free reuse of TED notices |
 | Research Council of Norway, SkatteFUNN | funded research and innovation projects and approved SkatteFUNN projects | project owner org number | NLOD 2.0 (Research Council open data); SkatteFUNN lists published by the Research Council |
@@ -115,7 +115,7 @@ Every run can diff against the previous envelopes (`--previous`, or automaticall
 
 Every request goes through one budgeted client. Defaults: 20 outbound HTTP requests per company and 30 minutes per batch (`--time-budget 1800`), both configurable. Identity, roles, accounts and workplaces for every company run first; external sources share what is left. Each step has a timeout; a step that times out rolls back anything it published half-way, and timed-out website steps get one unhurried second pass. DNS or network failures are reported as `failed`, never as absence. Transient failures (timeouts, HTTP 429 and 5xx, failed registry searches) end as `failed` and are retried in a second pass, so a slow site never turns into a different answer on the next run. When time or requests run out, the remaining facts are marked `failed` with the reason and every envelope is still written.
 
-Measured from a fresh clone (version 2): 1,000 companies in 20.8 minutes with 14,128 requests (about 14 per company), while other runs shared the connection; 100 companies in about 4 minutes with 1,515 requests. Details in [EVAL.md](EVAL.md). The run report gives HTTP requests and DNS lookups separately; DNS lookups are used only to drop name-derived domains that do not exist before any HTTP request. Fetches to private, loopback, link-local or other non-public addresses are refused, including on redirects. Two runs of the same batch produce identical facts (Builderr runs each entry twice and compares).
+Measured from a fresh clone (version 2): 1,000 companies in 20.8 minutes with 14,128 requests (about 14 per company), while other runs shared the connection; 100 companies in about 4 minutes with 1,515 requests. Details in [EVAL.md](EVAL.md). The run report gives HTTP requests and DNS lookups separately; DNS lookups are used only to drop name-derived domains that do not exist before any HTTP request. Fetches to private, loopback, link-local or other non-public addresses are refused, including on redirects, and each redirect hop must be allowed by its own host's robots.txt. Two runs of the same batch produce identical facts (Builderr runs each entry twice and compares).
 
 | Item | Cost |
 |---|---|
@@ -153,7 +153,7 @@ To rebuild without the crawler, run `scripts/build_website_seeds.py` and `script
 ## Tests and evaluation
 
 ```bash
-uv run --extra dev pytest -q   # 460 tests
+uv run --extra dev pytest -q   # 513 tests
 uv run python scorer/score.py --envelopes out/envelopes.jsonl --expected-count 100 --report-html out/report.html --out out/score.json
 ```
 
