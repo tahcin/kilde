@@ -3446,3 +3446,16 @@ def test_entities_declaring_a_section_of_the_site_do_not_co_declare_it():
     """DNB shape: funds declare www.dnb.no/fond; the bank declares www.dnb.no."""
     assert W._declares_section({"hjemmeside": "www.fjellbekk.no/fond"})
     assert not W._declares_section({"hjemmeside": "www.fjellbekk.no"}) and not W._declares_section({"hjemmeside": "https://fjellbekk.no/"})
+
+
+def test_client_sharing_our_phone_is_not_a_presenter():
+    """Tellier Service shape: we are a service provider to a client whose registry phone is ours."""
+    body = ("<p>Fjellbekk Trevare er et faktureringsselskap og en tjenesteleverandør til Kvist Strøm AS.</p>"
+            f"<footer>© 2026 Fjellbekk Trevare AS · Org.nr {OURS} · tlf 41 00 00 01"
+            "<a href='https://www.instagram.com/fjellbekktrevare'>ig</a></footer>")
+    rows = {W.BRREG_SEARCH + "?navn=kvist%20strom&size=20":
+            (200, json.dumps({"_embedded": {"enheter": [{"organisasjonsnummer": OTHER, "navn": "KVIST STRØM AS",
+                                                          "telefon": "41 00 00 01"}]}}), "application/json")}
+    claims = run(_site(rows, body=body), ctx_for(hjemmeside="fjellbekk.no", telefon="41000001"))
+    assert claims["official_website"].value == "fjellbekk.no"
+    assert claims["social_profile"].availability == "available"

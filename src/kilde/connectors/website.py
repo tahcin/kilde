@@ -1258,7 +1258,7 @@ def _related_name_operates(pages: list[Page], words: list[str]) -> bool:
     owner or controller sentence, copyright or imprint block)."""
     ours = {_translit(w) for w in words}
     distinct = {w for w in ours if len(w) >= 3 and w not in GENERIC_WORDS and not w.isdigit()} or ours
-    return any(op and set(n.split()) & distinct for n, _sfx, _pos, op, _strong in other_company_names(pages, words))
+    return any(op and set(n.split()) & distinct for n, _sfx, _pos, op, _strong, *_r in other_company_names(pages, words))
 
 
 def _domain_has_name(host: str, e: dict) -> bool:
@@ -1901,7 +1901,7 @@ def legal_name_unique_page(v: Verdict, ctx: CompanyContext) -> tuple[tuple, tupl
     words = name_words(name)
     ours = {_translit(w) for w in words}
     distinct = {w for w in ours if len(w) >= 3 and w not in GENERIC_WORDS and not w.isdigit()} or ours
-    for other, _suffix, _positional, operator, _strong in other_company_names(v.pages, words):
+    for other, _suffix, _positional, operator, _strong, *_r in other_company_names(v.pages, words):
         ws = set(other.split())
         if ws & distinct:
             return None  # a sister, parent or namesake with our words ('Eurotec Entreprenør AS' on eurotec.no)
@@ -2768,7 +2768,8 @@ def other_company_names(pages: list[Page], words: list[str],
             best[k] = max(best.get(k, 0), v)
     for k in side - owned:
         best[k] = 1  # a supplier, data processor or a person's other employer: named, never presenting the site
-    return [(k[0], k[1], best[k] >= 2, best[k] >= 3, best[k] >= 4) for k in sorted(best, key=lambda k: -best[k])]
+    return [(k[0], k[1], best[k] >= 2, best[k] >= 3, best[k] >= 4, k in side - owned)
+            for k in sorted(best, key=lambda k: -best[k])]
 
 
 STAFF_ONLY = re.compile(r"(?i)bedriftsidrettslag|bedriftsklubb|personalforening|velferdsforening|fagforening|"
@@ -2820,6 +2821,7 @@ async def confirm_dominant(sp: "_Spend", ctx: CompanyContext, names: list[tuple]
     for lab, suffix, positional, *rest in ordered:
         operator = bool(rest and rest[0])
         stated = bool(len(rest) > 1 and rest[1])
+        side = bool(len(rest) > 2 and rest[2])  # named as our supplier, client, product maker or a person's employer
         if suffix in FOREIGN_SUFFIX:
             if positional or set(lab.split()) & ours:
                 out[f"{lab} {suffix}"] = "foreign"
@@ -2833,6 +2835,8 @@ async def confirm_dominant(sp: "_Spend", ctx: CompanyContext, names: list[tuple]
             continue
         row = _ROW_CACHE.get(got[lab]) or {}
         tie = _tied(row, e, site_host)
+        if side and not positional and tie != "shares our distinctive name words":
+            continue  # a client or supplier sharing our phone or address (we run its customer service) presents nothing
         if positional or tie:
             key = f"{lab} {suffix}"
             out[key] = got[lab]
