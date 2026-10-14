@@ -2,12 +2,12 @@
   "run_id": "profiles-1000",
   "agent": "Kilde",
   "version": "1.0.0",
-  "commit": "d3461f4d34c4434bc5fe9ced238a134f7ed4f7e4",
-  "started_at": "2026-10-14T06:03:31Z",
-  "completed_at": "2026-10-14T06:24:02Z",
+  "commit": "853e897cb12a14899658a5045fd91955af3f70aa",
+  "started_at": "2026-10-14T10:28:15Z",
+  "completed_at": "2026-10-14T10:40:06Z",
   "expected_count": 1000,
   "emitted_envelopes": 1000,
-  "runtime_ms": 1249564,
+  "runtime_ms": 731163,
   "publication_gate": {
     "withheld": 11,
     "notes": [
@@ -24,29 +24,30 @@
       "931567306 social_profile: social handle 'company/radical-technologies-as' names another legal entity (sas)"
     ]
   },
-  "website_retries": 159,
+  "website_retries": 23,
   "company_runtime_ms": {
-    "p50": 16398,
-    "p95": 47675,
-    "max": 128138
+    "p50": 16044,
+    "p95": 40128,
+    "max": 128726
   },
   "operations": {
-    "requests": 14128,
+    "requests": 12395,
     "max_requests": 20000,
-    "dns_lookups": 23524,
+    "dns_lookups": 19428,
     "cache_hits": 0,
     "by_host": {
-      "data.brreg.no": 6364,
+      "data.brreg.no": 6389,
       "sgregister.dibk.no": 188,
-      "api.finanstilsynet.no": 63,
+      "api.finanstilsynet.no": 75,
       "api.gleif.org": 38,
-      "hans-helseth.no": 29,
-      "www.borettslaget.no": 25,
-      "vestbo.no": 25,
-      "pam-stilling-feed.nav.no": 22,
+      "hans-helseth.no": 30,
+      "pam-stilling-feed.nav.no": 23,
       "puerfons.no": 20,
+      "harry-martinsen.no": 20,
+      "www.fishlab.no": 20,
       "msm.no": 20,
       "byggevarervest.no": 19,
+      "www.funkworks.no": 19,
       "vannmeisling.no": 19,
       "www.civilmanagement.no": 19,
       "berggynekologi.no": 18,
@@ -56,11 +57,10 @@
       "www.halob.no": 18,
       "emeliehudpleie.no": 18,
       "takkforbilen.no": 18,
-      "www.funkworks.no": 18,
       "bytte-varmtvannsbereder-moss.no": 18,
+      "www.borettslaget.no": 17,
       "www.datarecoveryoslo.no": 17,
-      "www.borettslaget.com": 17,
-      "www.sameiet.no": 17
+      "jeloyelektro.no": 17
     },
     "third_party_cost_usd": 0.0,
     "llm_calls": 0,
