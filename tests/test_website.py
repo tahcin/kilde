@@ -2816,3 +2816,13 @@ def test_a_page_that_fails_transiently_fails_the_step_instead_of_deciding():
         run(FakeFetcher(dict(pages)), ctx)
         outs.append([(c.field, str(c.value), c.availability) for c in ctx.claims])
     assert outs[0] == outs[1] and ("official_website", "fjellbekktrevare.no", "available") in outs[0]
+
+
+def test_heading_with_a_shared_trade_word_is_no_namesake():
+    """Studio Frisør shape: 'Din frisør på Lambertseter' in a heading is not the registered 'DIN FRISØR DA'."""
+    body = "<h1>Din frisør i Testby</h1><footer>Fjellbekk Frisør AS · Tlf 41 00 00 01</footer>"
+    pages = {"https://fjellbekkfrisor.no/": (200, html(body))}
+    pages.update(_brreg("enheter", "fjellbekk%20fris%C3%B8r", [_row(OTHER, "DIN FRISØR DA", street="Annen vei 1", pc="1111")]))
+    ctx = ctx_for(navn="FJELLBEKK FRISØR AS", telefon="41000001")
+    run(FakeFetcher(pages), ctx)
+    assert ctx.claims_for("official_website")

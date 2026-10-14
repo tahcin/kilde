@@ -1388,7 +1388,8 @@ def _entity_keys(r: dict) -> set[tuple[str, str]]:
 def _distinct_words(name: str) -> list[str]:
     """Distinctive words of a name in registered spelling: four letters or more, not generic or form words."""
     return [w for w in name_words(name) if len(_translit(w)) >= 4 and _translit(w) not in GENERIC_WORDS
-            and w not in FORM_NAME_WORDS and _translit(w) not in FORM_WORDS and not w.isdigit()]
+            and w not in FORM_NAME_WORDS and _translit(w) not in FORM_WORDS and not w.isdigit()
+            and _translit(w) not in COMMON_NOUNS]  # a trade word ('frisør') is shared by every salon
 
 
 async def _colocated_namesake(sp: "_Spend", ctx: CompanyContext, entity: dict | None = None,
@@ -4600,7 +4601,8 @@ async def fetch_website(f: Fetcher, ctx: CompanyContext) -> None:
                 v.status = "duplicate"
                 continue
             await check_candidate(f, sp, ctx, v, done, registry_host, start)
-            if v.transient and not (v.status == "proven" and v.method == "orgnr_on_page"):
+            if v.transient and (v.status == "name_only" or (v.status == "proven" and v.method != "orgnr_on_page")):
+                # (a site that never shows our name is no closer to proof with one more page)
                 # a page of this site failed transiently: its verdict could differ on the next run, so the step
                 # fails (the pipeline's retry pass reads the site again) instead of deciding on part of the site
                 raise _RegistrySearchFailed(f"pages of {v.domain} could not all be read: {v.transient[0]}")
