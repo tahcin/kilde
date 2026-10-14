@@ -2906,3 +2906,13 @@ def test_street_suffix_gate_forms():
     rx = W._street_regex("Storgata 7")
     assert all(rx.search(t) for t in ("Storgata 7", "Storgaten 7", "Storgate 7", "Storgt. 7"))
     assert not rx.search("Storgata 71")
+
+
+def test_bracketed_short_form_is_an_optional_alias():
+    assert ["fjellbekk", "trevare", "senter"] in W.name_variants("STIFTELSEN FJELLBEKK TREVARE SENTER (FTS)", {})
+    assert W.name_variants("FJELLBEKK (NORGE) AS", {}) == [["fjellbekk", "norge"]]  # one word left: no alias variant
+    body = "<h1>Fjellbekk Trevare Senter</h1><p>Lyngveien 12B, 9999 Testby</p>"
+    f = FakeFetcher({"https://fts.no/": (200, html(body))})
+    claims = run(f, ctx_for(navn="STIFTELSEN FJELLBEKK TREVARE SENTER (FTS)", hjemmeside="fts.no",
+                            organisasjonsform={"kode": "STI"}))
+    assert claims["official_website"].availability == "available"

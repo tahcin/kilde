@@ -247,6 +247,17 @@ def _distinctive(ws: list[str], places: set[str]) -> bool:
     return any(len(w) >= 4 and w not in GENERIC_WORDS and _translit(w) not in places and not w.isdigit() for w in ws)
 
 
+def _without_alias(name: str) -> list[str] | None:
+    """The name words without a trailing bracketed short form of at most two words ('... INITIATIVE (IDI)'),
+    when at least two words remain; None when the name has no such alias."""
+    m = re.match(r"^(.*\S)\s*\(([^()]{1,24})\)\s*(?:" + "|".join(re.escape(x) for x in sorted(LEGAL_SUFFIX)) +
+                 r")?\s*$", name.strip(), re.I)
+    if not m or len(name_words(m.group(2))) > 2:
+        return None
+    rest = name_words(m.group(1))
+    return rest if len(rest) >= 2 else None
+
+
 def name_variants(name: str, e: dict | None = None) -> list[list[str]]:
     """The legal name and safe shortenings: leading initials joined ('P.E.' as 'pe') or dropped, form words
     ('Sameiet', 'Stiftelsen') dropped, and place or region words (registry municipality, post town, counties,
@@ -263,6 +274,12 @@ def name_variants(name: str, e: dict | None = None) -> list[list[str]]:
     while lead < len(base) and len(base[lead]) == 1 and base[lead].isalpha():
         lead += 1
     stems = [base]
+    alias = _without_alias(name)
+    if alias and alias != base:
+        # a trailing bracketed short form ('INTOSAI DEVELOPMENT INITIATIVE (IDI)') is an alias, not part of the
+        # name a site writes out; the variant still needs a distinctive word and a variant registry check
+        add(alias)
+        stems.append(alias)
     if 0 < lead < len(base):
         joined = ["".join(base[:lead])] + base[lead:]
         dropped = base[lead:]
