@@ -1559,7 +1559,11 @@ def _other_entity_on_site(pages: list[Page], r: dict, ctx: CompanyContext) -> bo
     tw = [_translit(w) for w in name_words(r.get("navn") or "")]
     if ow and any(tw[i:i + len(ow)] == ow for i in range(len(tw) - len(ow) + 1)):
         return any(_visible(name_regex(name_words(ours)), p.text) for p in pages)
-    rx = name_regex(name_words(r.get("navn") or ""))
+    # their own words with only a trailing legal form dropped ('BA Optikk AS' keeps its leading 'BA')
+    theirs = re.findall(r"[0-9a-zæøåäöüé]+", fold_accents(r.get("navn") or "").lower().replace("&", " og "))
+    while len(theirs) > 1 and theirs[-1] in LEGAL_SUFFIX:
+        theirs.pop()
+    rx = name_regex(theirs)
     return any(_visible(rx, _mask_our_name(p.text, ours)) for p in pages)
 
 

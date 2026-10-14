@@ -3711,3 +3711,17 @@ def test_sister_label_seen_only_inside_our_own_name_is_no_sister():
     assert claims["social_profile"].availability == "available"
     claims = go(body.replace("</footer>", " Søsterselskap: Fjellbekk Trevare AS</footer>"))
     assert claims["social_profile"].availability != "available"
+
+
+def test_leading_form_like_word_stays_part_of_the_other_name():
+    """'BA Fjellbekk AS': 'BA' is a legal form only at the end of a name, so the bare word 'Fjellbekk' in a menu
+    of 'Fjellbekk 2020' does not show it, while 'BA Fjellbekk' or a standalone registered 'Fjellbekk AS' does."""
+    def on(body, navn):
+        page = W.parse_page(Snapshot("https://fjellbekk2020.no/", "https://fjellbekk2020.no/", 200, "x",
+                                     html(body, title="Fjellbekk 2020").encode(), "text/html"))
+        return W._other_entity_on_site([page], {"organisasjonsnummer": SISTER, "navn": navn},
+                                       ctx_for(navn="FJELLBEKK 2020 AS"))
+    menu = "<nav><a href='/'>Fjellbekk</a></nav><h1>Fjellbekk 2020 AS</h1>"
+    assert not on(menu, "BA FJELLBEKK AS")
+    assert on(menu + "<p>Partner: BA Fjellbekk</p>", "BA FJELLBEKK AS")
+    assert on(menu, "FJELLBEKK AS")
