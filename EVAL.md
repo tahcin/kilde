@@ -30,17 +30,47 @@ Important: the recall figures below are measured against our own reference pool 
 | 10 | (3 parallel auditors) | 30.0 | 12 | 8 | **0** | Clean. 2,336 audited items. |
 | 11 | (3 parallel auditors) | 30.0 | 12 | 8 | **0** | Clean. 3,028 audited items. Second clean round in a row after the last fix. |
 | 12 | (3 parallel auditors) | 30.0 | 12 | 8 | 1 | A Shopify theme's default structured data (naming Shopify and its social accounts) published for a store. Fix: structured data must name the company; platform defaults withheld. |
-| 13 | (final version, 3 parallel auditors) | 30.0 | 12 | 8 | **0** | Clean: all 2,525 audited items correct. |
+| 13 | (version 1, 3 parallel auditors) | 30.0 | 12 | 8 | **0** | Clean: all 2,525 audited items correct. |
+| 14 | (version 2 build, seed 1414) | not scored | n/a | n/a | 1 | A foundation was given the mosque website of a different entity at the same address, proved only by the address and the foundation's name run together inside an email address. Also 4 wrong or unsupported values. Fix (general rules): a name counts only as visible words, never inside an email, URL, domain or handle; an address proves nothing when another registered entity has the same street address and postcode; a namesake at our address or in the site's title or main heading makes any name-based proof ambiguous; contacts in the same line, row or card as another company's name are withheld. |
+| 15 | (version 2 build, seed 1515) | not scored | n/a | n/a | **0** | Clean: 0 wrong-company facts, 0 invented financials. 3 wrong values, all fixed: a capped count given as the total, a reused post's date, a missing reason for a deceased general manager. |
+| 16 | (version 2 release commit d3461f4, seed 1616) | pending | pending | pending | pending | Round 16: pending |
 
-Across all rounds every registry, accounts and update-feed claim checked against the live APIs was correct (more than 15,000 claims), and no financial value was ever invented. Rounds 8 to 11 split each 30-company audit across three independent auditors running in parallel.
+Across all rounds every registry, accounts and update-feed claim checked against the live APIs was correct (more than 15,000 claims in rounds 1 to 13), and no financial value was ever invented. Rounds 8 to 11 split each 30-company audit across three independent auditors running in parallel.
+
+## Version 2
+
+Version 1 was frozen at d48937e (round 13 clean). Version 2 (release commit d3461f4, artefacts at 7955bac) raises recall in the four reported families without loosening any proof. Both versions were run on the same 1,000 random companies (and the same 100 smoke-test companies); the figures come from each version's committed `profiles-1000/` and `smoke/` artefacts. Registry, accounts and public-record families are unchanged between the two.
+
+| Family (1,000 random companies) | Version 1 (d48937e) | Version 2 (7955bac) |
+|---|---|---|
+| Official website (companies) | 98 | 114 |
+| Social profiles (companies / facts) | 55 / 113 | 58 / 115 |
+| Hiring signals (companies / facts) | 22 / 34 | 22 / 34 |
+| Dated news (companies / posts) | 22 / 249 | 29 / 350 |
+| Related website, labelled (companies) | 29 | 31 |
+| Website title (companies) | 88 | 101 |
+| Website description (companies) | 58 | 71 |
+
+On the 100-company smoke test: official website 13 to 16 companies, social profiles 5 / 13 to 6 / 15, dated news 3 / 48 to 4 / 57.
+
+What changed, by theme:
+
+- **Website candidates.** A declared candidate cache built from our own robots.txt-respecting crawl of about 325,000 public domains (Common Crawl host graph `.no` hosts, Brreg websites and email domains, name-derived domains resolved with dnsx, and outbound links), whose pages were matched to org numbers, registry phones, emails and names against the Brønnøysund bulk register. The crawl tied 55,618 universe companies (13.5%) to a domain. Also Common Crawl pages printing the org number, and NAV ad employer homepages (727 companies). Seeds only propose candidates: the live run fetches and proves every site, and seeds on domains carrying the company's name are tried first.
+- **New proofs, with strict collision rules.** `legal_name_unique` (the exact registered name with its legal form on a domain that is exactly that name, and no other registered entity carrying the whole name), `registry_email_domain_and_name`, and a workplace-name proof for registered sub-units. Each runs the Brønnøysund name-collision search with retries; a search that fails marks the step failed, never decided.
+- **Precision rules from rounds 14 to 16.** Names count only as visible text; a shared registered address proves nothing; a namesake in the site's heading or at our address makes name proofs ambiguous; contacts beside another company's name are withheld; platform names in badges and trademark notices (Google Inc, Apple Inc) never present a site; e-invoice, accounting and payment platform domains are services the company uses, not other organisations.
+- **Dated news.** Feed discovery, listing pages found by link text and on blog subdomains, slash dates read in the page's own order, card lists parsed one item at a time, stub and template posts dropped, and a check that withholds a reused post whose text points to a later year.
+- **Hiring.** The company's own board on a recruitment platform (Teamtailor, Webcruiter, Jobbnorge and others) when it is linked from the verified site.
+- **Page updates.** A sitemap `lastmod` day shared by a large part of the sitemap is a bulk regeneration, not a page update.
+- **Synthesis.** Distinct counts, capped sources state their true total ("lists 150 projects; the 8 most recent are shown"), subsidiaries labelled direct or indirect, and a general manager marked deceased or resigned named as such in the reason.
+- **Evidence and reliability.** Proof spans hold the matched value; robots.txt answered with 401 or 403 means no rules (RFC 9309), while the refused pages stay blocked; transient failures (timeouts, 429, 5xx, failed registry searches) end as `failed` and are retried, so two runs give the same facts.
 
 ## Determinism
 
-Builderr runs each entry twice and compares the facts. The same 100 companies were run twice, uncached: the first drill found 4 companies differing because website steps timed out under load; after the fixes (rollback on timeout, a retry pass, a larger connection pool) two runs produced identical facts.
+Builderr runs each entry twice and compares the facts. The same 100 companies were run twice, uncached: the first drill found 4 companies differing because website steps timed out under load; after the fixes (rollback on timeout, a retry pass, a larger connection pool) two runs produced identical facts. Version 2's smoke test was run twice in parallel from a fresh clone: 0 companies differ, 5,845 facts in each run.
 
 ## Benchmark against Builderr's own sample
 
-On the 100 companies of Builderr's public sample (https://builderr.ai/signalpost), compared with Builderr's own crawler (final code, Oct 13):
+On the 100 companies of Builderr's public sample (https://builderr.ai/signalpost), compared with Builderr's own crawler (version 1 code, Oct 13; not rerun for version 2):
 
 | Family | Builderr's crawler | Kilde |
 |---|---|---|
@@ -57,10 +87,16 @@ On the 100 companies of Builderr's public sample (https://builderr.ai/signalpost
 
 Six fresh agents acting as Builderr judges, given only the public challenge pages, the submission email and the repo, estimated the score twice. On an earlier commit (85fe2f8): 55 to 63, 59 to 67 and 58 to 64, with two of three flagging pages on shared or chain sites published as official websites. After moving those to a labelled `related_website` field and other fixes (8a82a07): 57 to 64, 60 to 67 and 54 to 62, with no wrong-company matches found. All six agreed that precision, synthesis and UX are close to full marks and that recall decides whether an entry clears 65.
 
-## Final runs (commit 94a2493, fresh clone)
+Version 2 (7955bac): independent judges pending.
 
-- Smoke test, 100 new companies: valid, run twice in parallel with identical facts (5,797 each). See `smoke/`.
-- 1,000 new companies: valid, about 13 requests per company, 22.5 minutes while three other runs shared the same connection. See `profiles-1000/`.
-- Round 13 audit on this exact code: 0 wrong-company facts, 0 invented financials.
+## Final runs (version 2, commit d3461f4, fresh clone; artefacts committed at 7955bac)
+
+- Tests: 460 pass (1 skipped).
+- Smoke test, 100 new companies: valid, run twice in parallel with identical facts (5,845 each), 1,515 requests, about 4 minutes. See `smoke/`.
+- 1,000 new companies: valid, 14,128 requests (about 14 per company), 20.8 minutes while other runs shared the same connection. See `profiles-1000/`.
+- A further 100 fresh companies (seed 1616, the round 16 audit sample): valid, 1,451 requests.
+- Round 16 audit on this exact code: pending.
+
+Version 1's final runs (commit 94a2493): smoke 100 valid with identical facts (5,797 each); 1,000 companies valid at about 13 requests per company in 22.5 minutes.
 
 All scores above are from our own scorer and auditors, not Builderr's. Builderr's reference pool includes every entrant's verified finds and its own crawlers, so recall against it will be lower.
