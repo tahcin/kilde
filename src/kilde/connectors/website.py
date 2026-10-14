@@ -1691,6 +1691,8 @@ async def _check_collision(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> Non
             rows = rows + [r for r in extra if r.get("organisasjonsnummer") not in {x.get("organisasjonsnummer") for x in rows}]
     our_phones = _digits_phones(e)
     our_addr = _addr_key(e)
+    a0 = (e.get("forretningsadresse") or e.get("beliggenhetsadresse") or {}).get("adresse") or []
+    our_street = {_translit(w) for w in re.findall(r"[a-zæøåäöü]{5,}", " ".join(x for x in a0 if x).lower())} - ours
     for r in rows:
         org = r.get("organisasjonsnummer")
         if org == ctx.org or r.get("overordnetEnhet") == ctx.org or not _active(r):
@@ -1698,6 +1700,8 @@ async def _check_collision(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> Non
         theirs = _core_tokens(r.get("navn") or "")
         if not theirs or theirs == ours or not _near(ours, theirs) or _staff_body(r):
             continue
+        if our_street and our_street & theirs:
+            continue  # named after our street ('Hardangerfjordvegen 48 AS'): the building's owner, not a namesake
         shares = (our_addr and _addr_key(r) == our_addr) or bool(our_phones & _digits_phones(r))
         if not shares:
             continue

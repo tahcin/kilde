@@ -3302,3 +3302,19 @@ def test_internal_inbox_is_not_a_contact_email_but_a_person_or_role_box_is():
                                       '</footer>').encode(), "text/html"))
     em, _ph, _n = W.extract_contacts([page], "fjellbekk.no", set(), W.Scope(OURS, ["fjellbekk", "trevare"]))
     assert em == []
+
+
+def test_company_named_after_our_street_is_not_a_near_namesake():
+    """H2 Hardanger shape: 'Lyngveien 12 AS' at our address owns the building."""
+    rows = {"https://data.brreg.no/enhetsregisteret/api/enheter?navn=lyng&forretningsadresse.postnummer=9999&size=50":
+            (200, json.dumps({"_embedded": {"enheter": [{"organisasjonsnummer": OTHER, "navn": "LYNGVEIEN 12 AS",
+                                                          "forretningsadresse": {"adresse": ["Lyngveien 12B"], "postnummer": "9999"}}]}}),
+             "application/json")}
+    body = "<h1>Lyng</h1><footer>Lyng AS, Lyngveien 12B, 9999 Testby</footer>"
+    f = FakeFetcher(dict({"https://lyng.no/": (200, html(body, title="Lyng"))}, **rows))
+    ctx = ctx_for(navn="LYNG TESTVERK AS")
+    f = FakeFetcher(dict({"https://lyngtestverk.no/": (200, html(body.replace("Lyng AS", "Lyng Testverk AS"),
+                                                                  title="Lyng Testverk"))}, **{
+        k.replace("navn=lyng&", "navn=testverk&"): v for k, v in rows.items()}, **rows))
+    claims = run(f, ctx)
+    assert claims["official_website"].value == "lyngtestverk.no"
