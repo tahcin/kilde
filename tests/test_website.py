@@ -2432,7 +2432,7 @@ def test_colocated_namesake_makes_any_name_proof_ambiguous():
 
 def test_address_proof_needs_an_address_nobody_else_has():
     body = "<footer>Fjellbekk Trevare AS, Lyngveien 12 B, 9999 Testby</footer>"
-    for rows, proven in (([], True), ([_row(OTHER, "TESTBY REVISJON AS")], False),
+    for rows, proven in (([], True), ([_row(OTHER, "TESTBY REVISJON AS")], True),   # shown as 'Fjellbekk Trevare AS'
                          ([_row(OTHER, "TESTBY REVISJON AS", street="Lyngveien 14")], True)):
         W._SEARCH.clear()
         pages = {"https://fjellbekktrevare.no/": (200, html(body))}
@@ -2451,7 +2451,8 @@ def test_address_proof_needs_an_address_nobody_else_has():
 
 def test_address_proof_fails_closed_on_a_crowded_postcode(monkeypatch):
     monkeypatch.setattr(W, "ADDRESS_PAGES", 1)
-    pages = {"https://fjellbekktrevare.no/": (200, html("<footer>Fjellbekk Trevare AS, Lyngveien 12 B, 9999 Testby</footer>"))}
+    # (with the legal name and its form on our own domain, a crowded postcode would not matter)
+    pages = {"https://fjellbekktrevare.no/": (200, html("<footer>Fjellbekk Trevare, Lyngveien 12 B, 9999 Testby</footer>"))}
     pages.update(_listing("enheter", "forretningsadresse", [], pages=4))
     ctx = ctx_for()
     run(FakeFetcher(pages), ctx)
@@ -2780,3 +2781,38 @@ def test_colocated_place_word_or_owner_holding_is_no_namesake():
         ctx = ctx_for(navn="FJELLBEKK TREVARE TESTBY AS", telefon="41000001")
         run(FakeFetcher(pages), ctx)
         assert ctx.claims_for("official_website"), name
+
+
+def test_shared_address_needs_the_legal_name_with_its_form_on_a_domain_carrying_our_name():
+    cotenant = _listing("enheter", "forretningsadresse", [_row(OTHER, "TESTBY REVISJON AS")])
+    for host, footer, proven in (
+            ("https://fjellbekktrevare.no/", "Fjellbekk Trevare AS, Lyngveien 12 B, 9999 Testby", True),
+            ("https://fjellbekktrevare.no/", "Fjellbekk Trevare, Lyngveien 12 B, 9999 Testby", False),   # trade name only
+            ("https://testbysnekker.no/", "Fjellbekk Trevare AS, Lyngveien 12 B, 9999 Testby", False)):  # domain without our name
+        W._SEARCH.clear()
+        pages = {host: (200, html(f"<footer>{footer}</footer>", title="Snekker"))}
+        pages.update(cotenant)
+        ctx = ctx_for()
+        run(FakeFetcher(pages), ctx)
+        got = ctx.claims_for("official_website")
+        assert bool(got and got[0].match["method"] == "address_and_name") is proven, (host, footer)
+
+
+def test_a_page_that_fails_transiently_fails_the_step_instead_of_deciding():
+    """Funkworks shape: identical responses give identical facts; a page that times out or answers 503 must not
+    turn a site into 'ambiguous' in one run and 'proven' in the next."""
+    home = html("<h1>Fjellbekk Trevare</h1><a href='/kontakt'>Kontakt</a>")
+    pages = {"https://fjellbekktrevare.no/": (200, home), "https://fjellbekktrevare.no/kontakt": (503, "busy")}
+    ctx = ctx_for()
+    claims = run(FakeFetcher(pages), ctx)
+    assert claims["official_website"].availability == "failed"
+    assert "could not all be read" in claims["official_website"].note and ctx.module_states["website"] == "timeout"
+    # the same site with the page answering: decided, and the same in a second run
+    pages["https://fjellbekktrevare.no/kontakt"] = (200, html("<p>Fjellbekk Trevare AS · Lyngveien 12 B, 9999 Testby</p>"))
+    outs = []
+    for _ in range(2):
+        W._SEARCH.clear()
+        ctx = ctx_for()
+        run(FakeFetcher(dict(pages)), ctx)
+        outs.append([(c.field, str(c.value), c.availability) for c in ctx.claims])
+    assert outs[0] == outs[1] and ("official_website", "fjellbekktrevare.no", "available") in outs[0]

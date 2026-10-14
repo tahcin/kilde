@@ -733,6 +733,7 @@ class Verdict:
     ignore_orgs: set = field(default_factory=set)  # our own group's org numbers, never "another company" here
     cross: bool = False         # redirected to another registered domain
     path_scoped: bool = False   # the site is one section of a host that serves others (chain or portal)
+    transient: list[str] = field(default_factory=list)  # pages of this site that failed transiently (timeout, 429, 5xx)
 
     def summary(self) -> dict[str, Any]:
         return {"domain": self.domain, "source": self.source, "status": self.status, "method": self.method,
@@ -995,6 +996,18 @@ async def _fetch_page(sp: _Spend, url: str) -> tuple[Page | None, str]:
     return parse_page(snap), "ok"
 
 
+PAGE_TRANSIENT = {"unreachable", "http_429", "http_500", "http_502", "http_503", "http_504"}
+
+
+async def _site_page(sp: _Spend, v: Verdict, url: str) -> tuple[Page | None, str]:
+    """A further page of a candidate site. A transient failure (timeout, rate limit, server error) is recorded,
+    because the verdict would otherwise depend on which pages happened to load."""
+    page, st = await _fetch_page(sp, url)
+    if st in PAGE_TRANSIENT:
+        v.transient.append(f"{url} ({st})")
+    return page, st
+
+
 async def check_candidate(f: Fetcher, sp: _Spend, ctx: CompanyContext, v: Verdict, done_hosts: set[str],
                           registry_host: str | None, start_url: str | None = None) -> None:
     e = ctx.registry or {}
@@ -1077,7 +1090,7 @@ async def check_candidate(f: Fetcher, sp: _Spend, ctx: CompanyContext, v: Verdic
             # the company's own domain (sicra.no/no/kunnskap/innsikter): judge it from its front page
             root = canonical_url(home)
             if sp.can(1):
-                front, _st = await _fetch_page(sp, root)
+                front, _st = await _site_page(sp, v, root)
                 if front and same_site(front.host, home.host) and not is_parked(front):
                     v.pages = [front, home]
                     home = front
@@ -1090,7 +1103,7 @@ async def check_candidate(f: Fetcher, sp: _Spend, ctx: CompanyContext, v: Verdic
                 if re.search(r"(?i)personvern|privacy|impressum|imprint", a["href"] + " " + a.get_text())]
         priv = [u for u in priv if same_site(host_of(u), home.host)]
         if priv:
-            p, _st = await _fetch_page(sp, priv[0])
+            p, _st = await _site_page(sp, v, priv[0])
             if p and same_site(p.host, home.host):
                 v.pages.append(p)
                 judge(v, ctx.org, e, registry_host)
@@ -1111,7 +1124,7 @@ async def check_candidate(f: Fetcher, sp: _Spend, ctx: CompanyContext, v: Verdic
         v.detail = f"{v.detail} (redirected from {v.domain})"
         root = canonical_url(home)
         if home.url.rstrip("/") != root.rstrip("/") and sp.can(1):
-            front, _st = await _fetch_page(sp, root)
+            front, _st = await _site_page(sp, v, root)
             if front and same_site(front.host, home.host) and not is_parked(front):
                 v.pages = [front, home]
         return
@@ -1122,7 +1135,7 @@ async def check_candidate(f: Fetcher, sp: _Spend, ctx: CompanyContext, v: Verdic
     for link in internal_links(home)[:MAX_INTERNAL]:
         if not sp.can(1):
             break
-        p, st = await _fetch_page(sp, link)
+        p, st = await _site_page(sp, v, link)
         if p and same_site(p.host, home.host):
             v.pages.append(p)
             judge(v, ctx.org, e, registry_host)
@@ -1140,7 +1153,7 @@ async def check_candidate(f: Fetcher, sp: _Spend, ctx: CompanyContext, v: Verdic
         for u in links[:1]:
             if not sp.can(1):
                 break
-            p, _st = await _fetch_page(sp, u)
+            p, _st = await _site_page(sp, v, u)
             if p and same_site(p.host, home.host):
                 v.pages.append(p)
                 judge(v, ctx.org, e, registry_host)
@@ -1254,7 +1267,8 @@ _SEARCH: dict[str, tuple[list[dict], bool]] = {}
 
 
 class _RegistrySearchFailed(Exception):
-    """A Brreg name search could not be read after its retries: the website step is a transient failure."""
+    """A Brreg name search, or a page a verdict depends on, could not be read: the website step is a transient
+    failure that the pipeline's retry pass runs again."""
 
 
 async def _search_json(sp: "_Spend", url: str) -> dict:
@@ -1484,9 +1498,28 @@ async def _identity_conflict(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> s
         return f"another registered entity at our address shares our name: {near}"
     if v.method == "address_and_name":
         shared = await _address_shared(sp, ctx)
-        if shared:
-            return f"our registered address is shared ({shared}), so it cannot identify the site"
+        if shared and not _shared_address_still_ours(v, ctx):
+            return (f"our registered address is shared ({shared}) and the site does not show our full legal name "
+                    "on a domain carrying our name, so the address cannot identify it")
     return None
+
+
+def _shared_address_still_ours(v: Verdict, ctx: CompanyContext) -> bool:
+    """An address that other registered entities share still identifies the site when none of them shares a
+    distinctive word of our name (checked before this, at the address), the site shows our legal name with its
+    legal form as visible words ('Sicra AS', 'Klipra Barnehage SA'), and the site's domain carries our name."""
+    e = ctx.registry or {}
+    name = e.get("navn") or ""
+    form = ((e.get("organisasjonsform") or {}).get("kode") or "").upper()
+    if not v.pages or not _domain_has_name(v.pages[0].host, e):
+        return False
+    if form in LEGAL_UNIQUE_FORMS:
+        return bool(_legal_span(v.pages, name, form))
+    words = name_words(name)
+    full = re.findall(r"[0-9a-zæøåäöüé]+", name.lower().replace("&", " og "))
+    if len(full) <= len(words):
+        return False  # no legal-form word in the registered name to show
+    return any(_visible(_full_name_rx(name), p.text) for p in v.pages)
 
 
 async def _check_collision(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> None:
@@ -3443,14 +3476,14 @@ async def prepare_scope(sp: _Spend, ctx: CompanyContext, v: Verdict) -> Scope:
         for link in internal_links(home):
             if INTERNAL_PRIORITY[0].search(link) or INTERNAL_PRIORITY[1].search(link):
                 if sp.can(1) and _page_key(link) not in {_page_key(p.url) for p in v.pages}:
-                    p, _st = await _fetch_page(sp, link)
+                    p, _st = await _site_page(sp, v, link)
                     if p and same_site(p.host, home.host):
                         v.pages.append(p)
                 break
     if not (v.cross or v.path_scoped):
         priv = next((u for u in internal_links(home) if re.search(r"(?i)personvern|privacy", u)), None)
         if priv and sp.can(1) and _page_key(priv) not in {_page_key(p.url) for p in v.pages}:
-            p, _st = await _fetch_page(sp, priv)
+            p, _st = await _site_page(sp, v, priv)
             if p and same_site(p.host, home.host):
                 v.pages.append(p)  # read for operator and controller names; never a contact source
     words = name_words((ctx.registry or {}).get("navn") or "")
@@ -4567,11 +4600,17 @@ async def fetch_website(f: Fetcher, ctx: CompanyContext) -> None:
                 v.status = "duplicate"
                 continue
             await check_candidate(f, sp, ctx, v, done, registry_host, start)
+            if v.transient and not (v.status == "proven" and v.method == "orgnr_on_page"):
+                # a page of this site failed transiently: its verdict could differ on the next run, so the step
+                # fails (the pipeline's retry pass reads the site again) instead of deciding on part of the site
+                raise _RegistrySearchFailed(f"pages of {v.domain} could not all be read: {v.transient[0]}")
             if v.status == "proven":
                 proven = v
                 break
         if proven:
             scope = await prepare_scope(sp, ctx, proven)
+            if proven.transient and proven.method != "orgnr_on_page":
+                raise _RegistrySearchFailed(f"pages of {proven.domain} could not all be read: {proven.transient[0]}")
             ctx.facts["website_exclusive"] = bool(scope.exclusive and proven.method == "orgnr_on_page")
             ctx.facts["website_exclusive_reason"] = scope.reasons() or "exclusive"
             emit_site(ctx, proven, scope)
