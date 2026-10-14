@@ -1317,6 +1317,11 @@ def test_company_careers_page_inviting_open_applications_is_kept():
     ctx = ctx_for(hjemmeside="fjellbekk.no")
     run(_site({"https://fjellbekk.no/ledige-stillinger": (200, jobs)}, body=body), ctx)
     assert [c.value for c in ctx.claims if c.field == "hiring_signal"] == ["https://fjellbekk.no/ledige-stillinger"]
+    c = next(c for c in ctx.claims if c.field == "hiring_signal")
+    assert "no openings listed on" in c.note and "no openings" in c.match["detail"]
+    from kilde.synthesis import summarise
+    ctx.add_claim("legal_name", "identity", "FJELLBEKK TREVARE AS", ctx.evidence[0])
+    assert "listed no openings" in summarise(ctx, [])["text"]
 
 
 def test_open_data_seed_is_a_candidate_with_no_special_trust(monkeypatch):

@@ -290,7 +290,11 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
 
     careers = ctx.claims_for("hiring_signal")
     if careers and not jobs:
-        say(f"Its verified website has a careers page ({careers[0].value}).", careers[0])
+        if "no openings" in (careers[0].note or "") or "no openings" in str((careers[0].match or {}).get("detail", "")):
+            say(f"Its verified website has a careers page ({careers[0].value}) that listed no openings when it was read.",
+                careers[0])
+        else:
+            say(f"Its verified website has a careers page ({careers[0].value}).", careers[0])
     news = sorted(ctx.claims_for("dated_news"), key=lambda c: c.as_of or "", reverse=True)
     if news:
         title = str(news[0].value).rsplit(" (", 1)[0]

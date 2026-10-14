@@ -5146,6 +5146,15 @@ async def collect_hiring(sp: "_Spend", ctx: CompanyContext, pages: list[Page], d
         return
     url = page.url.split("#")[0]
     head = page.soup.title.get_text(" ", strip=True) if page.soup.title else url
+    none_now = NO_OPENINGS.search(page.text[:12000])
+    if none_now:
+        day = (page.snap.retrieved_at or "")[:10]
+        ctx.add_claim("hiring_signal", "hiring", url, [_ev(ctx, page, _clean(head, 200) or url),
+                                                      _ev(ctx, page, none_now.group(0))],
+                      match=dict(site_match, detail=f"careers page; no openings listed on {day}"),
+                      note=f"Careers page; no openings listed on {day} ('{none_now.group(0)}')")
+        ctx.facts["website_careers_no_openings"] = day
+        return
     ctx.add_claim("hiring_signal", "hiring", url, _ev(ctx, page, _clean(head, 200) or url), match=site_match)
     postings: dict[str, tuple[str, str]] = {}
     ours = _squash((ctx.registry or {}).get("navn") or "")
@@ -5171,6 +5180,11 @@ async def collect_hiring(sp: "_Spend", ctx: CompanyContext, pages: list[Page], d
         title, span = postings[purl]
         ctx.add_claim("hiring_signal", "hiring", purl, _ev(ctx, page, span),
                       match={"method": "posting_on_verified_careers_page", "detail": title[:200]})
+
+
+NO_OPENINGS = re.compile(r"(?i)(ingen ledige stillinger|ingen ledige jobber|ingen utlyste stillinger|"
+                         r"har (for tiden|for øyeblikket|per i dag|i dag) ingen ledige|for tiden ingen ledige|"
+                         r"no (current )?(open positions|vacancies|openings)|there are (currently )?no (open )?(positions|vacancies))")
 
 
 # ---------------------------------------------------------------- entry point
