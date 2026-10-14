@@ -27,7 +27,7 @@ Each argument is `tag=path` (`.jsonl` or `.jsonl.gz`); the first file holding an
 | `llm/<org>.txt.gz` | the same facts as text lines `[org:claim] label: value`, read only by the worker |
 | `meta.json` | totals for the home page |
 
-The script copies values; it never computes or converts a figure. Claims Kilde withheld keep only their state and reason. It refuses an envelope that carries a birth-date field (none do). Output is deterministic (gzip with a fixed timestamp).
+The script copies values; it never computes or converts a figure. Claims Kilde withheld keep only their state and reason. It refuses an envelope that carries a birth-date field (none do), and refuses a run where one source failed for more than 10% of companies (a DNS or network outage during the run), unless `--allow-failed` is given. Output is deterministic (gzip with a fixed timestamp).
 
 ## 2. Build and run
 

@@ -297,6 +297,8 @@ def index_row(env: dict, tag: str) -> dict:
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("sources", nargs="+", help="tag=path/to/envelopes.jsonl[.gz] (first one wins on duplicates)")
+    ap.add_argument("--allow-failed", action="store_true",
+                    help="export even when a source failed for many companies (normally a sign the run was broken)")
     ap.add_argument("--out", default=str(Path(__file__).resolve().parent.parent / "public" / "data"))
     args = ap.parse_args(argv)
     out = Path(args.out)
@@ -309,6 +311,7 @@ def main(argv=None) -> int:
     rows, fam_companies, fam_facts = [], Counter(), Counter()
     facts = withheld = dups = 0
     commits: Counter = Counter()
+    failed: Counter = Counter()
     biggest = 0
     for spec in args.sources:
         tag, _, path = spec.rpartition("=") if "=" in spec else ("", "", spec)
@@ -337,9 +340,19 @@ def main(argv=None) -> int:
                         fam_facts[c["field"]] += 1
                 elif c.get("availability") in ("ambiguous", "failed", "blocked"):
                     withheld += 1
+            for f in {c.get("field") for c in env.get("claims") or [] if c.get("availability") == "failed"}:
+                failed[f] += 1
             for f in FAMILIES:
                 if any(c.get("field") == f and c.get("availability") == "available" for c in env.get("claims") or []):
                     fam_companies[f] += 1
+    # A source that failed for a large share of companies means the run itself was broken (DNS, an outage):
+    # publishing it would show "not checked" everywhere. Refuse unless told otherwise.
+    broken = {f: n for f, n in failed.items() if n > max(5, 0.1 * len(seen))}
+    if broken:
+        print(f"source checks failed for many companies: {broken}", file=sys.stderr)
+        if not args.allow_failed:
+            print("refusing to export; rerun Kilde or pass --allow-failed", file=sys.stderr)
+            return 3
     rows.sort(key=lambda r: r["n"])
     (out / "index.json").write_text(json.dumps(rows, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
     meta = {"companies": len(rows), "facts": facts, "withheld": withheld,
