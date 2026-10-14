@@ -2767,3 +2767,16 @@ def test_workplace_proof_follows_the_address_and_visible_name_rules():
     body = html("<main><p>bellasolsikke@gmail.com · Torget 3, 9998 Testby</p></main>", title="Velkommen")
     run(FakeFetcher({"https://bellasolsikke.no/": (200, body)}), ctx)
     assert not ctx.claims_for("official_website")
+
+
+def test_colocated_place_word_or_owner_holding_is_no_namesake():
+    body = "<h1>Fjellbekk Trevare</h1><footer>Fjellbekk Trevare Testby AS · Tlf 41 00 00 01</footer>"
+    for name in ("TESTBY SJAKKLUBB", "FJELLBEKK HOLDING AS"):
+        W._SEARCH.clear()
+        pages = {"https://fjellbekktrevaretestby.no/": (200, html(body))}
+        for w in ("testby", "fjellbekk", "trevare"):
+            pages[f"https://data.brreg.no/enhetsregisteret/api/enheter?navn={w}&forretningsadresse.postnummer=9999&size=50"] = (
+                200, json.dumps({"_embedded": {"enheter": [_row(OTHER, name)]}}), "application/json")
+        ctx = ctx_for(navn="FJELLBEKK TREVARE TESTBY AS", telefon="41000001")
+        run(FakeFetcher(pages), ctx)
+        assert ctx.claims_for("official_website"), name

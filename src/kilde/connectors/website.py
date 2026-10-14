@@ -809,13 +809,6 @@ def judge(v: Verdict, org: str, e: dict, registry_host: str | None) -> None:
             v.detail += f"; the site also names '{conflict[:80]}'"
         v.proof = [(name_page, name_span, name_core)]
         return
-    # (b2) the registry email's own domain (not free mail or an invoicing service), whose domain carries our
-    # distinctive name, with the name shown on it: the company declared this mailbox domain itself
-    if v.source == "email" and _declared_host(e, final) and _domain_has_name(final, e):
-        v.status, v.method = "proven", "registry_email_domain_and_name"
-        v.detail = f"the registry email address is on {final}, whose domain carries the name; legal name shown on the site"
-        v.proof = [(name_page, name_span, name_core)]
-        return
     # (c) phone and name; address and name
     wanted = _digits_phones(e)
     for p in pages:
@@ -846,6 +839,13 @@ def judge(v: Verdict, org: str, e: dict, registry_host: str | None) -> None:
             v.detail = "registered street address, postcode and legal name shown on the site"
             v.proof = [(p, s, core), (name_page, name_span, name_core)]
             return
+    # (e) the registry email's own domain (not free mail or an invoicing service), whose domain carries our
+    # distinctive name, with the name shown on it: the company declared this mailbox domain itself
+    if v.source == "email" and _declared_host(e, final) and _domain_has_name(final, e):
+        v.status, v.method = "proven", "registry_email_domain_and_name"
+        v.detail = f"the registry email address is on {final}, whose domain carries the name; legal name shown on the site"
+        v.proof = [(name_page, name_span, name_core)]
+        return
     v.status = "name_only"
     v.detail = "legal name shown, but no org number, registry phone or address"
 
@@ -1387,8 +1387,11 @@ async def _colocated_namesake(sp: "_Spend", ctx: CompanyContext, entity: dict | 
     if not ours:
         return None
     pcs = sorted({pc for _k, pc in ours})
+    places = _places(e)
     for w in _distinct_words(e.get("navn") or ""):
         t = _translit(w)
+        if t in places:
+            continue  # a place word ('Oslo') is shared by half the town
         for pc in pcs:
             for path, field_ in (("enheter", "forretningsadresse"), ("enheter", "postadresse"),
                                  ("underenheter", "beliggenhetsadresse")):
@@ -1396,8 +1399,10 @@ async def _colocated_namesake(sp: "_Spend", ctx: CompanyContext, entity: dict | 
                     rows, _c = await brreg_name_search(sp, path, q, extra=f"&{field_}.postnummer={pc}")
                     for r in rows:
                         if r.get("organisasjonsnummer") == ctx.org or r.get("overordnetEnhet") == ctx.org \
-                                or r.get("organisasjonsnummer") in skip or _staff_body(r):
-                            continue  # our own units, and our staff's union or sports club, are no namesake
+                                or r.get("organisasjonsnummer") in skip or _staff_body(r) \
+                                or any(_translit(x) in GROUP_WORDS + ("eiendom", "eiendommer", "eigedom")
+                                       for x in name_words(r.get("navn") or "")):
+                            continue  # our own units, our staff's club, and an owner's holding or property company
                         if t in {_translit(x) for x in name_words(r.get("navn") or "")} and _entity_keys(r) & ours:
                             return f"{r.get('navn')} ({r.get('organisasjonsnummer')})"
     return None
