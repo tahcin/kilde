@@ -2916,3 +2916,10 @@ def test_bracketed_short_form_is_an_optional_alias():
     claims = run(f, ctx_for(navn="STIFTELSEN FJELLBEKK TREVARE SENTER (FTS)", hjemmeside="fts.no",
                             organisasjonsform={"kode": "STI"}))
     assert claims["official_website"].availability == "available"
+
+
+def test_one_word_name_in_lower_case_with_legal_form():
+    assert W.name_check("kontakt: fjellbekkverk as, lyngveien 12b", ["fjellbekkverk"])[0]
+    assert not W.name_check("kontakt: fjellbekkverk lyngveien 12b", ["fjellbekkverk"])[0]  # run-together token
+    assert not W.name_check("post@fjellbekkverk.no as", ["fjellbekkverk"])[0]
+    assert not W.name_check("se fjellbekktrevare as", ["fjellbekk", "trevare"])[0]  # several words run together

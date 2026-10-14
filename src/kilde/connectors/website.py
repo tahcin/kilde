@@ -399,7 +399,7 @@ def name_check(text: str, words: list[str], conflict_words: list[str] | None = N
     rx = name_regex(words)
     if not rx:
         return None, None
-    m = next((x for x in rx.finditer(text) if not _in_hostname(text, x.start(), x.end())), None)
+    m = next((x for x in rx.finditer(text) if not _in_hostname(text, x.start(), x.end(), len(words) == 1)), None)
     if not m:
         return None, None
     span = _window(text, m.start(), m.end(), 40)
@@ -424,7 +424,10 @@ def name_check(text: str, words: list[str], conflict_words: list[str] | None = N
 HOSTNAME_TAIL = re.compile(r"\.(?:no|com|net|org|se|dk|io|eu|biz|info|nu)\b|\.[a-z0-9\-]+\.(?:no|com)\b", re.I)
 
 
-def _in_hostname(text: str, a: int, b: int) -> bool:
+LEGAL_AFTER = re.compile(r"[ \u00a0]+(?:as|asa|a/s|ans|da)(?![0-9a-zæøå/])", re.I)
+
+
+def _in_hostname(text: str, a: int, b: int, one_word: bool = False) -> bool:
     """True when a name match is not the name written as words in visible text: part of a domain name, email
     address, URL, social handle or hashtag ('totentre.no', 'alrahmakulturhus@gmail.com', '@fishlab'), or a
     run-together lower-case token of several words ('alrahmakulturhus' as a bare word)."""
@@ -443,6 +446,8 @@ def _in_hostname(text: str, a: int, b: int) -> bool:
     if "@" in token or "/" in token or "_" in token or re.search(r"\.[A-Za-z]{2,}", token.rstrip(".,;:!?)»\"'")):
         return True
     m = text[a:b]
+    if one_word and LEGAL_AFTER.match(text, b):
+        return False  # a one-word name in lower case followed by its legal form ('audioverk as') is the name
     return len(m) >= 10 and m == m.lower() and not re.search(r"[\s\-.&]", m)
 
 
