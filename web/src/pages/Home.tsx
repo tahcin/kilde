@@ -85,7 +85,7 @@ function Hero() {
   return (
     <section className="relative isolate overflow-hidden" aria-labelledby="hero-title">
       <div className="ruled absolute inset-0 -z-10" aria-hidden />
-      <div className="mx-auto grid max-w-6xl gap-12 px-4 pb-10 pt-12 sm:px-6 sm:pt-20 lg:grid-cols-[1.15fr_1fr] lg:items-center lg:gap-14 lg:pb-14">
+      <div className="wrap grid gap-12 pb-10 pt-12 sm:pt-20 lg:grid-cols-[1.15fr_1fr] lg:items-center lg:gap-14 lg:pb-14">
         <div>
           <motion.h1 id="hero-title" {...rise(0.05)} className="display max-w-[15ch] text-[2.6rem] text-ink sm:text-[3.6rem] lg:text-[4.1rem]">
             Norwegian companies, with the source of every fact.
@@ -120,16 +120,16 @@ function Numbers() {
     ["$0", "to build a profile: open public sources only, and no language model anywhere in the agent."],
   ];
   return (
-    <section aria-label="Kilde in numbers" className="border-b border-rule bg-card/60">
-      <div className="mx-auto grid max-w-6xl grid-cols-1 gap-px bg-rule/70 sm:grid-cols-2 lg:grid-cols-4">
-        {items.map(([n, t]) => (
-          <div key={t} className="bg-paper px-5 py-7 sm:px-6">
+    <section aria-label="Kilde in numbers" className="-mb-16 border-t border-rule bg-card/60">
+      <div className="wrap grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
+        {items.map(([n, t], i) => (
+          <div key={t} className={cn("border-rule/80 py-7", i > 0 && "border-t sm:border-t-0", i % 2 === 1 && "sm:border-l sm:pl-6", i === 2 && "sm:border-t sm:pt-7 lg:border-t-0", i === 3 && "sm:border-t lg:border-t-0", i > 0 && "lg:border-l lg:pl-6", "lg:pr-6")}>
             <p className="text-[2.3rem] font-semibold leading-none tracking-[-0.04em] text-ink">{n}</p>
             <p className="mt-3 text-[13.5px] leading-snug text-muted">{t}</p>
           </div>
         ))}
       </div>
-      <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6">
+      <div className="wrap py-6">
         <Link to="/how" className="group inline-flex items-center gap-1.5 text-[14.5px] font-medium text-brand">
           How Kilde finds, proves and sources every fact<ArrowRight className="size-4 transition group-hover:translate-x-0.5" aria-hidden />
         </Link>
@@ -153,7 +153,7 @@ function AskHome() {
   const name = (o: string) => displayName(rows?.find((r) => r.o === o)?.n ?? o);
   return (
     <section className="bg-night text-white" aria-labelledby="ask-title">
-      <div className="mx-auto grid max-w-6xl gap-10 px-4 py-20 sm:px-6 lg:grid-cols-[1fr_1.1fr] lg:items-start">
+      <div className="wrap grid gap-10 py-20 lg:grid-cols-[1fr_1.1fr] lg:items-start">
         <div>
           <h2 id="ask-title" className="display max-w-[16ch] text-[2rem] sm:text-[2.6rem]">Ask questions. Get answers with sources.</h2>
           <p className="mt-4 max-w-md text-[16px] leading-relaxed text-white/75">
@@ -221,14 +221,14 @@ function Explore() {
     return xs;
   }, [rows, filter, sort]);
   return (
-    <section className="mx-auto max-w-6xl px-4 pb-20 pt-2 sm:px-6" aria-labelledby="explore-title">
+    <section className="wrap pb-20 pt-2" aria-labelledby="explore-title">
       <h2 id="explore-title" className="display text-[2rem] text-ink sm:text-[2.6rem]">Browse every company</h2>
       <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap gap-1.5" role="group" aria-label="Show only">
           {FILTERS.map(([k, t]) => (
             <button key={k} onClick={() => { setFilter(k); setShown(30); }} aria-pressed={filter === k}
-              className={cn("rounded-full px-3.5 py-1.5 text-[13.5px] font-medium transition", filter === k ? "bg-ink text-white" : "bg-card text-ink-2 ring-1 ring-rule hover:ring-brand/40")}>
-              {t}{rows && k !== "all" && <span className={cn("ml-1.5 tnum", filter === k ? "text-white/60" : "text-muted")}>{rows.filter((r) => hasFamily(r, k)).length}</span>}
+              className={cn("rounded-full px-3.5 py-1.5 text-[13.5px] font-medium transition", filter === k ? "bg-ink text-paper" : "bg-card text-ink-2 ring-1 ring-rule hover:ring-brand/40")}>
+              {t}{rows && k !== "all" && <span className={cn("ml-1.5 tnum", filter === k ? "text-paper/60" : "text-muted")}>{rows.filter((r) => hasFamily(r, k)).length}</span>}
             </button>
           ))}
         </div>

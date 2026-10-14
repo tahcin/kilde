@@ -7,24 +7,16 @@ import { useIndex } from "../lib/data";
 import { cn, displayName } from "../lib/format";
 import { SearchPalette } from "./Search";
 
-/** The mark: a page of text with one line marked in cloudberry, the quoted words a fact rests on. */
+/** Kilde's mark, the same as in its report: an accent square with a lighter inset corner. */
 export function Mark({ className }: { className?: string }) {
-  return (
-    <svg viewBox="0 0 24 24" className={className} aria-hidden>
-      <rect width="24" height="24" rx="6.5" fill="var(--color-brand)" />
-      <rect x="5.5" y="6.5" width="13" height="2" rx="1" fill="#fff" opacity="0.5" />
-      <rect x="4.6" y="10.6" width="11.2" height="3.4" rx="1" fill="var(--color-pop)" />
-      <rect x="5.5" y="11.3" width="9.5" height="2" rx="1" fill="#fff" />
-      <rect x="5.5" y="16" width="10" height="2" rx="1" fill="#fff" opacity="0.5" />
-    </svg>
-  );
+  return <span className={cn("kilde-mark", className)} aria-hidden />;
 }
 
 export function Wordmark({ className }: { className?: string }) {
   return (
-    <span className={cn("inline-flex items-center gap-2", className)}>
-      <Mark className="size-[26px]" />
-      <span className="text-[21px] font-[680] tracking-[-0.04em] text-ink">Kilde</span>
+    <span className={cn("inline-flex items-center gap-[9px]", className)}>
+      <Mark />
+      <span className="text-[20px] font-bold tracking-[-0.02em] text-ink">Kilde</span>
     </span>
   );
 }
@@ -51,7 +43,7 @@ function CompareTray() {
               ))}
             </div>
             {picked.length >= 2 ? (
-              <Link to={`/compare?o=${picked.join(",")}`} className="flex h-9 shrink-0 items-center gap-1.5 rounded-xl bg-brand px-3.5 text-[13.5px] font-medium text-white transition hover:bg-brand-2">
+              <Link to={`/compare?o=${picked.join(",")}`} className="flex h-9 shrink-0 items-center gap-1.5 rounded-xl bg-brand px-3.5 text-[13.5px] font-medium text-on transition hover:bg-brand-2">
                 Compare<ArrowRight className="size-3.5" aria-hidden />
               </Link>
             ) : <span className="shrink-0 px-1 text-[12.5px] text-muted">Pick one more</span>}
@@ -85,14 +77,15 @@ export function Shell() {
   return (
     <div className="flex min-h-dvh flex-col bg-paper text-ink">
       <a href="#main" className="sr-only focus:not-sr-only focus:fixed focus:left-3 focus:top-3 focus:z-50 focus:rounded-lg focus:bg-card focus:px-3 focus:py-2">Skip to content</a>
-      <header className="sticky top-0 z-40 px-3 pt-2 sm:px-5 sm:pt-3">
-        <div className={cn("mx-auto flex h-14 items-center gap-2 rounded-2xl border pl-3.5 pr-2 transition-[max-width,background-color,border-color,box-shadow] duration-500 ease-[var(--ease-out-expo)] sm:pl-4",
-          scrolled ? "glass max-w-5xl border-rule/70 shadow-[var(--shadow-soft)]" : "max-w-7xl border-transparent")}>
+      <header className="sticky top-0 z-40 pt-2 sm:pt-3">
+        <div className="wrap">
+        <div className={cn("-mx-2.5 flex h-14 items-center gap-2 rounded-2xl border px-2.5 transition-[background-color,border-color,box-shadow] duration-500 ease-[var(--ease-out-expo)]",
+          scrolled ? "glass border-rule/70 shadow-[var(--shadow-soft)]" : "border-transparent")}>
           <Link to="/" aria-label="Kilde, home" className="rounded-lg"><Wordmark /></Link>
           <nav className="ml-4 hidden items-center gap-0.5 md:flex" aria-label="Main">
             <NavLink to="/" end className={link}>Companies</NavLink>
             <NavLink to={picked.length ? `/compare?o=${picked.join(",")}` : "/compare"} className={link}>
-              Compare{picked.length > 0 && <span className="ml-1.5 inline-grid size-5 place-items-center rounded-full bg-brand text-[11px] text-white">{picked.length}</span>}
+              Compare{picked.length > 0 && <span className="ml-1.5 inline-grid size-5 place-items-center rounded-full bg-brand text-[11px] text-on">{picked.length}</span>}
             </NavLink>
             <NavLink to="/how" className={link}>How it works</NavLink>
           </nav>
@@ -105,9 +98,10 @@ export function Shell() {
             <NavLink to={picked.length ? `/compare?o=${picked.join(",")}` : "/compare"} aria-label="Compare"
               className="relative grid size-10 place-items-center rounded-xl border border-rule/90 bg-card/80 text-ink-2 md:hidden">
               <Columns3 className="size-4" aria-hidden />
-              {picked.length > 0 && <span className="absolute -right-1 -top-1 grid size-4.5 place-items-center rounded-full bg-brand text-[10px] text-white">{picked.length}</span>}
+              {picked.length > 0 && <span className="absolute -right-1 -top-1 grid size-4.5 place-items-center rounded-full bg-brand text-[10px] text-on">{picked.length}</span>}
             </NavLink>
           </div>
+        </div>
         </div>
       </header>
       <main id="main" className="flex-1"><Outlet /></main>
@@ -122,8 +116,8 @@ export function Shell() {
 function Footer() {
   const a = "underline decoration-current/30 underline-offset-[3px] transition hover:text-ink hover:decoration-current";
   return (
-    <footer className="mt-24 border-t border-rule bg-paper-2/50">
-      <div className="mx-auto grid max-w-6xl gap-10 px-4 py-12 text-[13.5px] leading-relaxed text-muted sm:px-6 md:grid-cols-[1.1fr_1fr_1fr]">
+    <footer className="mt-16 border-t border-rule bg-paper-2/50">
+      <div className="wrap grid gap-10 py-12 text-[13.5px] leading-relaxed text-muted md:grid-cols-[1.1fr_1fr_1fr]">
         <div>
           <Wordmark />
           <p className="mt-3 max-w-xs">Kilde means source. A company research agent built by team Solus for the{" "}

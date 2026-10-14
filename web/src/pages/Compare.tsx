@@ -93,7 +93,7 @@ export default function Compare() {
   const cols = orgs.length;
 
   return (
-    <div className="mx-auto max-w-6xl px-4 pb-10 pt-8 sm:px-6 sm:pt-12">
+    <div className="wrap pb-10 pt-8 sm:pt-12">
       <h1 className="display text-[2.3rem] text-ink sm:text-[3.2rem]">Compare companies</h1>
       <p className="mt-3 max-w-2xl text-[16px] text-ink-2">Up to three side by side. Every value opens its source; figures are each company's latest filed accounts, with the year shown.</p>
 
@@ -119,7 +119,7 @@ export default function Compare() {
       )}
 
       {cos && cos.length > 0 && (
-        <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_23rem] lg:items-start">
+        <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_23rem] lg:items-start xl:grid-cols-[minmax(0,1fr)_26rem]">
           <div className="surface min-w-0 overflow-hidden rounded-[1.3rem]">
             <div className="grid border-b border-rule bg-paper/60 px-2 py-3 lg:grid-cols-[9.5rem_1fr]" >
               <span className="hidden px-3 text-[12.5px] text-muted lg:block">Company</span>

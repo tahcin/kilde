@@ -170,7 +170,7 @@ export function AskPanel({ companies, suggestions, title, className, intro }: {
             disabled={!orgs.length}
             className="max-h-32 min-h-[2.25rem] flex-1 resize-none bg-transparent py-1.5 text-[15px] leading-snug text-ink outline-none [field-sizing:content] placeholder:text-muted disabled:cursor-not-allowed" />
           <button type="submit" disabled={busy || !text.trim()} aria-label="Ask"
-            className={cn("grid size-9 shrink-0 place-items-center rounded-xl transition", text.trim() && !busy ? "bg-brand text-white hover:bg-brand-2" : "bg-paper-2 text-muted/70")}>
+            className={cn("grid size-9 shrink-0 place-items-center rounded-xl transition", text.trim() && !busy ? "bg-brand text-on hover:bg-brand-2" : "bg-paper-2 text-muted/70")}>
             <ArrowUp className="size-4" strokeWidth={2.4} aria-hidden />
           </button>
         </div>

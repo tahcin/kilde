@@ -190,7 +190,7 @@ function Summary({ co }: { co: Company }) {
   return (
     <section className="surface rounded-[1.3rem] px-5 py-5 sm:px-6" aria-labelledby="sum-h">
       <h2 id="sum-h" className="text-[19px] font-semibold tracking-[-0.02em] text-ink">In short</h2>
-      <div className="mt-3 space-y-2.5 text-[15.5px] leading-[1.7] text-ink">
+      <div className="measure mt-3 space-y-2.5 text-[15.5px] leading-[1.7] text-ink">
         {co.sum.map(([text, ids], i) => {
           const claims = ids.map((id) => co.byId[id]).filter(Boolean);
           return (
@@ -208,7 +208,7 @@ function Summary({ co }: { co: Company }) {
         })}
       </div>
       {co.unk.length > 0 && (
-        <div className="mt-5 rounded-xl bg-paper px-4 py-3">
+        <div className="measure mt-5 rounded-xl bg-paper px-4 py-3">
           <h3 className="text-[13.5px] font-semibold text-ink">What Kilde could not find</h3>
           <ul className="mt-1.5 space-y-1.5 text-[13.5px] leading-snug text-ink-2">
             {co.unk.map((u, i) => <li key={i} className="relative pl-3.5 before:absolute before:left-0 before:top-[0.55em] before:size-1.5 before:rounded-full before:bg-none/50">{u}</li>)}
@@ -288,21 +288,21 @@ export default function CompanyPage() {
   }, [co]);
 
   if (error) return (
-    <div className="mx-auto max-w-2xl px-4 py-24 text-center">
+    <div className="wrap py-24 text-center">
       <h1 className="display text-[2.2rem]">No profile for {orgFmt(org)}</h1>
       <p className="mt-3 text-ink-2">Kilde has published profiles for the companies in its sample runs only. Try searching by name.</p>
-      <Link to="/" className="mt-6 inline-flex rounded-full bg-brand px-5 py-2.5 text-white">Search companies</Link>
+      <Link to="/" className="mt-6 inline-flex rounded-full bg-brand px-5 py-2.5 text-on">Search companies</Link>
     </div>
   );
-  if (!co) return <div className="mx-auto max-w-6xl px-4 py-16 sm:px-6"><div className="h-14 w-2/3 animate-pulse rounded-xl bg-paper-2" /><div className="mt-6 h-40 animate-pulse rounded-2xl bg-paper-2/60" /></div>;
+  if (!co) return <div className="wrap py-16"><div className="h-14 w-2/3 animate-pulse rounded-xl bg-paper-2" /><div className="mt-6 h-40 animate-pulse rounded-2xl bg-paper-2/60" /></div>;
 
   const toc: [string, string][] = [["summary", "In short"], ["people", "Who runs it"], ["accounts", "Accounts"], ...groups.filter((g) => g.id !== "people").map((g) => [g.id, g.title] as [string, string]), ["about", "About this profile"]];
   const people = groups.find((g) => g.id === "people");
   return (
-    <div className="mx-auto max-w-6xl px-4 pb-10 pt-8 sm:px-6 sm:pt-12">
+    <div className="wrap pb-10 pt-8 sm:pt-12">
       <Header co={co} />
       <div className="mt-8"><KeyFigures co={co} /></div>
-      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_23rem] lg:gap-8">
+      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_23rem] lg:gap-8 xl:grid-cols-[minmax(0,1fr)_26rem]">
         <div id="summary" className="min-w-0 scroll-mt-24 lg:col-start-1"><Summary co={co} /></div>
         <aside className="min-w-0 lg:col-start-2 lg:row-span-2 lg:row-start-1">
           <div className="space-y-6 lg:sticky lg:top-24">

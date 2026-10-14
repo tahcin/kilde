@@ -20,7 +20,7 @@ function Block({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="border-t border-rule py-10 md:grid md:grid-cols-[14rem_1fr] md:gap-10">
       <h2 className="text-[19px] font-semibold tracking-[-0.02em] text-ink">{title}</h2>
-      <div className="mt-3 space-y-3 text-[15.5px] leading-relaxed text-ink-2 md:mt-0">{children}</div>
+      <div className="mt-3 min-w-0 space-y-3 text-[15.5px] leading-relaxed text-ink-2 md:mt-0 [&>p]:max-w-[75ch]">{children}</div>
     </section>
   );
 }
@@ -29,14 +29,14 @@ export default function How() {
   useTitle("How it works");
   const { data: meta } = useMeta();
   return (
-    <div className="mx-auto max-w-5xl px-4 pb-10 pt-10 sm:px-6 sm:pt-14">
+    <div className="wrap pb-10 pt-10 sm:pt-14">
       <h1 className="display max-w-[18ch] text-[2.4rem] text-ink sm:text-[3.4rem]">How Kilde knows what it tells you</h1>
       <p className="mt-5 max-w-2xl text-[17px] leading-relaxed text-ink-2">
         Kilde is a research agent. Give it a Norwegian organisation number and it builds a profile from public sources, where every fact carries the address it came from,
         when it was read, a fingerprint of the saved page, the exact words, and how it was tied to that company. It uses no language model and costs nothing to run.
       </p>
 
-      <ol className="mt-12 grid gap-4 sm:grid-cols-2">
+      <ol className="mt-12 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         {STEPS.map((s, i) => (
           <li key={s.title} className="surface rounded-[1.3rem] p-5">
             <div className="flex items-center justify-between"><s.icon className="size-5 text-brand" aria-hidden /><span className="tnum text-[12px] font-semibold text-muted">{i + 1}</span></div>
