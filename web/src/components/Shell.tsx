@@ -6,6 +6,7 @@ import { useCompare } from "../lib/compare";
 import { useIndex } from "../lib/data";
 import { cn, displayName } from "../lib/format";
 import { SearchPalette } from "./Search";
+import { AskLauncher } from "./AskLauncher";
 
 /** Kilde's mark, the same as in its report: an accent square with a lighter inset corner. */
 export function Mark({ className }: { className?: string }) {
@@ -59,6 +60,7 @@ export function Shell() {
   const [searching, setSearching] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   const { picked } = useCompare();
+  const { pathname } = useLocation();
   useEffect(() => {
     const onScroll = () => setScrolled(scrollY > 16);
     onScroll();
@@ -83,11 +85,14 @@ export function Shell() {
           scrolled ? "glass border-rule/70 shadow-[var(--shadow-soft)]" : "border-transparent")}>
           <Link to="/" aria-label="Kilde, home" className="rounded-lg"><Wordmark /></Link>
           <nav className="ml-4 hidden items-center gap-0.5 md:flex" aria-label="Main">
-            <NavLink to="/" end className={link}>Companies</NavLink>
-            <NavLink to={picked.length ? `/compare?o=${picked.join(",")}` : "/compare"} className={link}>
-              Compare{picked.length > 0 && <span className="ml-1.5 inline-grid size-5 place-items-center rounded-full bg-brand text-[11px] text-on">{picked.length}</span>}
-            </NavLink>
-            <NavLink to="/how" className={link}>How it works</NavLink>
+            {/* Active by section: Companies covers the list and every company page. */}
+            {[["/", "Companies", pathname === "/" || pathname.startsWith("/c/")],
+              [picked.length ? `/compare?o=${picked.join(",")}` : "/compare", "Compare", pathname === "/compare"],
+              ["/how", "How it works", pathname === "/how"]].map(([to, text, on]) => (
+              <Link key={text as string} to={to as string} aria-current={on ? "page" : undefined} className={link({ isActive: !!on })}>
+                {text as string}{text === "Compare" && picked.length > 0 && <span className="ml-1.5 inline-grid size-5 place-items-center rounded-full bg-brand text-[11px] text-on">{picked.length}</span>}
+              </Link>
+            ))}
           </nav>
           <div className="ml-auto flex items-center gap-1.5">
             <button onClick={() => setSearching(true)} aria-label="Find a company"
@@ -107,6 +112,7 @@ export function Shell() {
       <main id="main" className="flex-1"><Outlet /></main>
       <Footer />
       <CompareTray />
+      <AskLauncher />
       <SearchPalette open={searching} onOpenChange={setSearching} />
       <ScrollRestoration />
     </div>
@@ -121,7 +127,7 @@ function Footer() {
         <div>
           <Wordmark />
           <p className="mt-3 max-w-xs">Kilde means source. A company research agent built by team Solus for the{" "}
-            <a className={a} href="https://builderr.ai/signalpost" target="_blank" rel="noopener noreferrer">Builderr Signalpost challenge</a>.</p>
+            <a className={a} href="https://builderr.ai/challenges/signalpost" target="_blank" rel="noopener noreferrer">Builderr Signalpost challenge</a>.</p>
           <p className="mt-3 flex flex-wrap gap-x-4 gap-y-1">
             <a className={a} href="https://github.com/tahcin/kilde" target="_blank" rel="noopener noreferrer">Code on GitHub</a>
             <Link className={a} to="/how">How it works</Link>

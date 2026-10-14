@@ -62,7 +62,7 @@ function ResultItem({ r, onSelect }: { r: Row; onSelect: () => void }) {
 }
 
 /** The search box with its results list underneath. `onPick` overrides going to the company page. */
-export function InlineSearch({ onPick, placeholder = "Name, org number, town or industry", autoFocus, size = "lg", exclude = [] }: {
+export function InlineSearch({ onPick, placeholder = "Name, org number or town", autoFocus, size = "lg", exclude = [] }: {
   onPick?: (r: Row) => void; placeholder?: string; autoFocus?: boolean; size?: "lg" | "md"; exclude?: string[];
 }) {
   const { data: rows } = useIndex();
@@ -106,7 +106,7 @@ export function SearchPalette({ open, onOpenChange }: { open: boolean; onOpenCha
   return (
     <Dialog.Root open={open} onOpenChange={onOpenChange}>
       <Dialog.Portal>
-        <Dialog.Overlay className="fixed inset-0 z-50 bg-night/30 backdrop-blur-[3px] transition-opacity duration-300 starting:opacity-0" />
+        <Dialog.Overlay className="fixed inset-0 z-50 bg-ink/25 backdrop-blur-[3px] transition-opacity duration-300 starting:opacity-0" />
         <Dialog.Content className="fixed left-1/2 top-[10vh] z-50 w-[min(640px,calc(100vw-1.5rem))] -translate-x-1/2 overflow-hidden rounded-[1.4rem] border border-rule/80 bg-card shadow-[var(--shadow-float)] outline-none transition-[opacity,scale] duration-300 ease-[var(--ease-out-expo)] starting:scale-[0.97] starting:opacity-0">
           <Dialog.Title className="sr-only">Find a company</Dialog.Title>
           <Dialog.Description className="sr-only">Type a name, organisation number, town or industry, then press Enter to open the company.</Dialog.Description>

@@ -80,8 +80,10 @@ function Dots() {
   );
 }
 
-export function AskPanel({ companies, suggestions, title, className, intro }: {
+export function AskPanel({ companies, suggestions, title, className, intro, bare }: {
   companies: Company[]; suggestions: string[]; title?: string; className?: string; intro?: ReactNode;
+  /** Inside the popup: no card or header of its own, and it fills the height it is given. */
+  bare?: boolean;
 }) {
   const orgs = companies.map((c) => c.o);
   const key = orgs.join(",");
@@ -115,12 +117,21 @@ export function AskPanel({ companies, suggestions, title, className, intro }: {
       patch((t) => ({ ...t, status: "error", error: err.message, code: err.code }));
     }
   };
-  useEffect(() => { if (turns.length) end.current?.scrollIntoView({ block: "nearest", behavior: "smooth" }); }, [turns.length]);
+  const last = turns[turns.length - 1];
+  useEffect(() => { if (turns.length) end.current?.scrollIntoView({ block: "nearest" }); }, [turns.length, last?.a.length]);
 
   const many = companies.length > 1;
   return (
-    <section className={cn("surface overflow-hidden rounded-[1.4rem]", className)} aria-label={title ?? "Ask"}>
-      <div className="flex items-start gap-3 px-5 pb-3 pt-4">
+    <section className={cn(bare ? "flex h-full min-h-0 flex-col" : "surface overflow-hidden rounded-[1.4rem]", className)} aria-label={title ?? "Ask"}>
+      {bare && turns.length > 0 && (
+        <div className="flex justify-end px-3 pt-1">
+          <button onClick={() => { abort.current?.abort(); setTurns([]); input.current?.focus(); }}
+            className="flex h-7 items-center gap-1.5 rounded-full px-2.5 text-[12.5px] text-muted transition hover:bg-hover hover:text-ink">
+            <RotateCcw className="size-3.5" aria-hidden />New conversation
+          </button>
+        </div>
+      )}
+      <div className={cn("flex items-start gap-3 px-5 pb-3 pt-4", bare && "hidden")}>
         <span className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-full bg-wash text-brand"><Sparkles className="size-4" aria-hidden /></span>
         <div className="min-w-0 flex-1">
           <h2 className="text-[16px] font-semibold tracking-[-0.01em] text-ink">{title ?? (many ? "Ask about these companies" : "Ask about this company")}</h2>
@@ -134,11 +145,23 @@ export function AskPanel({ companies, suggestions, title, className, intro }: {
         )}
       </div>
 
-      <div className="max-h-[min(60vh,560px)] space-y-5 overflow-y-auto px-5 scroll-thin" aria-live="polite">
+      <div className={cn("space-y-5 overflow-y-auto px-5 scroll-thin", bare ? "min-h-0 flex-1 py-3" : "max-h-[min(60vh,560px)]")} aria-live="polite">
+        {bare && turns.length === 0 && (
+          <div className="pt-1">
+            <p className="text-[14px] leading-relaxed text-ink-2">{intro ?? "Answered by Claude from Kilde's facts only, with a numbered source on every sentence."}</p>
+            <p className="mt-4 text-[12.5px] font-medium text-muted">Try asking</p>
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {suggestions.map((q) => (
+                <button key={q} onClick={() => send(q)} disabled={!orgs.length}
+                  className="rounded-full border border-rule bg-card px-3 py-1.5 text-left text-[13px] text-ink-2 transition hover:border-brand/40 hover:bg-wash hover:text-brand disabled:opacity-50">{q}</button>
+              ))}
+            </div>
+          </div>
+        )}
         <AnimatePresence initial={false}>
           {turns.map((t, i) => (
             <motion.div key={i} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.45, ease: [0.16, 1, 0.3, 1] }} className="space-y-2">
-              <p className="ml-auto w-fit max-w-[90%] rounded-2xl rounded-br-md bg-night px-3.5 py-2 text-[14.5px] leading-snug text-white">{t.q}</p>
+              <p className="ml-auto w-fit max-w-[90%] rounded-2xl rounded-br-md bg-brand px-3.5 py-2 text-[14.5px] leading-snug text-on">{t.q}</p>
               {t.status === "error" ? (
                 <p className={cn("rounded-xl px-3.5 py-2.5 text-[14px] leading-snug", ["ip", "day", "budget", "disabled"].includes(t.code ?? "") ? "bg-amber-soft text-amber" : "bg-bad-soft text-bad")}>{t.error}</p>
               ) : t.a ? (
@@ -150,7 +173,7 @@ export function AskPanel({ companies, suggestions, title, className, intro }: {
         <div ref={end} />
       </div>
 
-      {turns.length === 0 && (
+      {turns.length === 0 && !bare && (
         <div className="flex flex-wrap gap-1.5 px-5 pb-1">
           {suggestions.map((s) => (
             <button key={s} onClick={() => send(s)} disabled={!orgs.length}

@@ -1,81 +1,18 @@
-import { AnimatePresence, motion, useReducedMotion } from "motion/react";
+import { motion, useReducedMotion } from "motion/react";
 import { ArrowRight, Check, FileSearch, Fingerprint, Plus, ScanSearch, ShieldQuestion } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { Link } from "react-router";
-import { AskPanel } from "../components/Ask";
 import { InlineSearch, rowLine } from "../components/Search";
-import { render } from "../components/Value";
 import { useCompare } from "../lib/compare";
-import { useCompanies, useIndex, useMeta, type Claim, type Company, type Row } from "../lib/data";
-import { amount, cn, dateTime, displayName, label, METHOD, sourceName } from "../lib/format";
+import { useIndex, useMeta, type Row } from "../lib/data";
+import { amount, cn, displayName, industry, titleCase } from "../lib/format";
+import { Dropdown } from "../components/Dropdown";
 import { useTitle } from "../lib/title";
+import { FAM, FamChip, type Fam } from "../lib/family";
 
 /** Well-known companies from Builderr's own sample, chosen because their profiles show most kinds of fact. */
 export const TRY = ["938702675", "999296432", "976605713", "979543883", "976695372", "990167826", "966820152", "982769221"];
 const ease = [0.16, 1, 0.3, 1] as const;
-
-/** Real facts from real profiles for the first screen, each with its receipt. */
-const SPECIMENS: [string, string][] = [["938702675", "official_website"], ["999296432", "revenue"], ["976605713", "social_profile"], ["979543883", "dated_news"]];
-
-function pickSpecimen(cos: Company[], [org, field]: [string, string]): { co: Company; claim: Claim } | null {
-  const co = cos.find((c) => c.o === org);
-  const claim = co?.c.find((c) => c.f === field && c.a === "available" && c.e.length && (field !== "revenue" || c.v?.account_type === "company"));
-  return co && claim ? { co, claim } : null;
-}
-
-function Specimen() {
-  const { data } = useCompanies(SPECIMENS.map(([o]) => o));
-  const items = useMemo(() => (data ? SPECIMENS.map((s) => pickSpecimen(data, s)).filter(Boolean) as { co: Company; claim: Claim }[] : []), [data]);
-  const [n, setN] = useState(0);
-  const [held, setHeld] = useState(false);
-  const reduce = useReducedMotion();
-  useEffect(() => {
-    if (held || reduce || items.length < 2) return;
-    const t = setInterval(() => { if (!document.hidden) setN((x) => (x + 1) % items.length); }, 6500);
-    return () => clearInterval(t);
-  }, [held, reduce, items.length]);
-  const it = items[n % Math.max(items.length, 1)];
-  const ev = it ? it.co.ev[it.claim.e[0]] : null;
-  return (
-    <div className="relative" onPointerEnter={() => setHeld(true)} onPointerLeave={() => setHeld(false)} onFocus={() => setHeld(true)} onBlur={() => setHeld(false)}>
-      <div className="surface relative flex min-h-[18.5rem] flex-col overflow-hidden rounded-[1.6rem]">
-        {!it || !ev ? <div className="flex-1 animate-pulse bg-paper-2/40" /> : (
-          <AnimatePresence mode="wait" initial={false}>
-            <motion.div key={n} initial={{ opacity: 0, y: 14, filter: "blur(6px)" }} animate={{ opacity: 1, y: 0, filter: "blur(0px)" }}
-              exit={{ opacity: 0, y: -10, filter: "blur(6px)" }} transition={{ duration: 0.6, ease }} className="flex flex-1 flex-col">
-              <div className="px-6 pb-5 pt-6">
-                <Link to={`/c/${it.co.o}`} className="text-[13px] font-medium text-brand hover:underline">{displayName(it.co.n)}</Link>
-                <p className="mt-3 text-[13px] text-muted">{label(it.claim.f)}{it.claim.f === "revenue" ? `, ${it.claim.v.year} company accounts` : ""}</p>
-                <p className="mt-1 text-[22px] font-semibold leading-tight tracking-[-0.02em] text-ink [&_a]:no-underline">
-                  {it.claim.f === "revenue" ? <span className="tnum">{it.claim.v.currency} {amount(it.claim.v.amount)}</span> : render(it.claim.f, it.claim.v)}
-                </p>
-              </div>
-              <div className="flex-1 border-t border-dashed border-rule bg-paper/60 px-6 pb-6 pt-4">
-                <p className="flex items-center justify-between gap-3 text-[12.5px] text-muted">
-                  <span className="font-medium text-ink-2">{sourceName(it.co.u[ev.u] ?? "", ev.k)}</span>
-                  <span>{dateTime(ev.t)}</span>
-                </p>
-                <blockquote className="mt-3 line-clamp-4 font-mono text-[12.5px] leading-[1.75] text-ink">
-                  <span className="quote-mark quote-sweep">{ev.q}</span>
-                </blockquote>
-                <p className="mt-3 text-[12.5px] leading-snug text-ink-2">{METHOD[it.claim.m ?? ""] ?? "Matched to this organisation number."}</p>
-              </div>
-            </motion.div>
-          </AnimatePresence>
-        )}
-      </div>
-      <div className="mt-3 flex items-center justify-between px-1">
-        <p className="text-[12.5px] text-muted">Real facts from this site, each with its receipt.</p>
-        <div className="flex gap-1.5" role="tablist" aria-label="Examples">
-          {items.map((x, i) => (
-            <button key={i} role="tab" aria-selected={i === n} aria-label={`${label(x.claim.f)} for ${displayName(x.co.n)}`} onClick={() => setN(i)}
-              className={cn("h-1.5 rounded-full transition-all duration-500", i === n ? "w-6 bg-brand" : "w-1.5 bg-ink/20 hover:bg-ink/40")} />
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 function Hero() {
   const { data: rows } = useIndex();
@@ -85,27 +22,24 @@ function Hero() {
   return (
     <section className="relative isolate overflow-hidden" aria-labelledby="hero-title">
       <div className="ruled absolute inset-0 -z-10" aria-hidden />
-      <div className="wrap grid gap-12 pb-10 pt-12 sm:pt-20 lg:grid-cols-[1.15fr_1fr] lg:items-center lg:gap-14 lg:pb-14">
-        <div>
-          <motion.h1 id="hero-title" {...rise(0.05)} className="display max-w-[15ch] text-[2.6rem] text-ink sm:text-[3.6rem] lg:text-[4.1rem]">
-            Norwegian companies, with the source of every fact.
-          </motion.h1>
-          <motion.p {...rise(0.15)} className="mt-5 max-w-[34rem] text-[17px] leading-relaxed text-ink-2 sm:text-lg">
-            Kilde reads the public registers and each company's own website, and keeps the exact page and words behind everything it tells you. What it cannot prove, it says so.
-          </motion.p>
-          <motion.div {...rise(0.25)} className="mt-8 max-w-xl">
-            <InlineSearch autoFocus={false} />
-          </motion.div>
-          <motion.div {...rise(0.35)} className="mt-5 flex max-w-xl flex-wrap items-center gap-2">
-            <span className="mr-1 text-[13px] text-muted">Try</span>
-            {tries.slice(0, 5).map((r) => (
-              <Link key={r.o} to={`/c/${r.o}`} className="rounded-full border border-rule bg-card px-3 py-1.5 text-[13px] font-medium text-ink-2 transition hover:border-brand/40 hover:bg-wash hover:text-brand">
-                {displayName(r.n)}
-              </Link>
-            ))}
-          </motion.div>
-        </div>
-        <motion.div {...rise(0.3)}><Specimen /></motion.div>
+      <div className="wrap flex flex-col items-center pb-14 pt-14 text-center sm:pb-16 sm:pt-24">
+        <motion.h1 id="hero-title" {...rise(0.05)} className="display max-w-[16ch] text-[2.5rem] text-ink sm:text-[3.6rem] lg:text-[4.3rem]">
+          Norwegian companies, with the source of every fact.
+        </motion.h1>
+        <motion.p {...rise(0.15)} className="mt-5 max-w-[36rem] text-[17px] leading-relaxed text-ink-2 sm:text-lg">
+          Kilde reads the public registers and each company's own website, and keeps the exact page and words behind everything it tells you. What it cannot prove, it says so.
+        </motion.p>
+        <motion.div {...rise(0.25)} className="mt-9 w-full max-w-2xl text-left">
+          <InlineSearch autoFocus={false} />
+        </motion.div>
+        <motion.div {...rise(0.35)} className="mt-5 flex max-w-2xl flex-wrap items-center justify-center gap-2">
+          <span className="mr-1 text-[13px] text-muted">Try</span>
+          {tries.slice(0, 5).map((r) => (
+            <Link key={r.o} to={`/c/${r.o}`} className="rounded-full border border-rule bg-card px-3 py-1.5 text-[13px] font-medium text-ink-2 transition hover:border-brand/40 hover:bg-wash hover:text-brand">
+              {displayName(r.n)}
+            </Link>
+          ))}
+        </motion.div>
       </div>
     </section>
   );
@@ -145,50 +79,8 @@ export const STEPS = [
   { icon: ShieldQuestion, title: "Say what is missing", text: "When something is not there, or cannot be proven, the profile says so and why. A missing website is never shown as no website, and no figure is ever estimated." },
 ];
 
-function AskHome() {
-  const { picked } = useCompare();
-  const [orgs, setOrgs] = useState<string[]>(() => (picked.length ? picked : ["938702675"]));
-  const { data: cos } = useCompanies(orgs);
-  const { data: rows } = useIndex();
-  const name = (o: string) => displayName(rows?.find((r) => r.o === o)?.n ?? o);
-  return (
-    <section className="bg-night text-white" aria-labelledby="ask-title">
-      <div className="wrap grid gap-10 py-20 lg:grid-cols-[1fr_1.1fr] lg:items-start">
-        <div>
-          <h2 id="ask-title" className="display max-w-[16ch] text-[2rem] sm:text-[2.6rem]">Ask questions. Get answers with sources.</h2>
-          <p className="mt-4 max-w-md text-[16px] leading-relaxed text-white/75">
-            Pick up to three companies and ask in English or Norwegian. Claude answers from Kilde's facts alone and numbers every source; if the facts do not say, neither does the answer.
-          </p>
-          <div className="mt-8 max-w-md">
-            <div className="flex flex-wrap gap-1.5">
-              {orgs.map((o) => (
-                <span key={o} className="flex items-center gap-1 rounded-full bg-white/10 py-1 pl-3 pr-1 text-[13px]">
-                  {name(o)}
-                  <button onClick={() => setOrgs(orgs.filter((x) => x !== o))} className="grid size-5 place-items-center rounded-full text-white/70 hover:bg-white/15 hover:text-white" aria-label={`Remove ${name(o)}`}>×</button>
-                </span>
-              ))}
-            </div>
-            {orgs.length < 3 && (
-              <div className="mt-3 text-ink">
-                <InlineSearch size="md" exclude={orgs} placeholder={orgs.length ? "Add a company to compare" : "Pick a company"} onPick={(r) => setOrgs([...orgs, r.o])} />
-              </div>
-            )}
-          </div>
-        </div>
-        {cos && cos.length > 0 ? (
-          <AskPanel companies={cos} className="text-ink"
-            suggestions={cos.length > 1 ? ["Which is larger by revenue?", "Who runs each company?", "Which ones are hiring?", "Hvem har verifisert nettside?"]
-              : ["What does it do?", "Who runs it?", "How did it do in its latest accounts?", "Hva har endret seg nylig?"]} />
-        ) : (
-          <div className="surface grid min-h-60 place-items-center rounded-[1.4rem] p-6 text-center text-[15px] text-muted">{orgs.length ? "Loading…" : "Pick a company to ask about."}</div>
-        )}
-      </div>
-    </section>
-  );
-}
-
 type Filter = "all" | "w" | "s" | "h" | "n";
-const FILTERS: [Filter, string][] = [["all", "All"], ["w", "Verified website"], ["s", "Social profiles"], ["h", "Hiring"], ["n", "News"]];
+const FILTERS: [Filter, string, Fam | null][] = [["all", "All", null], ["w", "Verified website", "web"], ["s", "Social profiles", "social"], ["h", "Hiring", "hiring"], ["n", "News", "news"]];
 
 export function CompareToggle({ o, className }: { o: string; className?: string }) {
   const { picked, toggle } = useCompare();
@@ -211,35 +103,53 @@ function Explore() {
   const { data: rows } = useIndex();
   const [filter, setFilter] = useState<Filter>("all");
   const [sort, setSort] = useState<"name" | "rev" | "facts">("rev");
+  const [inds, setInds] = useState<string[]>([]);
+  const [towns, setTowns] = useState<string[]>([]);
   const [shown, setShown] = useState(30);
+  const indOf = (r: Row) => industry(r.ic, r.in) || "Not stated";
+  const townOf = (r: Row) => (r.m ? titleCase(r.m) : "Not stated");
+  const opts = (key: (r: Row) => string) => {
+    const c = new Map<string, number>();
+    rows?.forEach((r) => c.set(key(r), (c.get(key(r)) ?? 0) + 1));
+    return [...c].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([v, n]) => ({ value: v, label: v, count: n }));
+  };
+  const indOpts = useMemo(() => opts(indOf), [rows]);  // eslint-disable-line react-hooks/exhaustive-deps
+  const townOpts = useMemo(() => opts(townOf), [rows]);  // eslint-disable-line react-hooks/exhaustive-deps
   const list = useMemo(() => {
     if (!rows) return [];
-    const xs = rows.filter((r) => hasFamily(r, filter));
+    const xs = rows.filter((r) => hasFamily(r, filter) && (!inds.length || inds.includes(indOf(r))) && (!towns.length || towns.includes(townOf(r))));
     // Figures are never converted, so NOK filers are ranked first and other currencies after them.
     if (sort === "rev") return [...xs].sort((a, b) => Number(b.rev?.c === "NOK") - Number(a.rev?.c === "NOK") || Number(!!b.rev) - Number(!!a.rev) || (b.rev?.a ?? 0) - (a.rev?.a ?? 0));
     if (sort === "facts") return [...xs].sort((a, b) => b.nf - a.nf);
     return xs;
-  }, [rows, filter, sort]);
+  }, [rows, filter, sort, inds, towns]);  // eslint-disable-line react-hooks/exhaustive-deps
   return (
     <section className="wrap pb-20 pt-2" aria-labelledby="explore-title">
       <h2 id="explore-title" className="display text-[2rem] text-ink sm:text-[2.6rem]">Browse every company</h2>
       <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap gap-1.5" role="group" aria-label="Show only">
-          {FILTERS.map(([k, t]) => (
-            <button key={k} onClick={() => { setFilter(k); setShown(30); }} aria-pressed={filter === k}
-              className={cn("rounded-full px-3.5 py-1.5 text-[13.5px] font-medium transition", filter === k ? "bg-ink text-paper" : "bg-card text-ink-2 ring-1 ring-rule hover:ring-brand/40")}>
-              {t}{rows && k !== "all" && <span className={cn("ml-1.5 tnum", filter === k ? "text-paper/60" : "text-muted")}>{rows.filter((r) => hasFamily(r, k)).length}</span>}
-            </button>
-          ))}
+          {FILTERS.map(([k, t, fam]) => {
+            const on = filter === k, f = fam ? FAM[fam] : null;
+            return (
+              <button key={k} onClick={() => { setFilter(k); setShown(30); }} aria-pressed={on}
+                className={cn("flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-[13.5px] font-medium ring-1 transition",
+                  on ? (f ? cn(f.bg, f.ink, "ring-current/25") : "bg-brand text-on ring-brand") : "bg-card text-ink-2 ring-rule hover:ring-brand/40")}>
+                {f && <span className={cn("size-2 rounded-full", f.dot)} aria-hidden />}
+                {t}{rows && k !== "all" && <span className={cn(on ? "opacity-70" : "text-muted")}>{rows.filter((r) => hasFamily(r, k)).length}</span>}
+              </button>
+            );
+          })}
         </div>
-        <label className="flex items-center gap-2 text-[13.5px] text-muted">Sort by
-          <select value={sort} onChange={(e) => setSort(e.target.value as typeof sort)} className="rounded-lg border border-rule bg-card px-2.5 py-1.5 text-ink">
-            <option value="rev">Latest revenue (NOK)</option><option value="facts">Most facts</option><option value="name">Name</option>
-          </select>
-        </label>
+        <div className="flex flex-wrap items-center gap-2">
+          <Dropdown multiple label="Industry" searchable options={indOpts} value={inds} onChange={(v) => { setInds(v); setShown(30); }} />
+          <Dropdown multiple label="Town" searchable options={townOpts} value={towns} onChange={(v) => { setTowns(v); setShown(30); }} />
+          <Dropdown label="Sort" align="end" value={sort} onChange={(v) => setSort(v as typeof sort)}
+            options={[{ value: "rev", label: "Latest revenue (NOK)" }, { value: "facts", label: "Most facts" }, { value: "name", label: "Name" }]} />
+        </div>
       </div>
       <ul className="surface mt-5 divide-y divide-rule/70 overflow-hidden rounded-[1.3rem]">
         {!rows && Array.from({ length: 6 }, (_, i) => <li key={i} className="h-[4.5rem] animate-pulse bg-paper-2/30" />)}
+        {rows && list.length === 0 && <li className="px-5 py-8 text-center text-[14px] text-muted">No companies match these filters.</li>}
         {list.slice(0, shown).map((r) => (
           <li key={r.o}>
             <Link to={`/c/${r.o}`} className="group flex items-center gap-3 px-4 py-3.5 transition hover:bg-wash/50 sm:gap-4 sm:px-5">
@@ -248,7 +158,7 @@ function Explore() {
                 <span className="block truncate text-[13px] text-muted">{rowLine(r)}</span>
               </span>
               <span className="hidden gap-1 md:flex" aria-hidden>
-                {r.f.w > 0 && <Tag>Website</Tag>}{r.f.s > 0 && <Tag>Social</Tag>}{(r.f.h > 0 || r.j > 0) && <Tag>Hiring</Tag>}{r.f.n > 0 && <Tag>News</Tag>}
+                {r.f.w > 0 && <FamChip fam="web" />}{r.f.s > 0 && <FamChip fam="social" />}{(r.f.h > 0 || r.j > 0) && <FamChip fam="hiring" />}{r.f.n > 0 && <FamChip fam="news" />}
               </span>
               <span className="hidden w-40 text-right sm:block">
                 {r.rev ? <><span className="tnum block text-[14px] font-medium text-ink">{r.rev.c} {amount(r.rev.a)}</span><span className="block text-[12px] text-muted">revenue {r.rev.y}{r.rev.t === "group" ? ", group" : ""}</span></>
@@ -270,7 +180,6 @@ function Explore() {
   );
 }
 
-const Tag = ({ children }: { children: string }) => <span className="rounded-md bg-paper-2 px-1.5 py-0.5 text-[11.5px] font-medium text-ink-2">{children}</span>;
 
 export default function Home() {
   useTitle(null);
@@ -278,7 +187,6 @@ export default function Home() {
     <>
       <Hero />
       <Explore />
-      <AskHome />
       <Numbers />
     </>
   );

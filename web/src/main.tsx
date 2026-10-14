@@ -4,6 +4,7 @@ import { createBrowserRouter, RouterProvider } from "react-router";
 import { MotionConfig } from "motion/react";
 import { Shell } from "./components/Shell";
 import { CompareProvider } from "./lib/compare";
+import { AskProvider } from "./components/AskLauncher";
 import { loadIndex } from "./lib/data";
 import Home from "./pages/Home";
 import NotFound from "./pages/NotFound";
@@ -35,7 +36,7 @@ const router = createBrowserRouter([
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <MotionConfig reducedMotion="user">
-      <CompareProvider><RouterProvider router={router} /></CompareProvider>
+      <CompareProvider><AskProvider><RouterProvider router={router} /></AskProvider></CompareProvider>
     </MotionConfig>
   </StrictMode>,
 );

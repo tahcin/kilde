@@ -1,29 +1,30 @@
 import { motion, useReducedMotion } from "motion/react";
-import { ArrowLeft, ArrowUpRight, Check, ChevronDown, Copy } from "lucide-react";
+import { ArrowLeft, ArrowUpRight, Check, ChevronDown, Columns3, Copy } from "lucide-react";
 import { useMemo, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router";
-import { AskPanel } from "../components/Ask";
+import { AskLink, useAskScope } from "../components/AskLauncher";
 import { SourceChip, SourcePop } from "../components/Source";
 import { FactRow, render } from "../components/Value";
 import { FIN, accounts, anyOf, latest, one, useCompany, type Claim, type Company } from "../lib/data";
 import { LEGAL_FORM, STATE, amount, moneyShort, cn, date, dateTime, displayName, employees, industry, label, orgFmt, plural, titleCase, toneSoft } from "../lib/format";
 import { useTitle } from "../lib/title";
-import { CompareToggle } from "./Home";
+import { useCompare } from "../lib/compare";
+import { FAM, type Fam } from "../lib/family";
 
 const ease = [0.16, 1, 0.3, 1] as const;
 
-type Group = { id: string; title: string; note: string; fields: string[]; sortByDate?: boolean };
+type Group = { id: string; title: string; note: string; fields: string[]; sortByDate?: boolean; fam?: Fam };
 const GROUPS: Group[] = [
-  { id: "people", title: "Who runs it", note: "Registered roles in the Brønnøysund register.",
+  { id: "people", fam: "people", title: "Who runs it", note: "Registered roles in the Brønnøysund register.",
     fields: ["ceo", "board_chair", "board_deputy_chair", "board_member", "board_deputy_member", "board_observer", "owner", "partner", "general_partner",
       "business_manager", "contact_person", "norwegian_representative", "other_role", "auditor", "accountant", "signature_rule"] },
-  { id: "online", title: "Website and social profiles", note: "Only from a website proven to belong to this company.",
+  { id: "online", fam: "web", title: "Website and social profiles", note: "Only from a website proven to belong to this company.",
     fields: ["official_website", "website_title", "website_description", "site_language", "social_profile", "site_contact_email", "site_contact_phone",
       "structured_data_organization", "logo", "related_website"] },
-  { id: "hiring", title: "Hiring", note: "Its own careers page, and active ads in NAV's public job feed.", fields: ["hiring_signal", "active_job_count", "job_ad"] },
-  { id: "news", title: "News and updates", note: "Dated posts on its verified website, and changes recorded by the register in the last 12 months.",
+  { id: "hiring", fam: "hiring", title: "Hiring", note: "Its own careers page, and active ads in NAV's public job feed.", fields: ["hiring_signal", "active_job_count", "job_ad"] },
+  { id: "news", fam: "news", title: "News and updates", note: "Dated posts on its verified website, and changes recorded by the register in the last 12 months.",
     fields: ["dated_news", "registry_change", "site_page_updated"], sortByDate: true },
-  { id: "records", title: "Public records", note: "Contracts, research funding, state aid, inspections and approvals filed under its organisation number.",
+  { id: "records", fam: "records", title: "Public records", note: "Contracts, research funding, state aid, inspections and approvals filed under its organisation number.",
     fields: ["public_contract_award", "procurement_notice", "research_project", "state_aid_award", "food_inspection", "approval_sentral_godkjenning", "financial_licence"], sortByDate: true },
   { id: "group", title: "Group", note: "Parent and subsidiaries from the register's group structure and the LEI register.",
     fields: ["part_of_group", "group_parent", "group_ultimate_parent", "lei_direct_parent", "lei_ultimate_parent", "group_subsidiary"] },
@@ -37,12 +38,15 @@ const GROUPS: Group[] = [
 const ACCOUNT_FIELDS = [...FIN, "accounts_audited", "latest_filed_accounts_year", "audit_opt_out_date", "annual_report_pdf"];
 const PLACED = new Set([...GROUPS.flatMap((g) => g.fields), ...ACCOUNT_FIELDS, "official_website_url"]);
 
-function Section({ id, title, note, children, count }: { id: string; title: string; note?: string; children: ReactNode; count?: number }) {
+function Section({ id, title, note, children, count, fam }: { id: string; title: string; note?: string; children: ReactNode; count?: number; fam?: Fam }) {
+  const f = fam ? FAM[fam] : null;
   return (
     <section id={id} className="surface scroll-mt-24 rounded-[1.3rem] px-4 pb-2 pt-5 sm:px-6" aria-labelledby={`${id}-h`}>
       <div className="mb-2 flex items-baseline justify-between gap-3">
-        <h2 id={`${id}-h`} className="text-[19px] font-semibold tracking-[-0.02em] text-ink">{title}</h2>
-        {count != null && <span className="tnum text-[12.5px] text-muted">{plural(count, "fact")}</span>}
+        <h2 id={`${id}-h`} className="flex items-center gap-2.5 text-[19px] font-semibold tracking-[-0.02em] text-ink">
+          <span className={cn("size-3 shrink-0 rounded-[4px]", f ? f.bg : "bg-paper-2", f && "ring-1 ring-inset ring-current/15", f?.ink)} aria-hidden />{title}
+        </h2>
+        {count != null && <span className={cn("rounded-full px-2 py-0.5 text-[12px] font-medium", f ? cn(f.bg, f.ink) : "bg-paper-2 text-muted")}>{plural(count, "fact")}</span>}
       </div>
       {note && <p className="-mt-1 mb-2 text-[13px] text-muted">{note}</p>}
       {children}
@@ -143,7 +147,7 @@ function Accounts({ co }: { co: Company }) {
   const extra = tables ? rest.filter((c) => !(FIN as readonly string[]).includes(c.f)) : rest;
   if (!fin.length) return null;
   return (
-    <Section id="accounts" title="Accounts" note="Filed annual accounts for the last three years, from the Register of Company Accounts." count={fin.filter((c) => c.a === "available").length}>
+    <Section id="accounts" fam="accounts" title="Accounts" note="Filed annual accounts for the last three years, from the Register of Company Accounts." count={fin.filter((c) => c.a === "available").length}>
       <FinTable co={co} kind="company" />
       <FinTable co={co} kind="group" />
       {extra.length > 0 && <Rows co={co} claims={extra} />}
@@ -151,16 +155,17 @@ function Accounts({ co }: { co: Company }) {
   );
 }
 
-function Tile({ co, claim, name, children, sub }: { co: Company; claim: Claim | null; name: string; children: ReactNode; sub?: string }) {
+function Tile({ co, claim, name, children, sub, fam }: { co: Company; claim: Claim | null; name: string; children: ReactNode; sub?: string; fam: Fam }) {
+  const f = FAM[fam];
   const body = (
     <>
-      <span className="block text-[12.5px] text-muted">{name}</span>
+      <span className={cn("block text-[12.5px] font-medium", f.ink)}>{name}</span>
       <span className="mt-1.5 block break-words text-[16px] font-semibold leading-tight tracking-[-0.02em] text-ink sm:text-[19px]">{children}</span>
       {sub && <span className="mt-1 block text-[12px] leading-snug text-muted">{sub}</span>}
     </>
   );
-  const cls = "surface block min-w-0 rounded-2xl px-4 py-3.5 text-left";
-  return claim ? <SourcePop co={co} claim={claim} title={`${name}: source`} className={cn(cls, "transition hover:border-brand/40 data-[state=open]:border-brand/50")}>{body}</SourcePop> : <div className={cls}>{body}</div>;
+  const cls = cn("block min-w-0 rounded-2xl px-4 py-3.5 text-left ring-1 ring-inset ring-black/[0.04]", f.bg);
+  return claim ? <SourcePop co={co} claim={claim} title={`${name}: source`} className={cn(cls, "transition hover:ring-brand/30 data-[state=open]:ring-brand/40")}>{body}</SourcePop> : <div className={cls}>{body}</div>;
 }
 
 function KeyFigures({ co }: { co: Company }) {
@@ -171,14 +176,14 @@ function KeyFigures({ co }: { co: Company }) {
   const sub = (c: Claim | null) => (c ? `${c.v.year}, ${c.v.account_type === "group" ? "group" : "company"} accounts` : undefined);
   return (
     <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-4">
-      <Tile co={co} claim={rev} name="Revenue" sub={sub(rev)}>{money(rev)}</Tile>
-      <Tile co={co} claim={res} name="Annual result" sub={sub(res)}>{money(res)}</Tile>
-      <Tile co={co} claim={emp} name="Employees"
+      <Tile co={co} claim={rev} fam="accounts" name="Revenue" sub={sub(rev)}>{money(rev)}</Tile>
+      <Tile co={co} claim={res} fam="accounts" name="Annual result" sub={sub(res)}>{money(res)}</Tile>
+      <Tile co={co} claim={emp} fam="people" name="Employees"
         sub={emp?.a === "available" ? (emp.d ? `Registered, as of ${date(emp.d)}` : "Registered") : emp?.n ? "Employer register (Aa-registeret)" : undefined}>
         {emp?.a === "available" ? employees(emp.v) : emp?.n ? "None registered" : "Not found"}
       </Tile>
-      <Tile co={co} claim={web} name="Website" sub={web?.a === "available" ? "Verified" : web ? STATE[web.a].word : undefined}>
-        {web?.a === "available" ? web.v : <span className="text-muted">None verified</span>}
+      <Tile co={co} claim={web} fam="web" name="Website" sub={web?.a === "available" ? "Verified" : web ? STATE[web.a].word : undefined}>
+        {web?.a === "available" ? web.v : <span className="text-ink-2">None verified</span>}
       </Tile>
     </div>
   );
@@ -246,13 +251,25 @@ function Header({ co }: { co: Company }) {
       <div className="mt-5 flex flex-wrap items-center gap-2">
         {warn && <span className={cn("rounded-full px-3 py-1 text-[12.5px] font-semibold", toneSoft.bad)}>{warn}</span>}
         <CopyOrg o={co.o} />
-        <CompareToggle o={co.o} />
+        <CompareWith o={co.o} />
         <a href={`https://virksomhet.brreg.no/oppslag/enheter/${co.o}`} target="_blank" rel="noopener noreferrer"
           className="flex h-8 items-center gap-1 rounded-full border border-rule bg-card px-3 text-[12.5px] font-medium text-ink-2 transition hover:border-brand/40 hover:text-brand">
           Brønnøysund record<ArrowUpRight className="size-3.5" aria-hidden />
         </a>
       </div>
     </motion.header>
+  );
+}
+
+/** Opens Compare with this company first and any other picks after it. */
+function CompareWith({ o }: { o: string }) {
+  const { picked } = useCompare();
+  const orgs = [o, ...picked.filter((x) => x !== o)].slice(0, 3);
+  return (
+    <Link to={`/compare?o=${orgs.join(",")}`}
+      className="flex h-8 items-center gap-1.5 rounded-full bg-brand px-3.5 text-[12.5px] font-medium text-on transition hover:bg-brand-2">
+      <Columns3 className="size-3.5" aria-hidden />Compare with…
+    </Link>
   );
 }
 
@@ -273,6 +290,7 @@ export default function CompanyPage() {
   const { org = "" } = useParams();
   const { data: co, error } = useCompany(org);
   useTitle(co ? displayName(co.n) : null);
+  useAskScope(co ? [co] : null);
   const groups = useMemo(() => {
     if (!co) return [];
     const gs = GROUPS.map((g) => {
@@ -302,19 +320,21 @@ export default function CompanyPage() {
     <div className="wrap pb-10 pt-8 sm:pt-12">
       <Header co={co} />
       <div className="mt-8"><KeyFigures co={co} /></div>
-      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_23rem] lg:gap-8 xl:grid-cols-[minmax(0,1fr)_26rem]">
-        <div id="summary" className="min-w-0 scroll-mt-24 lg:col-start-1"><Summary co={co} /></div>
+      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_13rem] lg:gap-10">
+        <div id="summary" className="min-w-0 scroll-mt-24 lg:col-start-1">
+          <Summary co={co} />
+          <AskLink className="mt-3 ml-1">Ask about this company</AskLink>
+        </div>
         <aside className="min-w-0 lg:col-start-2 lg:row-span-2 lg:row-start-1">
           <div className="space-y-6 lg:sticky lg:top-24">
-            <AskPanel companies={[co]} suggestions={COMPANY_SUGGESTIONS} />
             <OnThisPage items={toc} />
           </div>
         </aside>
         <div className="min-w-0 space-y-6 lg:col-start-1">
-          {people && <Section id="people" title={people.title} note={people.note}><Rows co={co} claims={people.claims} /></Section>}
+          {people && <Section id="people" fam="people" title={people.title} note={people.note}><Rows co={co} claims={people.claims} /></Section>}
           <Accounts co={co} />
           {groups.filter((g) => g.id !== "people").map((g) => (
-            <Section key={g.id} id={g.id} title={g.title} note={g.note} count={g.claims.filter((c) => c.a === "available").length}>
+            <Section key={g.id} id={g.id} fam={g.fam} title={g.title} note={g.note} count={g.claims.filter((c) => c.a === "available").length}>
               <Rows co={co} claims={g.claims} />
             </Section>
           ))}

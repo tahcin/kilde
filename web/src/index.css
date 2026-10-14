@@ -2,76 +2,53 @@
 @import "@fontsource-variable/schibsted-grotesk/wght.css";
 @import "@fontsource-variable/jetbrains-mono/wght.css";
 
-/* Kilde's own palette, the same as its HTML report: warm paper, slate ink, one deep fjord blue as the accent, and a
-   pale straw highlight for the quoted words a fact rests on. Light and dark follow the visitor's system setting.
+/* Light only. Kilde's fjord blue (#1f5673, the mark's colour) anchors the logo, links and primary buttons; the rest
+   is a calm pastel system on a warm off-white base. Each fact family has one pastel tint, used the same way in chips,
+   tiles, section markers and the browse list. Every text colour here reads at 4.5:1 or better on its tint.
    Schibsted Grotesk for text, JetBrains Mono for org numbers and quotes. */
 @theme {
   --font-sans: "Schibsted Grotesk Variable", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "JetBrains Mono Variable", ui-monospace, "SF Mono", monospace;
 
-  --color-paper: #f6f4ef;
-  --color-paper-2: #edeae2;
-  --color-card: #fcfbf8;
+  --color-paper: #faf8f3;
+  --color-paper-2: #f2efe8;
+  --color-card: #fffefb;
   --color-ink: #1c262b;
   --color-ink-2: #3a464c;
-  --color-muted: #5a666c;
+  --color-muted: #56626a;
   --color-faint: #a3aaa9;
-  --color-rule: #d9d5ca;
+  --color-rule: #e3ded3;
   --color-brand: #1f5673;
   --color-brand-2: #163f55;
   --color-on: #ffffff;
-  --color-wash: #e5e9e6;
-  --color-hover: #efede6;
-  --color-pop: #e3c76f;
-  --color-pop-soft: #f1e2b0;
-  --color-tag: #e9e6dd;
-  --color-night: #163f55;
+  --color-wash: #e8f0f5;
+  --color-hover: #f3f1eb;
+  --color-pop: #e8cf7e;
+  --color-pop-soft: #f7ebbf;
+  --color-band: #edf3f6;
 
-  --color-ok: #3b6b4c;
-  --color-ok-soft: color-mix(in srgb, #3b6b4c 13%, #fcfbf8);
-  --color-amber: #8a6410;
-  --color-amber-soft: color-mix(in srgb, #8a6410 13%, #fcfbf8);
-  --color-bad: #a12b3b;
-  --color-bad-soft: color-mix(in srgb, #a12b3b 11%, #fcfbf8);
-  --color-none: #5f6a6f;
-  --color-none-soft: #e9e6dd;
+  /* Fact families: a pastel tint and an ink that reads on it. */
+  --color-fam-web: #e3eef6;      --color-fam-web-ink: #1f5673;
+  --color-fam-social: #ece7f6;   --color-fam-social-ink: #4d3e74;
+  --color-fam-hiring: #e2efe5;   --color-fam-hiring-ink: #2d5a3c;
+  --color-fam-news: #fbe8de;     --color-fam-news-ink: #84401f;
+  --color-fam-records: #f7eecb;  --color-fam-records-ink: #6a5210;
+  --color-fam-accounts: #dff0ee; --color-fam-accounts-ink: #1d5853;
+  --color-fam-people: #f6e6ee;   --color-fam-people-ink: #7a2f52;
 
-  --shadow-soft: 0 1px 2px rgb(28 38 43 / 0.05), 0 8px 24px -14px rgb(28 38 43 / 0.16);
-  --shadow-float: 0 1px 2px rgb(28 38 43 / 0.06), 0 14px 36px -14px rgb(28 38 43 / 0.22), 0 40px 80px -40px rgb(28 38 43 / 0.22);
+  --color-ok: #2d5a3c;
+  --color-ok-soft: #e2efe5;
+  --color-amber: #7a5a0c;
+  --color-amber-soft: #f7eecb;
+  --color-bad: #9b2c3c;
+  --color-bad-soft: #f9e3e6;
+  --color-none: #5c6468;
+  --color-none-soft: #eeece6;
+  --color-night: #1f5673;
+
+  --shadow-soft: 0 1px 2px rgb(28 38 43 / 0.04), 0 8px 24px -16px rgb(28 38 43 / 0.14);
+  --shadow-float: 0 1px 2px rgb(28 38 43 / 0.05), 0 14px 36px -16px rgb(28 38 43 / 0.18), 0 40px 80px -44px rgb(28 38 43 / 0.18);
   --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --color-paper: #13181b;
-    --color-paper-2: #222a2e;
-    --color-card: #1a2125;
-    --color-ink: #e6e3dc;
-    --color-ink-2: #c9cdcb;
-    --color-muted: #9da7ab;
-    --color-faint: #58636a;
-    --color-rule: #2c353a;
-    --color-brand: #8cc3de;
-    --color-brand-2: #b3d8ea;
-    --color-on: #0f1a20;
-    --color-wash: #1f2a30;
-    --color-hover: #192024;
-    --color-pop: #8a7434;
-    --color-pop-soft: #4b4020;
-    --color-tag: #242d32;
-    --color-night: #0c1114;
-    --color-ok: #8dc49f;
-    --color-ok-soft: color-mix(in srgb, #8dc49f 14%, #1a2125);
-    --color-amber: #ddb663;
-    --color-amber-soft: color-mix(in srgb, #ddb663 14%, #1a2125);
-    --color-bad: #ef939f;
-    --color-bad-soft: color-mix(in srgb, #ef939f 14%, #1a2125);
-    --color-none: #9aa4a9;
-    --color-none-soft: #242d32;
-    --shadow-soft: 0 1px 2px rgb(0 0 0 / 0.3), 0 8px 24px -14px rgb(0 0 0 / 0.5);
-    --shadow-float: 0 1px 2px rgb(0 0 0 / 0.3), 0 14px 36px -14px rgb(0 0 0 / 0.55), 0 40px 80px -40px rgb(0 0 0 / 0.5);
-    color-scheme: dark;
-  }
 }
 
 /* The one container every page and section uses, so all left and right edges line up at every width. */
@@ -83,6 +60,8 @@
 
 /* Running text keeps a readable line length inside the wide container. */
 .measure { max-width: 75ch; }
+
+html { color-scheme: light; }
 
 /* The mark, as in Kilde's report: an accent square with a lighter inset corner. */
 .kilde-mark {
