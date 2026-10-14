@@ -3407,3 +3407,16 @@ def test_corroborator_quotes_only_what_matches_the_registry():
     page = W.parse_page(Snapshot("https://x.no/", "https://x.no/", 200, "x", html("<p>Sørengkaia 62, 0194 Oslo</p>").encode(), "text/html"))
     got = W._corroborator([page], ctx, "FJELLBEKK TREVARE AS")
     assert got and got[2] == "Oslo"
+
+
+def test_broken_tel_link_missing_the_country_code_is_not_a_foreign_number():
+    assert W.norm_phone("tel:+53742551") is None
+    assert W.norm_phone("tel:+4753742551") == "+4753742551"
+    assert W.norm_phone("tel:+46812345678") == "+46812345678"
+    assert W.norm_phone("53 74 25 51") == "+4753742551"
+
+
+def test_published_page_url_drops_error_and_tracking_parameters():
+    v = W.Verdict("vibbotest.no", "registry")
+    assert W.public_url(v, "https://vibbotest.no/x?error=true&message=login_required&status=500") == "https://vibbotest.no/"
+    assert W.public_url(v, "https://vibbotest.no/side?page_id=12&utm_source=fb#top") == "https://vibbotest.no/side?page_id=12"

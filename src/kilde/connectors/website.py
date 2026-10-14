@@ -3039,7 +3039,9 @@ def norm_phone(raw: str) -> str | None:
     if intl:
         if d.startswith("47"):
             return "+" + d if len(d) == 10 and d[2] in "2345679" else None
-        return "+" + d if 7 <= len(d) <= 15 else None
+        # a bare + before eight digits ('tel:+53742551') is a Norwegian number missing its 47, not a foreign one:
+        # it is never published as written (the number shown in the page text is read on its own)
+        return "+" + d if 9 <= len(d) <= 15 else None
     if len(d) == 8 and d[0] in "2345679":
         return "+47" + d
     return None
@@ -4371,12 +4373,22 @@ BUILDER_TECH_HOST = re.compile(r"(?i)(^|\.)(service\.one|webhosting\.one|wixsite
                                r"github\.io|business\.site|my\.canva\.site|framer\.(website|app)|carrd\.co)$")
 
 
+NOISE_PARAM = re.compile(r"(?i)^(utm_.*|fbclid|gclid|msclkid|mc_[a-z]+|ref|source|sessionid|session|sid|token|"
+                         r"error|error_description|message|status|state|code|returnurl|return_to|redirect.*|next|"
+                         r"login_required|_ga|_gl)$")
+ERROR_PARAM = re.compile(r"(?i)(^|&)(error|status)=|login_required")
+
+
 def public_url(v: "Verdict", url: str) -> str:
-    """The URL to publish: on the company's own domain when the site is served from a builder's technical host."""
-    if not v.alias_host:
-        return url
-    p = urlsplit(url)
-    return urlunsplit(("https", v.alias_host, p.path or "/", "", ""))
+    """The URL to publish: on the company's own domain when the site is served from a builder's technical host;
+    session, tracking and error parameters dropped, and the requested address instead of an error or login
+    redirect ('?error=true&message=login_required&status=500')."""
+    p = urlsplit(url.split("#")[0])
+    if p.query and ERROR_PARAM.search(p.query):
+        p = urlsplit(f"https://{bare(v.domain)}/")
+    query = urlencode([(k, x) for k, x in parse_qsl(p.query, keep_blank_values=True) if not NOISE_PARAM.match(k)])
+    host = v.alias_host or p.netloc
+    return urlunsplit((p.scheme or "https", host, p.path or "/", query, ""))
 
 
 def site_domain(host: str) -> str:
