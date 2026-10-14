@@ -38,6 +38,12 @@ test("the request: Haiku, short, no temperature, cached system prompt and facts 
   assert.deepEqual(body.messages[2], { role: "user", content: "Question: Is it hiring?" });
 });
 
+test("the system prompt asks for readable amounts without new figures", () => {
+  assert.match(SYSTEM, /NOK 194 million/);
+  assert.match(SYSTEM, /Never add digits or precision/);
+  assert.match(SYSTEM, /never compute growth/);
+});
+
 test("the system prompt is frozen text with no em dash and no per-request data", () => {
   assert.ok(!SYSTEM.includes("\u2014"));
   assert.ok(!/20\d\d-\d\d-\d\d/.test(SYSTEM));

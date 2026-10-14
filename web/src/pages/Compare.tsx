@@ -10,8 +10,9 @@ import { newsParts, socialParts } from "../components/Value";
 import { MAX_PICK, useCompare } from "../lib/compare";
 import { anyOf, avail, latest, one, useCompanies, type Claim, type Company, type State } from "../lib/data";
 import { FAM, type Fam } from "../lib/family";
-import { LEGAL_FORM, STATE, bare, cn, date, displayName, employees, industry, moneyShort, plural, titleCase } from "../lib/format";
+import { LEGAL_FORM, STATE, bare, cn, date, displayName, employees, industry, plural, titleCase } from "../lib/format";
 import { useTitle } from "../lib/title";
+import { Money } from "../components/Money";
 
 /** One cell: the claim behind it (for the source), what to show, a key for "only differences", and a number for bars. */
 type Cell = { claim: Claim | null; body: ReactNode; key: string; num?: { v: number; cur: string; period: string } ; missing?: State | "none" };
@@ -40,7 +41,7 @@ const money = (f: string) => (co: Company): Cell => {
   if (!c) return missing(co, f, "Not filed");
   const period = `${c.v.year}|${c.v.account_type ?? "company"}|${c.v.period_start ?? ""}|${c.v.period_end ?? ""}`;
   return { claim: c, key: `${c.v.currency}${c.v.amount}`, num: { v: Number(c.v.amount), cur: c.v.currency ?? "", period },
-    body: <><span className={cn("font-semibold", c.v.amount < 0 && "text-bad")}>{moneyShort(c.v.currency, c.v.amount).replace(/\u202f/g, "\u2009")}</span>
+    body: <><Money currency={c.v.currency} n={c.v.amount} className="font-semibold" />
       <span className="block text-[11.5px] text-muted">{c.v.year}{c.v.account_type === "group" ? ", group" : ""}</span></> };
 };
 const count = (f: string, noun: string, extra?: (cs: Claim[]) => ReactNode, word?: string) => (co: Company): Cell => {
@@ -97,7 +98,7 @@ const GROUPS: Group[] = [
     { name: "Municipality", get: fact("municipality", (c) => titleCase(c.v.name), (c) => c.v.name) },
     { name: "Industry", get: fact("industry", (c) => <>{industry(c.v.code, c.v.name)}<span className="block text-[11.5px] text-muted">{c.v.code}</span></>, (c) => c.v.code) },
     { name: "Founded", get: fact("incorporation_date", (c) => date(c.v)) },
-    { name: "Share capital", get: fact("share_capital", (c) => moneyShort(c.v.currency, c.v.amount)) },
+    { name: "Share capital", get: fact("share_capital", (c) => <Money currency={c.v.currency} n={c.v.amount} />) },
     { name: "Parent company", get: fact("group_parent", (c) => displayName(c.v.name), (c) => c.v.organisation_number, "None registered") },
   ] },
 ];

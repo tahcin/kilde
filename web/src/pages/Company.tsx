@@ -6,8 +6,9 @@ import { AskLink, useAskScope } from "../components/AskLauncher";
 import { SourceChip, SourcePop } from "../components/Source";
 import { FactRow, render } from "../components/Value";
 import { FIN, accounts, anyOf, latest, one, useCompany, type Claim, type Company } from "../lib/data";
-import { LEGAL_FORM, STATE, amount, moneyShort, cn, date, dateTime, displayName, employees, industry, label, orgFmt, plural, titleCase, toneSoft } from "../lib/format";
+import { LEGAL_FORM, STATE, amount, cn, date, dateTime, displayName, employees, industry, label, orgFmt, plural, titleCase, toneSoft } from "../lib/format";
 import { useTitle } from "../lib/title";
+import { Money } from "../components/Money";
 import { useCompare } from "../lib/compare";
 import { FAM, type Fam } from "../lib/family";
 
@@ -172,7 +173,7 @@ function KeyFigures({ co }: { co: Company }) {
   const rev = latest(co, "revenue"), res = latest(co, "annual_result");
   const emp = anyOf(co, "employees_registered")[0] ?? null;
   const web = anyOf(co, "official_website")[0] ?? null;
-  const money = (c: Claim | null) => (c ? <span title={`${c.v.currency} ${amount(c.v.amount)}`}>{moneyShort(c.v.currency, c.v.amount)}</span> : "Not filed");
+  const money = (c: Claim | null) => (c ? <Money currency={c.v.currency} n={c.v.amount} /> : "Not filed");
   const sub = (c: Claim | null) => (c ? `${c.v.year}, ${c.v.account_type === "group" ? "group" : "company"} accounts` : undefined);
   return (
     <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-4">

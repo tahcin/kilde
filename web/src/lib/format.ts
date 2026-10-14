@@ -120,13 +120,23 @@ export function amount(n: number | string): string {
   const s = Math.abs(x).toLocaleString("en-GB", { maximumFractionDigits: 2 }).replace(/,/g, " ");
   return x < 0 ? `−${s}` : s;
 }
-/** A figure for tight spaces. Whole millions read as "914 million" (the same value, in other units); anything else
- *  keeps every digit. Never rounds. */
-export function moneyShort(currency: string | undefined, n: number | string): string {
+/** A figure for tight spaces: "NOK 4.28 billion", "NOK 914 million", "NOK 258.8 million", "NOK 812 000".
+ *  `rounded` says whether the label differs from the filed value; `exact` is the full filed figure. */
+export function money(currency: string | undefined, n: number | string): { label: string; exact: string; rounded: boolean } {
   const x = Number(n), cur = currency ? `${currency} ` : "";
-  if (Number.isInteger(x) && Math.abs(x) >= 1e6 && x % 1e6 === 0) return `${cur}${amount(x / 1e6)} million`;
-  return `${cur}${amount(n)}`;
+  const exact = `${cur}${amount(n)}`;
+  if (!Number.isFinite(x) || Math.abs(x) < 1e6) return { label: exact, exact, rounded: false };
+  // Round in millions first, so 999 999 999 reads "1 billion", not "1 000 million".
+  const [unit, word, dp] = Math.abs(Number((x / 1e6).toFixed(1))) >= 1000 ? [1e9, "billion", 2] : [1e6, "million", 1];
+  const v = x / unit;
+  const shown = Number.isInteger(v) ? v : Number(v.toFixed(dp));
+  const text = shown.toLocaleString("en-GB", { maximumFractionDigits: dp }).replace(/,/g, "\u202f").replace(/^-/, "\u2212");
+  return { label: `${cur}${text} ${word}`, exact, rounded: shown * unit !== x };
 }
+/** The tooltip for a compact figure: the exact filed value, and "about" when the label is rounded. */
+export const moneyTitle = (m: { label: string; exact: string; rounded: boolean }) => (m.rounded ? `About ${m.label}; filed as ${m.exact}` : `Filed as ${m.exact}`);
+/** Kept for callers that only want the label. */
+export const moneyShort = (currency: string | undefined, n: number | string) => money(currency, n).label;
 export const orgFmt = (o: string) => o.replace(/^(\d{3})(\d{3})(\d{3})$/, "$1 $2 $3");
 export function host(u: string): string { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return u; } }
 export const bare = (u: string) => String(u ?? "").replace(/^https?:\/\/(www\.)?/, "").replace(/\/$/, "");

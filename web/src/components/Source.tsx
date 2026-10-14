@@ -3,7 +3,7 @@ import * as Popover from "@radix-ui/react-popover";
 import { ArrowUpRight, FileCheck2, X } from "lucide-react";
 import type { ReactNode } from "react";
 import type { Claim, Company } from "../lib/data";
-import { METHOD, SOURCE_CLASS, STATE, bare, cn, dateTime, date, label, safeUrl, sourceName, toneSoft } from "../lib/format";
+import { METHOD, SOURCE_CLASS, STATE, amount, bare, cn, dateTime, date, label, safeUrl, sourceName, toneSoft } from "../lib/format";
 
 export function SourceCard({ co, claim, close }: { co: Company; claim: Claim; close?: ReactNode }) {
   const evs = claim.e.map((i) => co.ev[i]).filter(Boolean);
@@ -19,6 +19,13 @@ export function SourceCard({ co, claim, close }: { co: Company; claim: Claim; cl
         {close}
       </div>
       {claim.a !== "available" && claim.n && <p className="border-b border-rule/80 px-4 py-3">{claim.n}</p>}
+      {claim.a === "available" && claim.v && typeof claim.v === "object" && claim.v.amount != null && (
+        <p className="border-b border-rule/80 px-4 py-3">
+          <span className="text-muted">Filed value </span>
+          <span className="font-semibold text-ink">{claim.v.currency} {amount(claim.v.amount)}</span>
+          {claim.v.year && <span className="text-muted"> · {claim.v.year}{claim.v.account_type ? `, ${claim.v.account_type} accounts` : ""}</span>}
+        </p>
+      )}
       {evs.length === 0 && <p className="px-4 py-3 text-muted">No saved page backs this entry: it records that the check was made and what it found.</p>}
       {evs.map((ev, n) => {
         const url = co.u[ev.u] ?? "";

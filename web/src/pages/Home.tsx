@@ -5,8 +5,9 @@ import { Link } from "react-router";
 import { InlineSearch, rowLine } from "../components/Search";
 import { useCompare } from "../lib/compare";
 import { useIndex, useMeta, type Row } from "../lib/data";
-import { amount, cn, displayName, industry, titleCase } from "../lib/format";
+import { cn, displayName, industry, titleCase } from "../lib/format";
 import { Dropdown } from "../components/Dropdown";
+import { Money } from "../components/Money";
 import { useTitle } from "../lib/title";
 import { FAM, FamChip, type Fam } from "../lib/family";
 
@@ -161,7 +162,7 @@ function Explore() {
                 {r.f.w > 0 && <FamChip fam="web" />}{r.f.s > 0 && <FamChip fam="social" />}{(r.f.h > 0 || r.j > 0) && <FamChip fam="hiring" />}{r.f.n > 0 && <FamChip fam="news" />}
               </span>
               <span className="hidden w-40 text-right sm:block">
-                {r.rev ? <><span className="tnum block text-[14px] font-medium text-ink">{r.rev.c} {amount(r.rev.a)}</span><span className="block text-[12px] text-muted">revenue {r.rev.y}{r.rev.t === "group" ? ", group" : ""}</span></>
+                {r.rev ? <><Money currency={r.rev.c} n={r.rev.a} className="block text-[14px] font-medium text-ink" /><span className="block text-[12px] text-muted">revenue {r.rev.y}{r.rev.t === "group" ? ", group" : ""}</span></>
                   : <span className="text-[12.5px] text-muted">No revenue filed</span>}
               </span>
               <CompareToggle o={r.o} />
