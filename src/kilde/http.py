@@ -181,8 +181,10 @@ class Fetcher:
 
     # Robots -------------------------------------------------------------
     async def allowed(self, url: str) -> bool:
-        """RFC 9309: 4xx robots.txt allows everything (we still skip 401/403 to be safe);
-        5xx or an unreachable robots.txt means complete disallow."""
+        """RFC 9309 2.3.1.3 and 2.3.1.4: a 4xx robots.txt (401 and 403 included: a static host such as S3 or
+        CloudFront answers 403 for a missing file) means no rules, so everything is allowed; a 5xx or an
+        unreachable robots.txt means complete disallow. A site that refuses our crawler outright answers 403 on
+        its pages too, and a 401 or 403 page is never read (the website step reports it as blocked)."""
         parts = urlsplit(url)
         origin = f"{parts.scheme}://{parts.netloc}"
         async with self.robots_locks[origin]:
@@ -190,7 +192,7 @@ class Fetcher:
                 rp: Protego | None
                 try:
                     snap = await self._raw_get(origin + "/robots.txt", None, cacheable=True)
-                    if snap.status in (401, 403) or snap.status >= 500:
+                    if snap.status >= 500:
                         rp = None
                     elif snap.status >= 400:
                         rp = Protego.parse("")
