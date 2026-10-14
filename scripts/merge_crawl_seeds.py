@@ -37,7 +37,7 @@ org's list by (number of sources desc, domain), the gzip written with mtime 0.
 
 Usage (pin tldextract, as for merge_cc_seeds.py):
   uv run --frozen --with tldextract==5.4.0 python scripts/merge_crawl_seeds.py \
-      --matches .../crawl/out/matches.jsonl --pages .../crawl/out/pages.jsonl.gz \
+      --matches .../crawl/out/matches_all.jsonl --pages .../crawl/out/pages.jsonl.gz --pages .../pages_ng.jsonl.gz \
       --universe .../dl_signalpost-company-universe-2025.jsonl.gz
 """
 from __future__ import annotations
@@ -59,9 +59,12 @@ import merge_cc_seeds as CC  # noqa: E402
 SEEDS = CC.SEEDS
 CLASS_SOURCE = {"orgnr": "crawl_orgnr", "strong_unique": "crawl_phone_email", "multi_signal": "crawl_signals"}
 SOURCES = tuple(CLASS_SOURCE.values())
-LICENCE = ("Kilde's own crawl (KildeCacheBuilder/1.0, robots.txt obeyed, 1 request at a time per host) of public "
-           "company front, contact, about and privacy pages, matched against Enhetsregisteret (NLOD 2.0); only "
-           "domain and source tags are stored; candidates only, pages remain subject to their owners' terms")
+LICENCE = ("Kilde's own crawl, 2026-10-14 (KildeCacheBuilder/1.0, robots.txt obeyed, 1 request at a time per "
+           "host) of public company front, contact, about and privacy pages on 325,241 domains: registered domains "
+           "from the Common Crawl host graph cc-main-2026-jul-aug-sep (.no block) and index, Brreg websites and email "
+           "domains, and name-derived domains, all resolved with ProjectDiscovery dnsx 1.3.1 (Common Crawl Terms of "
+           "Use for the graph and index); pages matched against Enhetsregisteret bulk data of 2026-10-13 (NLOD 2.0); "
+           "only domain and source tags are stored; candidates only, pages remain subject to their owners' terms")
 
 
 def read_jsonl_gz(path: Path) -> Iterator[dict]:
@@ -256,8 +259,8 @@ def write_seeds(doc: dict, path: Path) -> None:
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--matches", type=Path, required=True, help="the crawl matcher's matches.jsonl")
-    ap.add_argument("--pages", type=Path, help="the crawl's pages.jsonl.gz (all printed org numbers, for the "
-                    "crowded-domain and credit rules)")
+    ap.add_argument("--pages", type=Path, action="append", help="the crawl's pages.jsonl.gz (all printed org "
+                    "numbers, for the crowded-domain and credit rules); repeat for every page file of the crawl")
     ap.add_argument("--universe", type=Path, required=True, help="company universe jsonl.gz (name, legal_form, website)")
     ap.add_argument("--seeds", type=Path, default=SEEDS, help="seed cache to update in place")
     ap.add_argument("--out", type=Path, help="write here instead of --seeds")
@@ -266,7 +269,8 @@ def main(argv: list[str] | None = None) -> None:
     universe = CC.load_universe(a.universe, key)
     with open(a.matches, encoding="utf-8") as fh:
         matches = [json.loads(line) for line in fh if line.strip()]
-    printed, listing, before = printed_numbers(read_jsonl_gz(a.pages), key) if a.pages else ({}, set(), {})
+    pages = (rec for path in sorted(a.pages or []) for rec in read_jsonl_gz(path))  # fixed order: deterministic
+    printed, listing, before = printed_numbers(pages, key) if a.pages else ({}, set(), {})
     selected, dropped = select_pairs(matches, universe, key, printed, listing, before)
     with gzip.open(a.seeds, "rt", encoding="utf-8") as fh:
         doc = json.load(fh)
@@ -274,7 +278,8 @@ def main(argv: list[str] | None = None) -> None:
     stats = dict(doc.get("stats") or {})
     stats["crawl_merge"] = {
         "matches_sha256": hashlib.sha256(a.matches.read_bytes()).hexdigest(),
-        "matches": len(matches), "domains_with_printed_orgnr": len(printed),
+        "matches": len(matches), "page_files": [p.name for p in sorted(a.pages or [])],
+        "domains_with_printed_orgnr": len(printed),
         "thresholds": {"max_orgs_per_domain": CC.MAX_ORGS_PER_DOMAIN, "max_domains_per_org": CC.MAX_DOMAINS_PER_ORG},
         "dropped": dict(sorted(dropped.items())), **counts,
     }
