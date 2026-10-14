@@ -4085,7 +4085,8 @@ def parse_feed(raw: str) -> list[dict]:
         bm = re.search(r"<(content:encoded|description|summary|content)\b[^>]*>(.*?)</\1>", b, re.S | re.I)
         out.append({"title": _xml_text(t.group(1)), "url": url.strip(), "datetime": when,
                     "title_span": t.group(0), "date_span": dm.group(0),
-                    "body_words": body_word_count(_cdata(bm.group(2)), url.strip()) if bm else None})
+                    "body_words": body_word_count(_cdata(bm.group(2)), url.strip()) if bm else None,
+                    "text": _plain(_cdata(bm.group(2))) if bm else ""})
     return out
 
 
@@ -4136,7 +4137,7 @@ def _wp_posts(raw: str) -> list[dict]:
         pos = max(pos, tpos, dpos)
         body = (r.get("excerpt") or {}).get("rendered") if isinstance(r.get("excerpt"), dict) else None
         out.append({"title": title, "url": r["link"], "datetime": when, "title_span": tspan, "date_span": dspan,
-                    "body_words": body_word_count(body, r["link"])})
+                    "body_words": body_word_count(body, r["link"]), "text": _plain(body)})
     return out
 
 
@@ -4278,9 +4279,56 @@ def drop_demo(items: list[dict]) -> list[dict]:
     return items
 
 
+WEEKDAYS = {"mandag": 0, "tirsdag": 1, "onsdag": 2, "torsdag": 3, "fredag": 4, "lørdag": 5, "lordag": 5,
+            "søndag": 6, "sondag": 6, "monday": 0, "tuesday": 1, "wednesday": 2, "thursday": 3, "friday": 4,
+            "saturday": 5, "sunday": 6}
+WEEKDAY_DATE = re.compile(r"(?i)\b(" + "|".join(WEEKDAYS) + r")\s+(?:den\s+)?(\d{1,2})\.?\s*(" + _MON +
+                          r")\.?(?:\s+(20\d\d))?(?![\w])")
+YEAR_WORD = re.compile(r"(?<![\d/.\-])(20\d\d)(?![\d/.\-])")
+
+
+def _plain(html_text: str | None) -> str:
+    import html as _html
+    return " ".join(_html.unescape(re.sub(r"<[^>]+>", " ", html_text or "")).split())[:2000]
+
+
+def date_contradicted(item: dict, today: str) -> str | None:
+    """Why a post's publish date cannot be its real date, or None. A reused post (an annual meeting notice
+    edited every year) keeps its first publish date: its slug, title or text then names a later year that has
+    already come (a year after the publish year, up to this year), or a weekday and date that fall on that
+    weekday neither in the publish year nor the next (the body counts a year only two or more years on).
+    Precision first: such an item is withheld, never re-dated."""
+    from datetime import date as _date
+    pub = int(item["datetime"][:4])
+    slug = unquote(urlsplit(item["url"]).path)
+    hay = " ".join((item.get("title") or "", item.get("text") or ""))
+    own = slug.replace("-", " ").replace("/", " ").replace("_", " ") + " " + (item.get("title") or "")
+    body = item.get("text") or ""
+    # the slug or title naming a later year; the body two or more years on (next year's plans are common)
+    for y, lead in [(int(x), 0) for x in YEAR_WORD.findall(own)] + [(int(x), 1) for x in YEAR_WORD.findall(body)]:
+        if pub + lead < y <= int(today[:4]):
+            return f"names the year {y}, after its publish date"
+    for m in WEEKDAY_DATE.finditer(hay):
+        wd, d, mon = WEEKDAYS[m.group(1).lower()], int(m.group(2)), MONTHS.get(m.group(3).lower().rstrip("."))
+        if not mon:
+            continue
+        years = [int(m.group(4))] if m.group(4) else [pub, pub + 1]
+        ok = False
+        for y in years:
+            try:
+                ok = ok or _date(y, mon, d).weekday() == wd
+            except ValueError:
+                pass
+        if not ok:
+            return f"'{m.group(0)}' does not fall on that weekday in {'/'.join(map(str, years))}"
+    return None
+
+
 def _news_ok(item: dict, floor: str, domain: str) -> bool:
     day = item["datetime"][:10]
     today = datetime.now(timezone.utc).date().isoformat()
+    if date_contradicted(item, today):
+        return False
     path = urlsplit(item["url"]).path
     if item.get("inline"):
         path = "/#inline"

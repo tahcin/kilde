@@ -2981,3 +2981,32 @@ def test_rate_limited_proving_page_fails_the_step_and_the_retry_proves_it():
     claims = run(FakeFetcher(pages), ctx2)
     assert claims["official_website"].availability == "available"
     assert claims["official_website"].match["method"] == "phone_and_name"
+
+
+def test_reused_post_with_a_later_year_or_wrong_weekday_is_withheld():
+    """Sognefjord shape: a 2024 WordPress post reused for the 2026 annual meeting keeps its 2024 date."""
+    wp = json.dumps([
+        _wp_row("Årsmøte i foreningen", "arsmote-2026", "2024-04-03", "<p>Velkommen til årsmøte torsdag 16. april kl 18.</p>"),
+        _wp_row("Innkalling til dugnad", "dugnad", "2024-05-02", "<p>Dugnad torsdag 16. april, ta med hansker.</p>"),
+        _wp_row("Ny brygge ferdig", "ny-brygge", "2024-06-12", "<p>Brygga sto ferdig tirsdag 11. juni 2024.</p>"),
+        _wp_row("Planer for neste år", "planer", "2024-11-12", "<p>I 2025 bygger vi nytt naust.</p>")])
+    body = f'<link href="/wp-content/a.css"><footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>'
+    f = _site({"https://fjellbekk.no/wp-json/wp/v2/posts?per_page=20&_fields=title,link,date,date_gmt,excerpt":
+               (200, wp, "application/json")}, body=body)
+    ctx = ctx_for(hjemmeside="fjellbekk.no", stiftelsesdato="2020-01-01")
+    run(f, ctx)
+    titles = sorted(str(c.value).rsplit(" (", 1)[0] for c in ctx.claims if c.field == "dated_news" and c.availability == "available")
+    # the slug naming 2026 and a 'torsdag 16. april' that is no Thursday in 2024 or 2025 are withheld;
+    # a weekday that matches the year, and next year's plans in the body, stay
+    assert titles == ["Ny brygge ferdig", "Planer for neste år"]
+
+
+def test_date_contradicted_rules():
+    item = {"title": "Sommerfest", "url": "https://x.no/sommerfest/", "datetime": "2023-06-01T10:00:00+02:00",
+            "text": "Fest lørdag 16. juni"}
+    assert W.date_contradicted(item, "2026-10-14")  # 16 June is a Friday in 2023 and a Sunday in 2024
+    item["text"] = "Fest lørdag 17. juni"
+    assert W.date_contradicted(item, "2026-10-14") is None  # Saturday 17 June 2023
+    item["title"] = "Sommerfest 2025"
+    assert W.date_contradicted(item, "2026-10-14")
+    assert W.date_contradicted(item, "2024-10-14") is None  # 2025 had not come yet: a plan, not a reuse
