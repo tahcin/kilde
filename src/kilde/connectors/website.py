@@ -3181,12 +3181,28 @@ def extract_contacts(pages: list[Page], domain: str, registry_phones: set[str] =
                                      or (len(site_key) >= 6 and lq == site_key))
     own = [(a, ps) for a, ps in emails.items() if ours_mail(a)]
     generic = [x for x in own if x[0].split("@")[0] in GENERIC_MAILBOX]
-    # personal mailboxes only when the site publishes no generic one, and then just one
-    picked = generic[:2] if generic else own[:1]
+    # personal mailboxes only when the site publishes no generic one, and then just one that reads as a person's
+    # address (ola@, ola.nordmann@, on@) or is the registry email; an internal team inbox is not a contact
+    picked = generic[:2] if generic else [x for x in own if x[0] in registry_emails or _person_mailbox(x[0])
+                                                    or _company_mailbox(x[0], name_key, domain)][:1]
     em = [(a, p, raw_span(p, a, s)) for a, (p, s) in picked]
     order = sorted(phones.items(), key=lambda x: x[0][-8:] not in registry_phones)
     ph = [(n, p, s) for n, (p, s) in order][:2]
     return em, ph, len(skipped)
+
+
+def _company_mailbox(addr: str, name_key: str, domain: str) -> bool:
+    """The mailbox name is the company's own name or its site's domain label ('fjellbekktrevare@')."""
+    lq = re.sub(r"[^a-z0-9]", "", _translit(addr.rsplit("@", 1)[0]))
+    site_key = re.sub(r"[^a-z0-9]", "", domain.split(".")[0])
+    return (len(name_key) >= 4 and name_key in lq) or (len(site_key) >= 4 and site_key in lq)
+
+
+def _person_mailbox(addr: str) -> bool:
+    """The mailbox name is a person's: first name, surname or initials, at most three parts ('kari',
+    'kari.nordmann', 'k.nordmann', 'kn')."""
+    parts = [x for x in re.split(r"[._\-]", addr.rsplit("@", 1)[0].lower()) if x]
+    return 0 < len(parts) <= 3 and all((x.isalpha() and len(x) <= 3) or person_word(x) for x in parts)
 
 
 def _squash(s: str) -> str:

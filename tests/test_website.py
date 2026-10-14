@@ -3292,3 +3292,13 @@ def test_sitemap_span_quotes_cdata_entries_verbatim():
     assert urls == [("https://fjellbekk.no/a/", "2026-05-01T10:00:00+00:00")]
     span = W.sitemap_span(raw, *urls[0])
     assert span in raw and span.startswith("https://fjellbekk.no/a/") and span.endswith("2026-05-01T10:00:00+00:00")
+
+
+def test_internal_inbox_is_not_a_contact_email_but_a_person_or_role_box_is():
+    assert W._person_mailbox("kari.hansen@fjellbekk.no") and W._person_mailbox("kn@fjellbekk.no")
+    assert not W._person_mailbox("mmpdpnpipelinecross@fjellbekk.no")
+    page = W.parse_page(Snapshot("https://fjellbekk.no/", "https://fjellbekk.no/", 200, "x",
+                                 html('<footer>Fjellbekk Trevare AS <a href="mailto:pipelinecrossing@fjellbekk.no">x</a>'
+                                      '</footer>').encode(), "text/html"))
+    em, _ph, _n = W.extract_contacts([page], "fjellbekk.no", set(), W.Scope(OURS, ["fjellbekk", "trevare"]))
+    assert em == []
