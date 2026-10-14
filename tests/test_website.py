@@ -2963,3 +2963,21 @@ def test_budget_note_lists_domains_tried(monkeypatch):
     claims = run(f, ctx_for(hjemmeside="fjellbekk.no"))
     note = claims["official_website"].note
     assert note.startswith("budget_exhausted: not checked") and "domains tried: fjellbekk.no (no_match)" in note
+
+
+def test_rate_limited_proving_page_fails_the_step_and_the_retry_proves_it():
+    """Aabakken shape: the contact page answers 429 on the first attempt; the step fails (retry pass), and the
+    retry, with the page answering, proves the site by registry phone and legal name."""
+    home = html("<h1>Fjellbekk Trevare</h1><a href='/kontakt-oss'>Kontakt oss</a>")
+    pages = {"https://fjellbekktrevare.no/": (200, home),
+             "https://fjellbekktrevare.no/kontakt-oss": (429, "slow down")}
+    ctx = ctx_for(mobil="41000001")
+    claims = run(FakeFetcher(pages), ctx)
+    assert claims["official_website"].availability == "failed" and ctx.module_states["website"] == "timeout"
+    pages["https://fjellbekktrevare.no/kontakt-oss"] = (200, html("<p>Fjellbekk Trevare AS, tlf 41 00 00 01</p>"))
+    W._SEARCH.clear()
+    ctx2 = ctx_for(mobil="41000001")
+    ctx2.facts["website_retry"] = True
+    claims = run(FakeFetcher(pages), ctx2)
+    assert claims["official_website"].availability == "available"
+    assert claims["official_website"].match["method"] == "phone_and_name"

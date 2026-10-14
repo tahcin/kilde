@@ -37,3 +37,10 @@ def test_robots_rules_obeyed():
     f = fetcher(200, "User-agent: *\nDisallow: /\n")
     with pytest.raises(Blocked):
         asyncio.run(f.get("https://fjellbekk.no/", robots=True))
+
+
+def test_retry_after_header_forms():
+    from kilde.http import retry_after
+    assert retry_after(None) == 2.0 and retry_after("1") == 1.0 and retry_after("120") == 5.0
+    assert retry_after("Wed, 21 Oct 2015 07:28:00 GMT") == 0.0  # a date in the past: no wait
+    assert retry_after("soon") == 2.0

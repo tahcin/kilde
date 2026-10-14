@@ -92,6 +92,26 @@ class Budget:
         self.by_host[host] += 1
 
 
+RETRY_AFTER_MAX = 5.0  # seconds waited in place; a longer wait is left to the website step's retry pass
+
+
+def retry_after(value: str | None) -> float:
+    """Seconds to wait from a Retry-After header (delay-seconds or an HTTP date), 2 when absent or unreadable,
+    never more than RETRY_AFTER_MAX."""
+    if not value:
+        return 2.0
+    try:
+        secs = float(value.strip())
+    except ValueError:
+        try:
+            from email.utils import parsedate_to_datetime
+            from datetime import datetime, timezone
+            secs = (parsedate_to_datetime(value) - datetime.now(timezone.utc)).total_seconds()
+        except (TypeError, ValueError, IndexError):
+            secs = 2.0
+    return max(0.0, min(secs, RETRY_AFTER_MAX))
+
+
 class Fetcher:
     def __init__(self, budget: Budget, *, per_host: int = 2, total: int = 96, timeout: float = 15.0,
                  cache_dir: str | None = None):
@@ -251,7 +271,7 @@ class Fetcher:
                 r = await self.client.get(url, headers=headers, timeout=slow) if slow else \
                     await self.client.get(url, headers=headers)
                 if r.status_code in (429, 503) and attempt == 0:
-                    await asyncio.sleep(min(float(r.headers.get("retry-after", "2") or 2), 5))
+                    await asyncio.sleep(retry_after(r.headers.get("retry-after")))
                     continue
                 return r
             except (httpx.TimeoutException, httpx.TransportError) as exc:
