@@ -1536,6 +1536,33 @@ def _declares_site(r: dict, host: str) -> bool:
     return any(d and same_site(bare(host), bare(d)) for d in (hj, dom))
 
 
+def _mask_our_name(text: str, our_name: str) -> str:
+    """The text with every occurrence of our own name blanked out: the full legal name with its form ('Optikk
+    2020 AS') and the name without the form ('Optikk 2020'). Another entity's name seen only
+    inside ours ('Agder Bolig' inside 'Agder Bolig Entreprenør') is then no longer found."""
+    for rx in (_full_name_rx(our_name), name_regex(name_words(our_name))):
+        if rx:
+            text = rx.sub(" ", text)
+    return text
+
+
+def _other_entity_on_site(pages: list[Page], r: dict, ctx: CompanyContext) -> bool:
+    """Another registered entity appears on the site: its org number is printed, or its own name (legal form
+    optional) is visible as words outside every occurrence of our own name. A name identical to ours, or one
+    that contains our whole name ('Fjellbekk Trevare AS' or 'Fjellbekk Trevare AS avd Testby' beside 'Fjellbekk
+    Trevare ASA') cannot be told from ours, so there any visible occurrence of our name counts for it too."""
+    org = r.get("organisasjonsnummer") or ""
+    if org and any(org == "".join(m.groups()) for p in pages for m in NINE.finditer(p.text)):
+        return True  # its org number printed, labelled or not
+    ours = (ctx.registry or {}).get("navn") or ""
+    ow = [_translit(w) for w in name_words(ours)]
+    tw = [_translit(w) for w in name_words(r.get("navn") or "")]
+    if ow and any(tw[i:i + len(ow)] == ow for i in range(len(tw) - len(ow) + 1)):
+        return any(_visible(name_regex(name_words(ours)), p.text) for p in pages)
+    rx = name_regex(name_words(r.get("navn") or ""))
+    return any(_visible(rx, _mask_our_name(p.text, ours)) for p in pages)
+
+
 async def _colocated_namesake(sp: "_Spend", ctx: CompanyContext, entity: dict | None = None,
                               skip: frozenset = frozenset()) -> str | None:
     """Another registered entity (main unit or another company's sub-unit) at our registered street address that
@@ -1767,6 +1794,9 @@ async def _check_collision(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> Non
             continue
         what = (f"near-namesake {r.get('navn')} ({org}) shares this company's registered "
                 f"{'address' if our_addr and _addr_key(r) == our_addr else 'phone'}")
+        if v.method == "registry_website_and_name" and v.pages and not _declares_site(r, v.pages[0].host) \
+                and not _other_entity_on_site(v.pages, r, ctx):
+            continue  # our declared site; the namesake neither declares it, mails from it nor appears on it
         if v.method == "registry_website_and_name":
             v.namesake = (r.get("navn") or "", org)
             v.namesake_owner = r.get("overordnetEnhet") or org
@@ -1810,6 +1840,10 @@ async def _check_collision(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> Non
         owner = r.get("overordnetEnhet")
         what = (f"another registered entity shares the name: {r.get('navn')} ({org}"
                 + (f", workplace of {owner}" if owner else "") + ")")
+        if v.method == "registry_website_and_name" and v.pages and not _declares_site(r, v.pages[0].host) \
+                and not _other_entity_on_site(v.pages, r, ctx):
+            continue  # our declared site: a namesake that neither declares it nor appears on it ('A-Optikk AS'
+            # beside 'Optikk 2020 AS', whose core words match once the letter and the number are dropped)
         if v.method == "registry_website_and_name":
             # The company declared this website itself, so it stays its website, but the site may equally speak
             # for the namesake (often a subsidiary): nothing is derived from it.
@@ -2914,6 +2948,19 @@ async def confirm_dominant(sp: "_Spend", ctx: CompanyContext, names: list[tuple]
     return out
 
 
+def _label_only_inside_our_name(pages: list[Page], label: str, org: str, others: dict, ctx: CompanyContext) -> bool:
+    """A confirmed sister label that is a run of our own name's words ('agder bolig' for 'Agder Bolig
+    Entreprenør AS', taken from a logo link that splits our name over two lines) names the sister only when it
+    is visible as words outside every occurrence of our own name, or the sister's org number is printed."""
+    ours = [_translit(w) for w in name_words((ctx.registry or {}).get("navn") or "")]
+    lab = label.split()
+    if not any(ours[i:i + len(lab)] == lab for i in range(len(ours) - len(lab) + 1)) or str(org) in others:
+        return False
+    rx = name_regex(lab)
+    our_name = (ctx.registry or {}).get("navn") or ""
+    return not any(_visible(rx, _mask_our_name(p.text, our_name)) for p in pages)
+
+
 async def confirm_sisters(sp: "_Spend", ctx: CompanyContext, labels: list[str], limit: int = 2) -> dict[str, str]:
     """Labels that the registry knows as a different company: label -> org number."""
     out: dict[str, str] = {}
@@ -3893,6 +3940,7 @@ async def prepare_scope(sp: _Spend, ctx: CompanyContext, v: Verdict) -> Scope:
             others.setdefault(num, s)
     others = {k: (x[1] if isinstance(x, tuple) else x) for k, x in others.items()}
     sisters = await confirm_sisters(sp, ctx, sister_labels(v.pages, words))
+    sisters = {k: x for k, x in sisters.items() if not _label_only_inside_our_name(v.pages, k, x, others, ctx)}
     kinds: dict[str, str] = {}
     our_owners: set[str] = set()
     named = [n for n in other_company_names(v.pages, words, our_owners) if n[0] not in sisters][:6]

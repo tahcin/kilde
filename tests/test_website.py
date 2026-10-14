@@ -3632,3 +3632,82 @@ def test_a_registered_name_of_only_place_or_trade_words_is_no_namesake():
         ctx = ctx_for(**rec)
         run(FakeFetcher(pages), ctx)
         assert bool(ctx.claims_for("official_website")) is published, name
+
+
+# ---------------------------------------------------------------- another entity counts only where it appears itself
+def _reset_search_caches():
+    for c in (W._SEARCH, W._NAME_SEARCH, W._SISTER_CACHE, W._ROW_CACHE, W._HJEM_CACHE):
+        c.clear()
+
+
+def test_namesake_matching_only_after_dropped_letter_and_number_needs_to_appear():
+    """'A-Fjellbekk AS' and 'Fjellbekk 2020 AS' share their core words once the letter and the number are
+    dropped. On our registry-declared site it counts only where its own name or org number is printed."""
+    ig = '<a href="https://www.instagram.com/fjellbekk2020">ig</a>'
+    body = f"<h1>Fjellbekk 2020</h1><footer>Fjellbekk 2020, Lyngveien 12B, 9999 Testby {ig}</footer>"
+    row = {"organisasjonsnummer": SISTER, "navn": "A-FJELLBEKK AS",
+           "forretningsadresse": {"adresse": ["Kvistvegen 9"], "postnummer": "9888"}}
+
+    def go(b):
+        _reset_search_caches()
+        pages = {"https://fjellbekk2020.no/": (200, html(b, title="Fjellbekk 2020"))}
+        pages.update(_brreg("enheter", "fjellbekk", [row]))
+        return run(FakeFetcher(pages), ctx_for(navn="FJELLBEKK 2020 AS", hjemmeside="fjellbekk2020.no"))
+    claims = go(body)
+    assert claims["official_website"].value == "fjellbekk2020.no"
+    assert claims["social_profile"].availability == "available"
+    for extra in ("Samarbeid med A-Fjellbekk AS.", "Butikk: A-Fjellbekk, Kvistvegen 9.", f"Partner org.nr {SISTER}."):
+        claims = go(body.replace("</footer>", f" {extra}</footer>"))
+        assert claims["official_website"].availability == "ambiguous", extra
+        assert "social_profile" not in claims or claims["social_profile"].availability != "available"
+
+
+def test_namesake_containing_our_whole_name_still_shares_our_declared_site():
+    """A registered 'Fjellbekk Trevare AS' beside us, 'Fjellbekk Trevare ASA': any 'Fjellbekk Trevare' on the
+    page may be either, so the site stays shared (masking our name never hides an identical one)."""
+    assert W._other_entity_on_site([W.parse_page(Snapshot("https://fjellbekk.no/", "https://fjellbekk.no/", 200, "x",
+                                    html("<h1>Fjellbekk Trevare</h1>").encode(), "text/html"))],
+                                   {"organisasjonsnummer": SISTER, "navn": "FJELLBEKK TREVARE AS"},
+                                   ctx_for(navn="FJELLBEKK TREVARE ASA"))
+
+
+def test_near_namesake_at_our_address_absent_from_our_declared_site_does_not_share_it():
+    """'K. Fjellbekk AS' shares only our street address, has no website and is not on the site: our
+    registry-declared site stays ours. Named on the site, or by its org number, it shares it."""
+    row = {"organisasjonsnummer": OTHER, "navn": "K. FJELLBEKK AS",
+           "forretningsadresse": {"adresse": ["Lyngveien 12B"], "postnummer": "9999"}}
+    body = ('<h1>Fjellbekk Trevare AS</h1><footer>Fjellbekk Trevare AS, Lyngveien 12B, 9999 Testby'
+            '<a href="https://www.instagram.com/fjellbekktrevare">ig</a></footer>')
+
+    def go(b):
+        _reset_search_caches()
+        return run(_site(_coloc_search(row), body=b), ctx_for(hjemmeside="fjellbekk.no"))
+    claims = go(body)
+    assert claims["official_website"].value == "fjellbekk.no"
+    assert claims["social_profile"].availability == "available"
+    for extra in ("Utleier: K. Fjellbekk AS", f"Utleier org.nr {OTHER}"):
+        claims = go(body.replace("</footer>", f" {extra}</footer>"))
+        assert claims["official_website"].availability == "ambiguous", extra
+        assert "social_profile" not in claims or claims["social_profile"].availability != "available"
+
+
+def test_sister_label_seen_only_inside_our_own_name_is_no_sister():
+    """A logo link 'Fjellbekk Trevare' with 'Entreprenør' on the next line is our own name split in two, even
+    though 'Fjellbekk Trevare AS' is registered. Written on its own ('Fjellbekk Trevare AS'), it is a sister."""
+    body = ('<header><a href="https://fjellbekk.no/">Fjellbekk Trevare</a> Entreprenør</header>'
+            f'<footer>Fjellbekk Trevare Entreprenør AS · Org.nr {OURS}'
+            '<a href="https://www.instagram.com/fjellbekktrevare">ig</a></footer>')
+    search = {W.BRREG_SEARCH + "?navn=fjellbekk%20trevare&size=20":
+              (200, json.dumps({"_embedded": {"enheter": [{"organisasjonsnummer": SISTER,
+                                                             "navn": "FJELLBEKK TREVARE AS"}]}}), "application/json")}
+
+    def go(b):
+        _reset_search_caches()
+        pages = {"https://fjellbekk.no/": (200, html(b, title="Fjellbekk Trevare Entreprenør"))}
+        pages.update(search)
+        return run(FakeFetcher(pages), ctx_for(navn="FJELLBEKK TREVARE ENTREPRENØR AS", hjemmeside="fjellbekk.no"))
+    claims = go(body)
+    assert claims["official_website"].value == "fjellbekk.no"
+    assert claims["social_profile"].availability == "available"
+    claims = go(body.replace("</footer>", " Søsterselskap: Fjellbekk Trevare AS</footer>"))
+    assert claims["social_profile"].availability != "available"
