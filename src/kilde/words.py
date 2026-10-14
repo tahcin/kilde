@@ -119,3 +119,27 @@ def person_handle(handle: str, words: list[str], places: set[str] = frozenset())
                 continue  # the name with its legal form glued on ('leifhansenas') is the company's handle
             return True
     return False
+
+
+REGION_SUFFIX = {"norway", "norge", "norden", "nordic", "nordics", "sweden", "sverige", "denmark", "danmark",
+                 "finland", "suomi", "germany", "deutschland", "brasil", "brazil", "usa", "america", "americas",
+                 "canada", "uk", "us", "na", "eu", "europe", "asia", "apac", "emea", "latam", "global", "intl",
+                 "international", "careers", "jobs", "karriere", "jobb", "news", "nyheter", "press", "presse",
+                 "ir", "investors", "support", "help", "kundeservice"}
+
+
+def regional_variant(handle: str, others: list[str]) -> bool:
+    """The handle is another handle of the same brand with a country, region or department ending
+    ('equinor_uk', 'equinor_de', 'brandcareers' beside 'equinor', 'brand'): a regional or department
+    account, which may be another legal entity's; the main brand handle is the company's profile."""
+    h = handle.lower().strip("/@")
+    for o in others:
+        o = o.lower().strip("/@")
+        if not o or o == h or not h.startswith(o):
+            continue
+        rest = h[len(o):].lstrip("_-.")
+        if rest in ("as", "asa", "sa", "official", "offisiell"):
+            continue
+        if rest in REGION_SUFFIX or (len(rest) == 2 and rest.isalpha() and h[len(o)] in "_-."):
+            return True
+    return False

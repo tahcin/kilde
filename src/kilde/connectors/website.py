@@ -37,7 +37,7 @@ from ..http import Blocked, BudgetExhausted, Fetcher
 from ..spans import contains_core
 from ..templates import body_word_count, is_template_url, stub_posts, template_post
 from ..model import COMPANY_OWNED, CompanyContext, Evidence, Snapshot
-from ..words import generic_word, person_handle, social_tokens
+from ..words import generic_word, person_handle, regional_variant, social_tokens
 
 METHOD = "website_identity_v1"
 EXTRACT = "website_extract_v1"
@@ -1464,6 +1464,17 @@ def _distinct_words(name: str) -> list[str]:
             and _translit(w) not in COMMON_NOUNS]  # a trade word ('frisør') is shared by every salon
 
 
+_COLOC_ROW: dict[str, dict] = {}  # the namesake found at our address, per company
+
+
+def _declares_site(r: dict, host: str) -> bool:
+    """The registered entity names this site as its website or uses it as its email domain."""
+    hj = bare(host_of(r.get("hjemmeside") or "")) if (r.get("hjemmeside") or "").strip() else ""
+    mail = (r.get("epostadresse") or "").lower()
+    dom = mail.rsplit("@", 1)[1] if "@" in mail else ""
+    return any(d and same_site(bare(host), bare(d)) for d in (hj, dom))
+
+
 async def _colocated_namesake(sp: "_Spend", ctx: CompanyContext, entity: dict | None = None,
                               skip: frozenset = frozenset()) -> str | None:
     """Another registered entity (main unit or another company's sub-unit) at our registered street address that
@@ -1491,6 +1502,8 @@ async def _colocated_namesake(sp: "_Spend", ctx: CompanyContext, entity: dict | 
                                        for x in name_words(r.get("navn") or "")):
                             continue  # our own units, our staff's club, and an owner's holding or property company
                         if t in {_translit(x) for x in name_words(r.get("navn") or "")} and _entity_keys(r) & ours:
+                            if entity is None:
+                                _COLOC_ROW[ctx.org] = r
                             return f"{r.get('navn')} ({r.get('organisasjonsnummer')})"
     return None
 
@@ -1612,7 +1625,15 @@ async def _check_collision(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> Non
         v.status, v.method = "name_only", None
         v.detail = f"{form} entities need the org number on the site or a registry-declared website"
         return
+    _COLOC_ROW.pop(ctx.org, None)
     conflict = await _identity_conflict(sp, ctx, v)
+    if conflict and v.method == "registry_website_and_name" and conflict.startswith("another registered entity at our address") \
+            and v.pages and not _declares_site(_COLOC_ROW.get(ctx.org) or {}, v.pages[0].host):
+        # The shared-address rule only neutralises proof by address. A website the registry declares for us, that
+        # the namesake at our address neither declares nor mails from (it has its own site), stays ours; the
+        # heading-namesake and co-declared-site checks still apply.
+        v.detail = f"{v.detail}; {conflict}, which does not declare this site"
+        conflict = None
     if conflict and not (v.method == "registry_website_and_name" and "shared" in conflict):
         if v.method == "registry_website_and_name":
             v.namesake = (conflict, "")
@@ -2513,12 +2534,30 @@ SUPPLIER_CONTEXT = re.compile(r"(?i)leverandør|leverandor|supplier|vendor|datab
                               r"tredjepart|third[ -]part|betalingsløsning|payment provider")
 
 
+SUPPLIER_AFTER = re.compile(r"(?i)^\s*,?\s*(?:er|is|som er|as|acts as)?\s*(?:også|also|vår|our|var)?\s*"
+                            r"(?:leverandør|leverandor|supplier|vendor|databehandler|data processor|processor|webbyrå|"
+                            r"byrå|agency|samarbeidspartner|partner)")
+SUPPLIER_BEFORE = re.compile(r"(?i)(?:server(?:e|ne|s)?|hosting|databehandler(?:avtale)?|data processor|leverandør|"
+                             r"leverandor|supplier|vendor|tredjepart|third[ -]part)[^.!?]{0,40}$")
+BIO_BEFORE = re.compile(r"(?i)\b(?:ceo|cfo|cto|coo|daglig leder|adm\.? dir\.?|administrerende direktør|direktør|director|"
+                        r"styreleder|styremedlem|chairman|chair|board member|founder|grunnlegger|gründer|"
+                        r"partner|jobbet|jobber|arbeidet|arbeider|ansatt|employed|worked|works|erfaring|experience|"
+                        r"bakgrunn|background|tidligere|formerly|previously)\b[^.!?]{0,40}$")
+
+
+def _supplier_or_bio(before: str, after: str) -> bool:
+    """A company named as the site's supplier or data processor ('Adjoy AS er leverandør', 'servere som driftes av
+    X AS'), or as a person's employer in a bio ('CEO of Norway King Crab AS and Troika Seafood AS')."""
+    return bool(SUPPLIER_AFTER.search(after) or SUPPLIER_BEFORE.search(before) or BIO_BEFORE.search(before))
+
+
 def _owner_statement(before: str, at: str) -> bool:
     """An ownership or controller phrase names this company as the site's operator, unless a supplier or data
     processor word stands between that phrase and the name ('servers operated by the supplier for our
     e-commerce: Visbook AS' names a supplier, not the operator)."""
     if OWNER_CONTEXT.search(at):
         return True
+    before = re.split(r"[.!?]\s", before)[-1]  # an owner phrase in the previous sentence names someone else
     hits = list(OWNER_CONTEXT.finditer(before))
     if not hits:
         return False
@@ -2547,11 +2586,23 @@ OPERATOR_PAGE = re.compile(r"(?i)om-?oss|about|kontakt|contact|personvern|privac
 OPERATOR_MARK = re.compile(r"(?i)footer|header|contact|kontakt|imprint|impressum|copyright|address|adresse|company-info")
 
 
+STATE_CLASS = re.compile(r"(?i)(^|[-_])(has|no|with|without|hide|show|is|sticky|fixed)[-_]")
+
+
+def _block_marks(el) -> str:
+    """Class and id words that mark an element as a block (footer, header, contact). The page-wide <html> and
+    <body> never are, nor are state classes that only say a page has a block ('et-tb-has-footer')."""
+    if el.name in ("html", "body"):
+        return ""
+    toks = [t for t in (el.get("class") or []) + [el.get("id") or ""] if t and not STATE_CLASS.search(t)]
+    return " ".join(toks)
+
+
 def _owner_text(p: Page) -> str:
     """Text where an operator is named: footer, imprint and copyright blocks."""
     parts = []
     for el in p.soup.find_all(True):
-        marks = " ".join(el.get("class") or []) + " " + (el.get("id") or "")
+        marks = _block_marks(el)
         if el.name == "footer" or re.search(r"(?i)footer|imprint|impressum|copyright", marks):
             parts.append(el.get_text(" ", strip=True))
     return " | ".join(parts)
@@ -2561,7 +2612,7 @@ def _operator_text(p: Page) -> str:
     """Text in operator positions: header, footer, navigation, address and contact or imprint blocks."""
     parts = []
     for el in p.soup.find_all(True):
-        marks = " ".join(el.get("class") or []) + " " + (el.get("id") or "")
+        marks = _block_marks(el)
         if el.name in ("header", "footer", "address") or OPERATOR_MARK.search(marks):
             parts.append(el.get_text(" ", strip=True))
     return " | ".join(parts)
@@ -2574,6 +2625,8 @@ def other_company_names(pages: list[Page], words: list[str]) -> list[tuple[str, 
     other sites (web agency and partner credits) are skipped. Positional names come first."""
     ours = [_translit(w) for w in words]
     best: dict[tuple[str, str], int] = {}
+    side: set[tuple[str, str]] = set()
+    owned: set[tuple[str, str]] = set()
     for p in pages:
         optext = _operator_text(p)
         ownertext = _owner_text(p)
@@ -2612,13 +2665,19 @@ def other_company_names(pages: list[Page], words: list[str]) -> list[tuple[str, 
                 if CREDIT.search(before) or (not is_title and " ".join(run) and " ".join(run) in offsite):
                     continue  # a web agency or partner credit
                 key = (" ".join(ws), m.group(2).lower())
-                ctx_hit = _owner_statement(txt[max(0, m.start() - 60):m.start()], txt[m.start():m.end() + 10])
+                ctx_hit = _owner_statement(txt[max(0, m.start() - 60):m.start()], txt[m.start():m.end() + 16])
                 mention = m.group(0).strip()
+                if _supplier_or_bio(txt[max(0, m.start() - 60):m.start()], txt[m.end():m.end() + 40]):
+                    side.add(key)
+                elif ctx_hit or is_title:
+                    owned.add(key)
                 positional = is_title or ctx_hit or op_page or (mention in optext)
                 operator = is_title or ctx_hit or (mention in ownertext)
                 score[key] = max(score.get(key, 0), 4 if (is_title or ctx_hit) else (3 if operator else (2 if positional else 1)))
         for k, v in score.items():
             best[k] = max(best.get(k, 0), v)
+    for k in side - owned:
+        best[k] = 1  # a supplier, data processor or a person's other employer: named, never presenting the site
     return [(k[0], k[1], best[k] >= 2, best[k] >= 3, best[k] >= 4) for k in sorted(best, key=lambda k: -best[k])]
 
 
@@ -2638,7 +2697,8 @@ def _staff_body(row: dict) -> bool:
 
 
 STAFF_BODIES = re.compile(r"(?i)bedriftsklubb|bedriftsidrettslag|bil(klubb)?\b|velferd|personalforening|fagforening|"
-                          r"pensjonskasse|pensjon|idrettslag|photo club|fotoklubb|kunstforening|vennefor")
+                          r"pensjonskasse|pensjon|idrettslag|photo club|fotoklubb|kunstforening|vennefor|"
+                          r"feriested|feriehjem|ferieheim|hytteforening|velferdsstiftelse")
 
 
 def _tied(row: dict, e: dict, site_host: str) -> str | None:
@@ -2880,6 +2940,11 @@ def collect_socials(pages: list[Page], words: list[str], domains: set[str], scop
                 kept.append((not named, u, (plat, u, p, s)))
             else:
                 dropped.append(u)
+        hs = [re.sub(r"[^a-z0-9_.\-]", "", _translit(unquote([x for x in urlsplit(u).path.split("/") if x][-1])))
+              if [x for x in urlsplit(u).path.split("/") if x] else "" for _n, u, _r in kept]
+        regional = [u for (_n, u, _r), h in zip(kept, hs) if h and regional_variant(h, hs)]
+        dropped += regional
+        kept = [x for x in kept if x[1] not in regional]
         out += [x[2] for x in sorted(kept)[:2]]  # at most two per platform, name-matched handles first
     return out, sorted(dropped)
 
@@ -3657,6 +3722,9 @@ async def prepare_scope(sp: _Spend, ctx: CompanyContext, v: Verdict) -> Scope:
             site_label = re.sub(r"[^a-z0-9]", "", bare(home.host).split(".")[0])
             if label == site_label or any(t in label for t in own_tokens):
                 continue  # the company's own alternate domain
+            if _initials_label(label, (ctx.registry or {}).get("navn") or "") and \
+                    not await _declared_by_other(sp, ctx, dom):
+                continue  # our name's initials ('laa.no' for Larhammer Aarseth Advokatfirma), declared by nobody else
             other_mail.add(dom)
     if other_mail:
         # a contact at our own registry group's domain (a parent's press desk on a brand site) is the group's,
@@ -3688,6 +3756,27 @@ async def prepare_scope(sp: _Spend, ctx: CompanyContext, v: Verdict) -> Scope:
         codeclared = {k: x for k, x in codeclared.items() if not ours_or_staff(k, x)}
         other_mail = set()
         ctx.facts["website_group_parent"] = sorted(group)[:20]
+    if own_proof and (dominant or sisters or others) and (ctx.registry or {}).get("erIKonsern"):
+        # Our own registry group's companies (parent, sisters, subsidiaries) named on a site that is ours by
+        # registry declaration or by our org number do not take it away from us; a group company stated as the
+        # site's operator still does unless our org number sits in an operator position. Unrelated companies,
+        # org numbers in operator positions and co-declarations are judged as before.
+        fam = await _group_orgs(sp, ctx)
+        op_ours = _orgnr_in_operator_position(v, ctx.org)
+        if fam:
+            def in_family(k: str, x) -> bool:
+                return str(x) in fam and (kinds.get(k) != "stated" or op_ours)
+            gone = sorted({str(x) for k, x in dominant.items() if in_family(k, x)}
+                          | {str(x) for k, x in sisters.items() if str(x) in fam}
+                          | {k for k in others if k in fam and not _num_in_operator_position(v, k)})
+            dominant = {k: x for k, x in dominant.items() if not in_family(k, x)}
+            sisters = {k: x for k, x in sisters.items() if str(x) not in fam}
+            others = {k: x for k, x in others.items() if not (k in fam and not _num_in_operator_position(v, k))}
+            if gone:
+                ctx.facts["website_group_mentions"] = gone[:20]
+    if codeclared and v.source == "registry" and not (v.cross or v.path_scoped) and \
+            reg_host and same_site(bare(home.host), reg_host):
+        codeclared = await _family_codeclared(sp, ctx, codeclared, home.host)
     if others and _orgnr_in_operator_position(v, ctx.org) and all(not re.fullmatch(r"\d{9}", k) for k in others):
         # only foreign VAT or company numbers (a foreign parent or group) beside our own operator-position org
         # number: the site stays ours, but nothing is derived from it
@@ -3717,6 +3806,10 @@ async def prepare_scope(sp: _Spend, ctx: CompanyContext, v: Verdict) -> Scope:
             for d in sorted(other_mail):
                 dominant[f"contact on {d}"] = d
                 kinds[f"contact on {d}"] = "mention"
+            # companies only named in passing (suppliers, clients, partners, a person's other employer) are not
+            # presenters on a site that prints our org number as its operator: they no longer block derived facts
+            dominant = {k: x for k, x in dominant.items() if kinds.get(k) != "mention" or k in sisters
+                        or k.startswith(("org number ", "contact on ", "foreign group number "))}
             for k in dominant:
                 kinds[k] = "mention"
             others, sisters, other_mail = {}, {}, set()
@@ -3867,6 +3960,91 @@ async def _group_names(sp: "_Spend", ctx: CompanyContext) -> list[str]:
         stack.extend(n.get("children") or [])
     _GROUP_TREE[ctx.org] = sorted(set(names))
     return _GROUP_TREE[ctx.org]
+
+
+def _initials_label(label: str, name: str) -> bool:
+    """The domain label is the initials of the legal name's words, three letters or more ('laa' for LARHAMMER
+    AARSETH ADVOKATFIRMA AS), with or without the legal form's letter."""
+    ws = [w for w in name_words(name) if w and w[0].isalnum()]
+    if len(ws) < 3:
+        return False
+    ini = "".join(_translit(w)[0] for w in ws if _translit(w))
+    return len(ini) >= 3 and label in (ini, ini + "as")
+
+
+async def _declared_by_other(sp: "_Spend", ctx: CompanyContext, dom: str) -> bool:
+    """Another registered entity declares this domain as its website (one cached registry lookup). A failed
+    lookup counts as declared, so the domain stays another organisation's."""
+    host = bare(dom)
+    rows = _HJEM_CACHE.get(host)
+    if rows is None:
+        if not sp.can_registry():
+            return True
+        try:
+            snap = await sp.get(f"https://data.brreg.no/enhetsregisteret/api/enheter?hjemmeside={host}&size=20",
+                                robots=False, headers={"Accept": "application/json"})
+        except (BudgetExhausted, _OutOfRequests):
+            raise
+        except Exception:
+            return True
+        if snap.status != 200:
+            return True
+        rows = (snap.json().get("_embedded") or {}).get("enheter") or []
+        _HJEM_CACHE[host] = rows
+    return any(bare(host_of(r.get("hjemmeside") or "")) == host and r.get("organisasjonsnummer") != ctx.org
+               for r in rows)
+
+
+_GROUP_ORGS: dict[str, set[str]] = {}
+
+
+async def _group_orgs(sp: "_Spend", ctx: CompanyContext) -> set[str]:
+    """Org numbers of every company in our registry group (root and all members), from the cached
+    konsernstruktur response; empty when the registry has no group for us."""
+    if ctx.org in _GROUP_ORGS:
+        return _GROUP_ORGS[ctx.org]
+    out: set[str] = set()
+    if (ctx.registry or {}).get("erIKonsern"):
+        data = await _search_json(sp, f"{BRREG_API}/konsernstruktur/{ctx.org}")
+        stack = [data]
+        while stack:
+            n = stack.pop()
+            if n.get("organisasjonsnummer"):
+                out.add(n["organisasjonsnummer"])
+            stack.extend(n.get("children") or [])
+    out.discard(ctx.org)
+    _GROUP_ORGS[ctx.org] = out
+    return out
+
+
+FOREIGN_UNIT_FORMS = {"NUF", "UTLA"}
+
+
+async def _family_codeclared(sp: "_Spend", ctx: CompanyContext, codeclared: dict[str, str],
+                             host: str) -> dict[str, str]:
+    """Co-declarers of our registry-declared website that do not stop us keeping it as the group's top parent.
+    When the registry makes us the root of a group (we have members, nobody above us) and another declarer of
+    the site is one of our group companies, the site is the group's and ours as its parent: declarers carrying
+    our distinctive name word that are foreign units (NUF, UTLA: a foreign group company's registration) or
+    Norwegian companies in no group at all (so parent of nobody) are the group's too. Returns the declarers
+    that still count: any other company, and every declarer when no group company declares the site."""
+    members = await _group_members(sp, ctx)
+    rows = {r.get("organisasjonsnummer"): r for r in _HJEM_CACHE.get(bare(host)) or []}
+    if not members or not any(o in members and bare(host_of(r.get("hjemmeside") or "")) == bare(host)
+                              for o, r in rows.items()):
+        return codeclared
+    ours = {t for t in _core_tokens((ctx.registry or {}).get("navn") or "") if len(t) >= 4 and t not in GENERIC_WORDS}
+    left = {}
+    for org, name in codeclared.items():
+        r = rows.get(org) or {}
+        form = ((r.get("organisasjonsform") or {}).get("kode") or "").upper()
+        family = bool(ours and _core_tokens(name) & ours)
+        if family and (form in FOREIGN_UNIT_FORMS or r.get("erIKonsern") is False):
+            continue
+        left[org] = name
+    if len(left) < len(codeclared):
+        ctx.facts["website_group_codeclared"] = sorted(set(codeclared) - set(left))[:20]
+    return left
 
 
 async def _codeclared(sp: "_Spend", ctx: CompanyContext, home: Page) -> dict[str, str]:

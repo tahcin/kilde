@@ -3064,3 +3064,135 @@ def test_social_keys_leave_out_trade_place_and_person_words():
     assert keys == {"radiosandefjord"}
     assert "radio" not in W._social_keys(["radio", "fjellbekk"], set())
     assert W._social_keys(["espen", "mortensen", "invest"], {"invest.no"}) == {"espenmortenseninvest"}
+
+
+def _hjem(host: str, rows: list[dict]) -> dict:
+    return {f"https://data.brreg.no/enhetsregisteret/api/enheter?hjemmeside={host}&size=20":
+            (200, json.dumps({"_embedded": {"enheter": rows}}), "application/json")}
+
+
+def test_initials_mail_domain_is_ours_unless_another_entity_declares_it():
+    """Larhammer Aarseth shape: post@ on the initials of the legal name is the firm's own mailbox domain."""
+    body = (f'<footer>Fjellbekk Trevare Testverk AS · Org.nr {OURS} <a href="mailto:post@ftt.no">post@ftt.no</a>'
+            '<a href="https://www.facebook.com/fjellbekktrevare">fb</a></footer>')
+    ctx = ctx_for(navn="FJELLBEKK TREVARE TESTVERK AS", hjemmeside="fjellbekk.no")
+    claims = run(_site(body=body), ctx)
+    assert claims["official_website"].value == "fjellbekk.no"
+    assert claims["social_profile"].availability == "available"
+    W._HJEM_CACHE.clear()
+    ctx = ctx_for(navn="FJELLBEKK TREVARE TESTVERK AS", hjemmeside="fjellbekk.no")
+    claims = run(_site(_hjem("ftt.no", [{"organisasjonsnummer": OTHER, "navn": "FTT AS", "hjemmeside": "ftt.no"}]),
+                       body=body), ctx)
+    assert claims["social_profile"].availability != "available"
+
+
+def test_initials_label():
+    assert W._initials_label("laa", "LARHAMMER AARSETH ADVOKATFIRMA AS")
+    assert not W._initials_label("la", "LARHAMMER AARSETH AS")
+    assert not W._initials_label("abc", "LARHAMMER AARSETH ADVOKATFIRMA AS")
+
+
+def _coloc_search(row: dict) -> dict:
+    out = {}
+    for w in ("fjellbekk", "trevare"):
+        for path, fld in (("enheter", "forretningsadresse"), ("enheter", "postadresse"), ("underenheter", "beliggenhetsadresse")):
+            out[f"https://data.brreg.no/enhetsregisteret/api/{path}?navn={w}&{fld}.postnummer=9999&size=50"] = (
+                200, json.dumps({"_embedded": {path: [row] if path == "enheter" and fld == "forretningsadresse" else []}}),
+                "application/json")
+    return out
+
+
+def test_registry_site_kept_when_namesake_at_our_address_has_its_own_site():
+    """Det Norske Jentekor shape: a sister foundation at the same address shares a name word but declares its
+    own website; our registry-declared site stays ours with its derived facts. If the namesake mails from our
+    site's domain, the site is not provably ours alone."""
+    row = {"organisasjonsnummer": OTHER, "navn": "FJELLBEKK SOLISTKOR STIFTELSE", "hjemmeside": "solistkor.no",
+           "forretningsadresse": {"adresse": ["Lyngveien 12B"], "postnummer": "9999"}}
+    body = ('<h1>Fjellbekk Trevare</h1><footer>Fjellbekk Trevare, Lyngveien 12B, 9999 Testby'
+            '<a href="https://www.instagram.com/fjellbekktrevare">ig</a></footer>')
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    claims = run(_site(_coloc_search(row), body=body), ctx)
+    assert claims["official_website"].value == "fjellbekk.no"
+    assert claims["social_profile"].availability == "available"
+    for c in (W._SEARCH, W._NAME_SEARCH, W._SISTER_CACHE, W._ROW_CACHE):
+        c.clear()
+    row2 = dict(row, hjemmeside=None, epostadresse="kor@fjellbekk.no")
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    claims = run(_site(_coloc_search(row2), body=body), ctx)
+    assert claims["social_profile"].availability != "available"
+
+
+def test_group_root_keeps_site_co_declared_by_group_and_foreign_family_units():
+    """Norsk Hydro shape: a subsidiary and foreign units named like us declare the parent's site."""
+    body = '<h1>Fjellbekk Trevare ASA</h1><footer><a href="https://www.instagram.com/fjellbekktrevare">ig</a></footer>'
+    tree = json.dumps({"organisasjonsnummer": OURS, "children": [{"organisasjonsnummer": OTHER, "children": []}]})
+    rows = [{"organisasjonsnummer": OURS, "navn": "FJELLBEKK TREVARE ASA", "hjemmeside": "www.fjellbekk.no"},
+            {"organisasjonsnummer": OTHER, "navn": "FJELLBEKK ENERGI AS", "hjemmeside": "www.fjellbekk.no"},
+            {"organisasjonsnummer": THIRD, "navn": "FJELLBEKK CANADA INC", "hjemmeside": "www.fjellbekk.no",
+             "organisasjonsform": {"kode": "UTLA"}}]
+    pages = {"https://fjellbekk.no/": (200, html(body)),
+             f"https://data.brreg.no/enhetsregisteret/api/konsernstruktur/{OURS}": (200, tree, "application/json")}
+    pages.update(_hjem("fjellbekk.no", rows))
+    claims = run(FakeFetcher(pages), ctx_for(navn="FJELLBEKK TREVARE ASA", hjemmeside="www.fjellbekk.no", erIKonsern=True))
+    assert claims["official_website"].value == "fjellbekk.no"
+    assert claims["social_profile"].availability == "available"
+    # a Norwegian company outside our group that is itself in a group still counts against us
+    for c in (W._HJEM_CACHE, W._GROUP_CACHE, W._GROUP_TREE, W._GROUP_ORGS):
+        c.clear()
+    rows.append({"organisasjonsnummer": FOURTH, "navn": "FJELLBEKK KRAFT AS", "hjemmeside": "www.fjellbekk.no",
+                 "erIKonsern": True})
+    pages.update(_hjem("fjellbekk.no", rows))
+    claims = run(FakeFetcher(pages), ctx_for(navn="FJELLBEKK TREVARE ASA", hjemmeside="www.fjellbekk.no", erIKonsern=True))
+    assert "social_profile" not in claims or claims["social_profile"].availability != "available"
+
+
+def test_page_wide_has_footer_class_does_not_make_body_text_an_operator():
+    """Jærkraft shape: <body class="et-tb-has-footer"> and a terms page listing grid companies."""
+    page = W.parse_page(Snapshot("https://fjellbekk.no/vilkar/", "https://fjellbekk.no/vilkar/", 200, "x",
+                                 ('<html><body class="et-tb-has-footer"><p>Avtale med: Kvist Nett AS, Lyngnett AS</p>'
+                                  f'<footer>Fjellbekk Trevare AS {OURS}</footer></body></html>').encode(), "text/html"))
+    names = W.other_company_names([page], ["fjellbekk", "trevare"])
+    assert names and not any(n[2] for n in names)
+
+
+def test_supplier_and_bio_mentions_do_not_present_the_site():
+    """Centrum Bowling and Norway Oysters shapes."""
+    priv = W.parse_page(Snapshot("https://fjellbekk.no/personvern", "https://fjellbekk.no/personvern", 200, "x",
+                                 ('<html><body><p>Kvist Media AS er leverandør av markedsføringstjenester. Opplysninger '
+                                  'lagres på servere som driftes av Kvist Media AS. For mer informasjon om hvordan '
+                                  'Kvist Media AS lagrer data, se deres personvernerklæring.</p></body></html>').encode(), "text/html"))
+    about = W.parse_page(Snapshot("https://fjellbekk.no/om-oss", "https://fjellbekk.no/om-oss", 200, "x",
+                                  ('<html><body><p>Styreleder Ola Nordmann er også daglig leder i Lyngfisk AS og Bakketroll AS.</p>'
+                                   '</body></html>').encode(), "text/html"))
+    names = {n[0]: n for n in W.other_company_names([priv, about], ["fjellbekk", "trevare"])}
+    assert not names["kvist media"][2] and not names["lyngfisk"][2] and not names["bakketroll"][2]
+    owner = W.parse_page(Snapshot("https://fjellbekk.no/", "https://fjellbekk.no/", 200, "x",
+                                  b'<html><body><p>Nettstedet eies av Kvist Media AS.</p></body></html>', "text/html"))
+    assert W.other_company_names([owner], ["fjellbekk", "trevare"])[0][4]
+
+
+def test_group_parent_stated_on_subsidiary_site_with_our_org_number():
+    """Tronfjell Maskin shape: our org number in the footer, the About text says we are part of our parent."""
+    body = (f'<p>Fra januar blir vi et heleid datterselskap av Kvist Entreprenør AS, en del av Kvist Gruppen.</p>'
+            f'<footer>Fjellbekk Trevare AS · Org.nr {OURS}<a href="https://www.instagram.com/fjellbekktrevare">ig</a></footer>')
+    tree = json.dumps({"organisasjonsnummer": OTHER, "navn": "KVIST ENTREPRENØR AS",
+                       "children": [{"organisasjonsnummer": OURS, "children": []}]})
+    rows = {W.BRREG_SEARCH + "?navn=kvist%20entreprenor&size=20":
+            (200, json.dumps({"_embedded": {"enheter": [{"organisasjonsnummer": OTHER, "navn": "KVIST ENTREPRENØR AS"}]}}),
+             "application/json"),
+            f"https://data.brreg.no/enhetsregisteret/api/konsernstruktur/{OURS}": (200, tree, "application/json")}
+    claims = run(_site(rows, body=body), ctx_for(hjemmeside="fjellbekk.no", erIKonsern=True))
+    assert claims["social_profile"].availability == "available"
+    for c in (W._SEARCH, W._GROUP_ORGS, W._SISTER_CACHE, W._ROW_CACHE):
+        c.clear()
+    tree2 = json.dumps({"organisasjonsnummer": THIRD, "children": [{"organisasjonsnummer": OURS, "children": []}]})
+    rows[f"https://data.brreg.no/enhetsregisteret/api/konsernstruktur/{OURS}"] = (200, tree2, "application/json")
+    claims = run(_site(rows, body=body), ctx_for(hjemmeside="fjellbekk.no", erIKonsern=True))
+    assert claims.get("social_profile") is None or claims["social_profile"].availability != "available"
+
+
+def test_regional_variant_handles():
+    from kilde.words import regional_variant
+    hs = ["equinor", "equinor_uk", "equinor_na", "equinorasa", "equinorcareers"]
+    assert [h for h in hs if regional_variant(h, hs)] == ["equinor_uk", "equinor_na", "equinorcareers"]
+    assert not regional_variant("fjellbekk", ["fjellbekk_uk"])

@@ -20,6 +20,7 @@ from urllib.parse import quote, unquote, urlencode, urlsplit
 
 from ..http import ROBOTS_TOKEN, Blocked, BudgetExhausted, Fetcher
 from ..model import OPEN_DATA, CompanyContext, Evidence, Snapshot
+from ..words import regional_variant
 
 QLEVER = "https://qlever.dev/api/wikidata"
 ENTITY = "https://www.wikidata.org/wiki/Special:EntityData/{qid}.json"
@@ -251,6 +252,9 @@ def label(labels: dict[str, dict[str, str]], qid: str | None) -> str | None:
     return lab.get("nb") or lab.get("en")
 
 
+REGIONAL_QUALS = ("P1001", "P518", "P407", "P642", "P3831", "P17", "P131", "P276")
+
+
 def pick_website(stmts: list[dict]) -> tuple[dict | None, int]:
     """Preferred rank wins; otherwise the first statement valid for Norway or with no jurisdiction."""
     stmts = [s for s in stmts if isinstance(_value(s), str) and not _quals(s, "P582")]
@@ -432,8 +436,17 @@ def emit_entity(ctx: CompanyContext, batch: WikidataBatch, qsnap: Snapshot, snap
 
     # Social profiles
     for p, (platform, pattern) in SOCIAL.items():
-        for s in statements(claims, p, current=True)[:5]:
+        stmts = statements(claims, p, current=True)[:5]
+        handles = [h.strip() for h in (_value(x) for x in stmts) if isinstance(h, str) and h.strip()]
+        if len(stmts) > 1:
+            # several accounts on one platform: those qualified for a place, language or part of the company are
+            # regional or department accounts (often another group entity's); keep the main brand account
+            plain = [x for x in stmts if not any(_quals(x, q) for q in REGIONAL_QUALS)]
+            stmts = plain or stmts[:1]
+        for s in stmts:
             handle = _value(s)
+            if isinstance(handle, str) and handle.strip() and regional_variant(handle.strip(), handles):
+                continue
             if isinstance(handle, str) and handle.strip():
                 # Socials only when Wikidata's website is the site Kilde verified for this company.
                 if not site_dom or site_dom not in known:
