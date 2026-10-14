@@ -3279,6 +3279,106 @@ def _card_names_other_company(card: str, words: list[str]) -> str | None:
     return None
 
 
+# a block that is a post, article, news item or notice: contacts quoted there may be anyone's (a festival's
+# neighbour hotline reproduced in a housing co-op's notice)
+POST_CLASS = re.compile(r"(?i)^(post|type-post|format-standard|blog-?post|blog-?item|blog-?entry|news-?item|news-?article|"
+                        r"news-?post|nyhet|nyheter|nyhetsartikkel|artikkel|innlegg|article|single-post|main-blog|"
+                        r"blog-?list|post-?list|news-?list|blogg|entry-post|hentry-post)$")
+POST_ITEMTYPE = re.compile(r"(?i)(BlogPosting|NewsArticle|PressRelease|SocialMediaPosting)$")  # CMSs mark every page 'Article'
+CHROME_TAGS = ("footer", "header", "nav", "address")
+CONTACT_PAGE = re.compile(r"(?i)kontakt|contact")
+
+
+def _in_post_block(el, page: Page) -> bool:
+    """The element sits inside a post, article, news item or notice, or on a news article page."""
+    path = unquote(urlsplit(page.url).path)
+    if NEWS_PATH.search(path) and path.rstrip("/").count("/") >= 2:
+        return True  # an article page under the news section
+    contact_page = bool(CONTACT_PAGE.search(path))
+    node = el.parent if el is not None and getattr(el, "name", None) is None else el
+    chain = []
+    while node is not None and getattr(node, "name", None) not in (None, "[document]", "html", "body"):
+        chain.append(node)
+        node = node.parent
+    if any(n.name in CHROME_TAGS for n in chain):
+        return False  # the page header, footer or navigation: site chrome, not a post (a footer text widget)
+    # a WordPress page (not a post) inside a theme's <article> wrapper
+    page_ctx = any("type-page" in (n.get("class") or []) for n in chain)
+    for node in chain:
+        classes = [c for c in (node.get("class") or [])]
+        if any(POST_CLASS.match(c) for c in classes) and "type-page" not in classes:
+            return True
+        if POST_ITEMTYPE.search(str(node.get("itemtype") or "")):
+            return True
+        if node.name == "article" and not contact_page and not page_ctx and not ({"page", "widget"} & set(classes)) \
+                and not CONTACT_MARK.search(" ".join(classes) + " " + (node.get("id") or "")):
+            return True
+    return False
+
+
+CONTACT_LINE = re.compile(r"(?i)^\W{0,3}(ta kontakt( med oss)?( for [a-zæøå]+)?|telefon|tlf|tel|mobil|mob|phone|e-?post|e-?mail|mail|epost|kontakt(\s+oss)?|"
+                          r"contact(\s+us)?|sentralbord)\b\.?\s*:?")
+POSTCODE_PLACE = re.compile(r"(?<!\d)\d{4}\s+[A-ZÆØÅ][A-ZÆØÅa-zæøå\-]{2,}")
+
+
+def _contact_items(card: str) -> int:
+    """How many contact items a block holds: phone numbers, email addresses and a postcode with its place."""
+    phones = {re.sub(r"\D", "", m.group(0))[-8:] for m in PHONE_TEXT.finditer(card) if phone_shaped(m.group(0))}
+    mails = {m.group(0).lower() for m in EMAIL.finditer(card)}
+    return len(phones) + len(mails) + (1 if POSTCODE_PLACE.search(card) else 0)
+
+
+def _contact_position(el, page: Page, card: str = "", names_us=None) -> bool:
+    """A site contact must stand where a site states its own contacts, and never inside a post, article or
+    notice: the header, footer, navigation, an address element, a block marked or headed as contact, a contact
+    page, or a small contact block of its own (a short line led by a contact label, a card holding a second
+    contact item such as a phone beside an email or a postcode, or a card that names us)."""
+    if el is None or _in_post_block(el, page):
+        return False
+    if CONTACT_PAGE.search(unquote(urlsplit(page.url).path)):
+        return True
+    node = el.parent if getattr(el, "name", None) is None else el
+    while node is not None and getattr(node, "name", None) not in (None, "[document]", "html", "body"):
+        if node.name in ("footer", "header", "nav", "address"):
+            return True
+        marks = " ".join(node.get("class") or []) + " " + (node.get("id") or "")
+        if CONTACT_MARK.search(marks) or _headed_contact_card(node):
+            return True
+        node = node.parent
+    card = (card or "").strip()
+    if not card or len(card) > 400:
+        return False
+    if len(card) <= 80 and CONTACT_LINE.match(card):
+        return True
+    return _contact_items(card) >= 2 or bool(names_us and names_us(card))
+
+
+HOST_IN_TEXT = re.compile(r"(?i)(?<![\w@.\-])(?:https?://)?(?:www\.)?((?:[a-z0-9æøå\-]+\.)+(?:no|com|net|org|se|dk|io|eu|"
+                          r"biz|info|nu|de|fi|uk))(?![\w\-])")
+
+
+NOT_HOST_LABELS = {"org", "orgnr", "tlf", "tel", "mob", "mobil", "nr", "inkl", "evt", "mva", "ca", "kl", "bl", "dvs", "mht"}
+
+
+def _card_other_domain(card: str, ours: set[str]) -> str | None:
+    """An email address or web address on another organisation's domain in a contact's own block ('Mail:
+    nabo@festival.no Telefon: 405 13 514'): the contact is that organisation's, not ours. Free mail, platforms,
+    invoicing services and site credits ('Design: byraa.no') do not count."""
+    labels = {bare(d).split(".")[0] for d in ours if d}
+    for m in list(EMAIL.finditer(card)) + list(HOST_IN_TEXT.finditer(card)):
+        dom = bare((m.group(0).rsplit("@", 1)[1] if "@" in m.group(0) else m.group(1)).lower().rstrip("."))
+        if not dom or "." not in dom or dom in FREE_MAIL or is_platform(dom) or service_mail_domain(dom):
+            continue
+        if dom.split(".")[0] in NOT_HOST_LABELS or len(dom.split(".")[0]) < 3:
+            continue  # 'Org.no.', 'Tlf.nr' and the like are abbreviations, not web addresses
+        if any(same_site(dom, d) for d in ours if d) or dom.split(".")[0] in labels:
+            continue  # our domain, or our name under another top-level domain (fjellbekk.com beside fjellbekk.no)
+        if CREDIT.search(card[max(0, m.start() - 40):m.start()]):
+            continue
+        return dom
+    return None
+
+
 def extract_contacts(pages: list[Page], domain: str, registry_phones: set[str] = frozenset(),
                      scope: Scope | None = None, email_domains: set[str] = frozenset(),
                      registry_emails: set[str] = frozenset()) -> tuple[list, list, int]:
@@ -3299,8 +3399,15 @@ def extract_contacts(pages: list[Page], domain: str, registry_phones: set[str] =
             return
         ok = scope.accept(el, page)
         registry_value = (store is phones and key[-8:] in registry_phones) or (store is emails and key in registry_emails)
+        card = _contact_card(page, el, span)
+        if not registry_value and not _contact_position(el, page, card, scope.names_ours if scope.words else None):
+            return  # quoted in a post, article or notice, or not where a site states its own contacts; a later
+            # copy in the footer or on the contact page may still count
+        if ok and not registry_value and _card_other_domain(card.replace(key, " ") if store is emails else card,
+                                                            email_domains):
+            ok = False  # the contact sits beside another organisation's email or web address
         if ok and not registry_value and scope.words:
-            other = _card_names_other_company(_contact_card(page, el, span), scope.words)
+            other = _card_names_other_company(card, scope.words)
             if other:
                 ok = False  # the contact sits beside another company's name (its staff or its own line)
         if ok and store is phones and scope.org and key[-8:] not in registry_phones:
@@ -3313,19 +3420,27 @@ def extract_contacts(pages: list[Page], domain: str, registry_phones: set[str] =
             skipped.add(key)
 
     for p in pages:
+        written: dict[str, int] = {}  # how often each text was seen: each copy is judged in its own element
+
+        def seen(text: str) -> int:
+            written[text] = written.get(text, -1) + 1
+            return written[text]
+
         for a in p.soup.find_all("a", href=re.compile(r"^mailto:", re.I)):
             addr = unquote(a["href"][7:]).split("?")[0].strip().lower()
             if EMAIL.fullmatch(addr):
                 put(emails, addr, p, a["href"][:200], a)
         for m in EMAIL.finditer(p.text):
             addr = m.group(0).lower().rstrip(".")
+            k = seen(m.group(0))
             if addr not in emails and addr not in skipped:
-                put(emails, addr, p, _window(p.text, m.start(), m.end(), 20), _element_for(p, m.group(0)))
+                put(emails, addr, p, _window(p.text, m.start(), m.end(), 20), _nth_element_for(p, m.group(0), k))
         for a in p.soup.find_all("a", href=re.compile(r"^tel:", re.I)):
             n = norm_phone(a["href"])
             if n:
                 put(phones, n, p, a["href"][:100], a)
         for m in PHONE_TEXT.finditer(p.text):
+            k = seen(m.group(0).strip())
             if not phone_shaped(m.group(0)):
                 continue  # a date such as 2024.03.06 is not a phone number
             before = p.text[max(0, m.start() - 40):m.start()]
@@ -3337,7 +3452,7 @@ def extract_contacts(pages: list[Page], domain: str, registry_phones: set[str] =
             if labels and re.fullmatch(r"(?i)faks|fax|telefaks", labels[-1]):
                 continue  # the nearest label says this is a fax number
             if n and PHONE_LABEL.search(before) and n not in phones and n not in skipped:
-                put(phones, n, p, m.group(0).strip(), _element_for(p, m.group(0).strip()))
+                put(phones, n, p, m.group(0).strip(), _nth_element_for(p, m.group(0).strip(), k))
     # only addresses on the company's own domain; generic mailboxes first
     def ours_mail(a: str) -> bool:
         local, dom = a.rsplit("@", 1)
@@ -3562,7 +3677,7 @@ def news_items(page: Page, domain: str, scope: Scope, limit: int = 5) -> list[tu
     slash = slash_order(page)
     items: dict[str, tuple[dict, str]] = {}
     for a in page.soup.find_all("a", href=True):
-        if _in_chrome(a):
+        if _in_chrome(a) or _in_search_block(a) or OTHER_POST_TYPE.search(urlsplit(a["href"].strip()).query):
             continue
         u = urljoin(page.url, a["href"].strip()).split("#")[0].split("?")[0]
         pu = urlsplit(u)
@@ -3612,6 +3727,21 @@ def news_items(page: Page, domain: str, scope: Scope, limit: int = 5) -> list[tu
         items[u] = ({"title": title, "url": u, "date": when, "date_text": found[1]}, span or found[1])
     ranked = sorted(items.values(), key=lambda x: x[0]["date"], reverse=True)
     return ranked[:limit]
+
+
+SEARCH_MARK = re.compile(r"(?i)(^|[\s_-])(search|sok|søk)([\s_-]|$)|search-?(result|overlay|modal|popup|form|panel)")
+
+
+def _in_search_block(node) -> bool:
+    """The element sits in a search form, overlay or result list (results are whatever matched, not news)."""
+    for parent in getattr(node, "parents", []):
+        if parent.name in ("html", "body", "[document]"):
+            break
+        if (parent.get("role") or "").lower() == "search":
+            return True
+        if SEARCH_MARK.search(_block_marks(parent)):
+            return True
+    return False
 
 
 def _holds_other_item(page: Page, block, u: str, domain: str, slash: str | None) -> bool:
@@ -4702,6 +4832,9 @@ def inline_news(page: Page) -> list[dict]:
         heads = block.find_all(re.compile(r"^h[2-6]$"))
         if len(heads) != 1:
             continue
+        if heads[0] in node.parents or _in_search_block(node) or any(
+                OTHER_POST_TYPE.search(urlsplit(x["href"]).query) for x in block.find_all("a", href=True)):
+            continue  # a date inside the title is an event's date; search overlays and custom post types are no news
         found = find_date(node.parent, slash)
         title = _clean(heads[0].get_text(" ", strip=True), 200)
         if not found or not title or len(title) < 8 or (title, found[0]) in seen:
@@ -4850,7 +4983,27 @@ def date_contradicted(item: dict, today: str) -> str | None:
 # project, reference, product and portfolio pages carry publish dates too, but they describe work, not news
 NOT_NEWS_PAGE = re.compile(r"(?i)/(prosjekt|prosjekter|prosjekta|projects?|referanser|referanse|references?|"
                            r"portfolio|portefolje|cases?|kundecase|produkter|produkt|products?|tjenester|services?|"
-                           r"ansatte|team|people|events?|arrangement(er)?|kalender)/")
+                           r"ansatte|team|people|events?|arrangement(er)?|kalender|"
+                           # FAQ, help, concert, artist and programme entries and job ads: evergreen or listings
+                           r"faq|faqs|sporsmal|spørsmål|ofte-stilte-sporsmal|ofte-stilte-spørsmål|sporsmal-og-svar|"
+                           r"hjelp|help|helpdesk|konsert|konserter|concerts?|artister|artists?|program|programmet|"
+                           r"forestillinger|billetter|tickets?|jobs?|jobb|stillinger|ledige-stillinger|karriere|careers?|"
+                           r"vacancies)/")
+# WordPress custom post types other than posts (?post_type=artister&p=5391): events, artists, FAQs, products
+OTHER_POST_TYPE = re.compile(r"(?i)(?:^|&)post_type=(?!post(?:&|$))[^&]+")
+FULL_DATE = re.compile(r"(?i)(?<!\d)(?:20\d\d-\d\d-\d\d|\d{1,2}\.\s?\d{1,2}\.\s?(?:20|19)\d\d|\d{1,2}/\d{1,2}/(?:20|19)\d\d|"
+                       rf"\d{{1,2}}\.?\s+(?:{_MON})\.?\s+(?:20|19)\d\d)(?!\d)")
+WEEKDAY_LEAD = re.compile(r"(?i)^(man|tir|ons|tor|fre|lør|lor|søn|son)(dag)?\.?\s+\d{1,2}\.")
+
+
+def date_led_title(title: str) -> bool:
+    """An event or concert listing led by its own date ('12.03.2026 Konsert i parken', 'Fredag 14. mars: Quiz'):
+    the date is when the event happens, not when news was published. A date at the end of a title ('Oppsummering
+    styremøte 05.03.2024') can be news; a listing whose only date sits inside its heading is caught in
+    inline_news."""
+    t = (title or "").strip()
+    m = FULL_DATE.match(t.lstrip("([ "))
+    return bool(WEEKDAY_LEAD.match(t) or m)
 
 
 def _news_ok(item: dict, floor: str, domain: str) -> bool:
@@ -4865,6 +5018,7 @@ def _news_ok(item: dict, floor: str, domain: str) -> bool:
         path = "/?p"  # a WordPress post under plain permalinks (/?p=1042)
     return (floor <= day <= today and same_site(host_of(item["url"]), domain) and path not in ("", "/")
             and not NOT_POST.search(path + "/") and not NOT_NEWS_PAGE.search(unquote(path) + "/")
+            and not OTHER_POST_TYPE.search(urlsplit(item["url"]).query) and not date_led_title(item["title"])
             and not SAMPLE_POST.match(item["title"])
             and not PLACEHOLDER.search(item["title"]) and not PLACEHOLDER_SLUG.search(item["url"])
             and not template_post(item["title"], item["url"]) and len(item["title"]) >= 4)
