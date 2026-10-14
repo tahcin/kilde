@@ -589,6 +589,13 @@ def _names_in(text: str, names: list[list[str]]) -> bool:
     return False
 
 
+def _headed_contact_card(node) -> bool:
+    """A small block whose own heading says contact ('<h4>Kontakt oss</h4> Fet Legesenter AS ... Telefon')."""
+    h = node.find(["h2", "h3", "h4", "h5", "h6", "strong"], recursive=False) if hasattr(node, "find") else None
+    return bool(h) and bool(re.fullmatch(r"(?i)\s*(kontakt(\s+oss)?|kontaktinformasjon|contact(\s+us)?)\s*:?\s*",
+                                         h.get_text(" ", strip=True))) and len(node.get_text(" ", strip=True)) <= 600
+
+
 def _phone_in_named_block(el, page: Page, names: list[list[str]]) -> bool:
     """The phone sits in a contact block, header or footer whose text also names us."""
     on_contact_page = bool(INTERNAL_PRIORITY[0].search(urlsplit(page.url).path))
@@ -597,7 +604,8 @@ def _phone_in_named_block(el, page: Page, names: list[list[str]]) -> bool:
         if node is None or getattr(node, "name", None) in (None, "[document]", "html"):
             break
         marks = " ".join(node.get("class") or []) + " " + (node.get("id") or "")
-        is_block = node.name in ("footer", "header", "address") or bool(CONTACT_MARK.search(marks))
+        is_block = node.name in ("footer", "header", "address") or bool(CONTACT_MARK.search(marks)) or \
+            _headed_contact_card(node)
         if node.name in ("body", "main"):
             is_block = on_contact_page
         if is_block:
@@ -798,6 +806,13 @@ def judge(v: Verdict, org: str, e: dict, registry_host: str | None) -> None:
             # The registry declares this site for us; a related name on it ('ALL10 Bemanning AS' on all10.no) is
             # only mentioned, never the operator. The shared-site and group checks still decide what is derived.
             v.detail += f"; the site also names '{conflict[:80]}'"
+        v.proof = [(name_page, name_span, name_core)]
+        return
+    # (b2) the registry email's own domain (not free mail or an invoicing service), whose domain carries our
+    # distinctive name, with the name shown on it: the company declared this mailbox domain itself
+    if v.source == "email" and _declared_host(e, final) and _domain_has_name(final, e):
+        v.status, v.method = "proven", "registry_email_domain_and_name"
+        v.detail = f"the registry email address is on {final}, whose domain carries the name; legal name shown on the site"
         v.proof = [(name_page, name_span, name_core)]
         return
     # (c) phone and name; address and name
@@ -1141,6 +1156,13 @@ def _related_name_operates(pages: list[Page], words: list[str]) -> bool:
     ours = {_translit(w) for w in words}
     distinct = {w for w in ours if len(w) >= 3 and w not in GENERIC_WORDS and not w.isdigit()} or ours
     return any(op and set(n.split()) & distinct for n, _sfx, _pos, op, _strong in other_company_names(pages, words))
+
+
+def _domain_has_name(host: str, e: dict) -> bool:
+    """The registered domain's label carries a distinctive word of our name (not a generic or place word)."""
+    label = re.sub(r"[^a-z0-9]", "", bare(host).split(".")[0])
+    return any(t in label for t in _core_tokens(e.get("navn") or "")
+               if len(t) >= 4 and t not in GENERIC_WORDS and t not in REGIONS)
 
 
 def _declared_host(e: dict, host: str) -> bool:
@@ -2235,6 +2257,16 @@ ENTITY_ANY = re.compile(r"((?:[0-9A-Za-zÆØÅæøåÄÖäöüé&\-]+[ \u00a0]+)
 
 
 CONNECTORS = {"og", "&", "i", "for", "av", "de", "la", "von", "van", "der", "and", "of"}
+# Foreign platform companies that sites name in badges, embeds and trademark notices (maps, app stores,
+# payment, analytics, social networks, site builders, cookie banners): never a company presenting the site.
+PLATFORM_COMPANIES = {"google", "apple", "microsoft", "meta", "meta platforms", "facebook", "instagram", "linkedin",
+                      "youtube", "twitter", "x corp", "tiktok", "amazon", "amazon web services", "stripe", "paypal",
+                      "klarna", "adyen", "visa", "mastercard", "wix", "wix com", "squarespace", "shopify", "automattic",
+                      "wordpress", "godaddy", "cloudflare", "cookiebot", "usercentrics", "onetrust", "hubspot",
+                      "mailchimp", "the rocket science group", "vimeo", "spotify", "zoom video communications",
+                      "booking com", "tripadvisor", "airbnb", "uber", "alphabet"}
+TRADEMARK_CONTEXT = re.compile(r"(?i)(trademarks?|varemerker?|registered|registrert|®|™|logo|badge|"
+                               r"get it on|download on|last ned)\W*(of|for|av|til|tilhører|belongs to)?\W*$")
 
 
 OPERATOR_PAGE = re.compile(r"(?i)om-?oss|about|kontakt|contact|personvern|privacy|impressum|imprint|firmainfo|selskapet")
@@ -2297,6 +2329,9 @@ def other_company_names(pages: list[Page], words: list[str]) -> list[tuple[str, 
                 foreign = m.group(2).lower() in FOREIGN_SUFFIX
                 if not ws or len(ws) > 6:
                     continue
+                if foreign and (" ".join(ws) in PLATFORM_COMPANIES
+                                or TRADEMARK_CONTEXT.search(txt[max(0, m.start() - 40):m.start()] + m.group(1))):
+                    continue  # a platform in a badge, embed or trademark notice, not a company presenting the site
                 if not foreign and (ws == ours or ws[-len(ours):] == ours or ours[-len(ws):] == ws):
                     continue  # our own name or its tail (a same-named foreign AB or GmbH is a different company)
                 before = txt[max(0, m.start() - 40):m.start()]
@@ -3253,6 +3288,13 @@ async def prepare_scope(sp: _Spend, ctx: CompanyContext, v: Verdict) -> Scope:
             if label == site_label or any(t in label for t in own_tokens):
                 continue  # the company's own alternate domain
             other_mail.add(dom)
+    if other_mail:
+        # a contact at our own registry group's domain (a parent's press desk on a brand site) is the group's,
+        # not another organisation's: the domain label is a distinctive word of a group company's name
+        group_tokens = {t for n in await _group_names(sp, ctx) for t in _core_tokens(n)
+                        if len(t) >= 5 and t not in GENERIC_WORDS and t not in REGIONS}
+        other_mail = {d for d in other_mail
+                      if re.sub(r"[^a-z0-9]", "", d.split(".")[-2] if "." in d else d) not in group_tokens}
     codeclared = await _codeclared(sp, ctx, home)
     if codeclared and v.method == "orgnr_on_page" and not others and _orgnr_in_operator_position(v, ctx.org):
         alltext = " ".join(p.text for p in v.pages)
@@ -3390,6 +3432,26 @@ async def _group_members(sp: "_Spend", ctx: CompanyContext) -> set[str]:
 
 
 _HJEM_CACHE: dict[str, list[dict]] = {}
+_GROUP_TREE: dict[str, list[str]] = {}
+
+
+async def _group_names(sp: "_Spend", ctx: CompanyContext) -> list[str]:
+    """Names of every company in our registry group (root and all members), when the registry says we are in
+    one (one cached request). Used to recognise a parent's or sister's mail domain as the group's own."""
+    if not (ctx.registry or {}).get("erIKonsern"):
+        return []
+    if ctx.org in _GROUP_TREE:
+        return _GROUP_TREE[ctx.org]
+    names: list[str] = []
+    data = await _search_json(sp, f"{BRREG_API}/konsernstruktur/{ctx.org}")
+    stack = [data]
+    while stack:
+        n = stack.pop()
+        if n.get("navn"):
+            names.append(n["navn"])
+        stack.extend(n.get("children") or [])
+    _GROUP_TREE[ctx.org] = sorted(set(names))
+    return _GROUP_TREE[ctx.org]
 
 
 async def _codeclared(sp: "_Spend", ctx: CompanyContext, home: Page) -> dict[str, str]:

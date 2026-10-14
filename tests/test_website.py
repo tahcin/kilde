@@ -80,6 +80,7 @@ def offline_dns(monkeypatch):
     W._ROW_CACHE.clear()
     W._HJEM_CACHE.clear()
     W._GROUP_CACHE.clear()
+    W._GROUP_TREE.clear()
 
 
 def ctx_for(**rec) -> CompanyContext:
@@ -1416,6 +1417,7 @@ def test_group_parent_keeps_its_site_when_others_are_its_subsidiaries():
     assert claims["site_contact_email"].value == "post@fjellbekk.no"
     # a company that is not in our group still makes the site non-exclusive
     W._GROUP_CACHE.clear()
+    W._GROUP_TREE.clear()
     tree2 = json.dumps({"organisasjonsnummer": OURS, "children": [{"organisasjonsnummer": THIRD, "children": []}]})
     pages[f"https://data.brreg.no/enhetsregisteret/api/konsernstruktur/{OURS}"] = (200, tree2, "application/json")
     claims2 = run(FakeFetcher(pages), ctx_for(navn="FJELLBEKK TREVARE ASA", hjemmeside="fjellbekk.no"))
@@ -1909,6 +1911,7 @@ def test_group_parent_site_whose_subsidiary_number_is_only_on_the_contact_page()
     assert claims["official_website"].value == "fjellbekk.no"
     # without the group tie the same site stays a related site
     W._GROUP_CACHE.clear()
+    W._GROUP_TREE.clear()
     pages[f"https://data.brreg.no/enhetsregisteret/api/konsernstruktur/{OURS}"] = (404, "{}", "application/json")
     claims = run(FakeFetcher(pages), ctx_for(navn="FJELLBEKK TREVARE ASA", hjemmeside="fjellbekk.no"))
     assert claims["official_website"].availability != "available"
@@ -2023,6 +2026,7 @@ def test_group_handle_is_ours_when_we_are_the_registry_group_parent():
     assert [str(c.value) for c in ctx.claims if c.field == "social_profile"] == ["facebook.com/fjellbekkgroup"]
     # not a group parent: the same handle is another company's
     W._GROUP_CACHE.clear()
+    W._GROUP_TREE.clear()
     ctx = ctx_for(navn="FJELLBEKK TREVARE ASA", hjemmeside="fjellbekk.no")
     run(_site(body=body), ctx)
     assert not [c for c in ctx.claims if c.field == "social_profile" and c.availability == "available"]
@@ -2462,3 +2466,50 @@ def test_heading_naming_another_registered_namesake_is_ambiguous():
     run(FakeFetcher(pages), ctx)
     assert not ctx.claims_for("official_website")
     assert "title or heading" in ctx.facts["website_candidates"][0]["detail"]
+
+
+# ---------------------------------------------------------------- round 14 part 1
+def test_platform_names_in_trademark_notices_do_not_present_the_site():
+    """Fet Legesenter shape: app-store badges and 'Google Play is a trademark of Google Inc.' in the footer."""
+    body = ("<h1>Fjellbekk Trevare</h1><div class='info-text'><h4>Kontakt oss</h4>Fjellbekk Trevare AS<br>Postboks 4<br>"
+            "9999 TESTBY<br><b>Telefon</b>: <a href='tel:+4741000001'>41 00 00 01</a></div>"
+            "<footer>Google Play is a trademark of Google Inc. Apple and the Apple logo are trademarks of Apple Inc.</footer>")
+    ctx = ctx_for(telefon="41000001")
+    claims = run(FakeFetcher({"https://fjellbekktrevare.no/": (200, html(body))}), ctx)
+    site = ctx.claims_for("official_website")
+    assert site and site[0].match["method"] == "phone_and_name"  # the phone sits in a card headed 'Kontakt oss'
+    assert "google" not in json.dumps(site[0].match).lower()
+    assert "related_website" not in claims
+
+
+def test_registry_email_domain_with_our_name_and_the_name_on_the_site_is_proof():
+    body = "<h1>Fjellbekk Trevare</h1><p>Kontakt: post@fjellbekktrevare.no</p>"
+    pages = {"https://fjellbekktrevare.no/": (200, html(body))}
+    ctx = ctx_for(epostadresse="kari@fjellbekktrevare.no")
+    run(FakeFetcher(pages), ctx)
+    assert ctx.claims_for("official_website")[0].match["method"] == "registry_email_domain_and_name"
+    # a mailbox domain that does not carry our name (a manager's or accountant's) proves nothing
+    pages = {"https://testbyforvaltning.no/": (200, html(body))}
+    ctx = ctx_for(epostadresse="kari@testbyforvaltning.no")
+    run(FakeFetcher(pages), ctx)
+    assert not ctx.claims_for("official_website")
+
+
+def test_contact_at_our_group_parents_domain_does_not_share_the_site():
+    """Sørlandschips shape: a brand site whose press contact is at the group parent's domain."""
+    body = (f"<h1>Fjellbekk Trevare</h1><footer>Org.nr {OURS} · Presse: "
+            "<a href='mailto:kari@nordtopp.no'>kari@nordtopp.no</a></footer>")
+    tree = json.dumps({"navn": "NORDTOPP INVEST AS", "organisasjonsnummer": OTHER,
+                       "children": [{"navn": "FJELLBEKK TREVARE AS", "organisasjonsnummer": OURS}]})
+    pages = {"https://fjellbekktrevare.no/": (200, html(body)),
+             f"https://data.brreg.no/enhetsregisteret/api/konsernstruktur/{OURS}": (200, tree, "application/json")}
+    ctx = ctx_for(erIKonsern=True)
+    run(FakeFetcher(pages), ctx)
+    assert ctx.claims_for("official_website")
+    assert "nordtopp" not in json.dumps(ctx.claims_for("official_website")[0].match)
+    # the same contact domain outside our group still shares the site
+    W._GROUP_TREE.clear()
+    W._SEARCH.clear()
+    ctx = ctx_for()
+    run(FakeFetcher({"https://fjellbekktrevare.no/": (200, html(body))}), ctx)
+    assert "nordtopp" in json.dumps([c.match for c in ctx.claims if c.field in ("official_website", "related_website")])
