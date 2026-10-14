@@ -3283,3 +3283,12 @@ def test_news_section_without_readable_dates_uses_the_posts_sitemap():
                "https://fjellbekk.no/blogg/ny-hall/": (200, art)}, body=body, head=head)
     claims = run(f, ctx_for(hjemmeside="fjellbekk.no"))
     assert claims["dated_news"].value == "Vi har bygget ny hall (2026-05-01T10:00:00+02:00)"
+
+
+def test_sitemap_span_quotes_cdata_entries_verbatim():
+    raw = ('<urlset><url>\n\t\t<loc><![CDATA[https://fjellbekk.no/a/]]></loc>\n\t\t<lastmod><![CDATA[2026-05-01T10:00:00+00:00]]>'
+           '</lastmod></url></urlset>')
+    urls, _ = W.parse_sitemap(raw.encode())
+    assert urls == [("https://fjellbekk.no/a/", "2026-05-01T10:00:00+00:00")]
+    span = W.sitemap_span(raw, *urls[0])
+    assert span in raw and span.startswith("https://fjellbekk.no/a/") and span.endswith("2026-05-01T10:00:00+00:00")

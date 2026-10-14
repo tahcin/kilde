@@ -216,7 +216,7 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
         n_subs, more = count(ctx, "group_subsidiary", len(subs), "subsidiary", "subsidiaries")
         if more:
             split, more = "", f"; {len(subs)} are shown"
-        say(f"The registry lists {n_subs}{split}{more}.", *subs[:5])
+        say(f"The registry lists {n_subs}{split}{more}.", *subs)
     wp = distinct(ctx.claims_for("registered_workplace"), "organisation_number")
     if wp:
         munis = sorted({c.value.get("municipality", "").title() for c in wp if c.value.get("municipality")})
@@ -224,7 +224,7 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
         say(f"It has {n_wp}"
             + (f" in {join_and(munis[:5] + ([f'{len(munis) - 5} other municipalit' + ('y' if len(munis) == 6 else 'ies')] if len(munis) > 5 else []))}"
                if munis else "") + (more_wp.replace("; ", "; of these, ").replace(" are shown", " were read")
-                                    if more_wp else "") + ".", *wp[:5])
+                                    if more_wp else "") + ".", *wp)
 
     site = first(ctx, "official_website")
     if site:
@@ -298,18 +298,18 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
     if awards:
         n_aw, more = count(ctx, "public_contract_award", len(awards), "contract award", "contract awards")
         say(f"TED, the EU procurement journal, lists {n_aw} won with its "
-            f"organisation number, the latest on {awards[0].as_of}{more}.", *awards[:3])
+            f"organisation number, the latest on {awards[0].as_of}{more}.", *awards)
     tenders = distinct(ctx.claims_for("procurement_notice"), "notice")
     if tenders:
         n_t, more = count(ctx, "procurement_notice", len(tenders), "procurement notice", "procurement notices")
-        say(f"As a buyer it has published {n_t} on TED{more}.", *tenders[:3])
+        say(f"As a buyer it has published {n_t} on TED{more}.", *tenders)
     projects = sorted(distinct(ctx.claims_for("research_project"), "scheme", "project_number"), key=lambda c: c.as_of or "", reverse=True)
     if projects:
         n_p, more = count(ctx, "research_project", len(projects), "funded or approved R&D project",
                           "funded or approved R&D projects")
         say(f"The Research Council of Norway lists {n_p} "
             f"for it (including SkatteFUNN), the latest \"{clip(str((projects[0].value or {}).get('title', '')), 100)}\"{more}.",
-            *projects[:3])
+            *projects)
     inspections = sorted(ctx.claims_for("food_inspection"), key=lambda c: c.as_of or "", reverse=True)
     if inspections:
         # One claim per inspected place; each carries how many inspections are on file for it.
@@ -337,7 +337,7 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
         what = ", ".join(latest.value.get("changed") or []) or latest.value.get("type")
         n_ch, more = count(ctx, "registry_change", len(reg_changes), "update", "updates")
         say(f"The registry recorded {n_ch} in the last 12 months; "
-            f"the latest, on {latest.value.get('date')}, changed: {what}{more}.", *reg_changes[:5])
+            f"the latest, on {latest.value.get('date')}, changed: {what}{more}.", *reg_changes)
     if changes:
         material = [c for c in changes if c.get("material")]
         kinds = sorted({c["type"].replace("_", " ") for c in (material or changes)})

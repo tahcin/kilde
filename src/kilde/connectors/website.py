@@ -3252,6 +3252,19 @@ def careers_link(pages: list[Page], domain: str, scope: Scope | None = None) -> 
     return "ambiguous" if unsure else None
 
 
+def sitemap_span(raw: str, loc: str, lastmod: str) -> str:
+    """The exact text of one sitemap entry from its URL to its lastmod value, as the file writes it (plain or
+    wrapped in CDATA, any whitespace between the tags)."""
+    i = raw.find(loc)
+    while i >= 0:
+        j = raw.find(lastmod, i + len(loc))
+        k = raw.find("</url>", i)
+        if j >= 0 and (k < 0 or j < k) and j - i <= 400:
+            return raw[i:j + len(lastmod)]
+        i = raw.find(loc, i + 1)
+    return f"<loc>{loc}</loc><lastmod>{lastmod}</lastmod>"
+
+
 def parse_sitemap(content: bytes) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
     """(urls with lastmod, child sitemaps with lastmod)."""
     soup = BeautifulSoup(content, "xml")
@@ -3697,8 +3710,9 @@ async def sitemap_activity(f: Fetcher, sp: _Spend, ctx: CompanyContext, home: Pa
                          note=f"{scope.describe()}; no sitemap page can be tied to this company")
                 return
             ours.sort(key=lambda x: x[2], reverse=True)
+            raw_map = page_snap.content.decode("utf-8", "replace")
             for loc, d, lm in ours[:5]:
-                ev = ctx.add_evidence(page_snap, source_class=COMPANY_OWNED, span=f"<loc>{loc}</loc><lastmod>{lm}</lastmod>",
+                ev = ctx.add_evidence(page_snap, source_class=COMPANY_OWNED, span=sitemap_span(raw_map, loc, lm),
                                       effective_date=d, method="website_sitemap_v1", licence=LICENCE)
                 ctx.add_claim("site_page_updated", "activity", {"url": loc, "lastmod": lm}, ev, as_of=d,
                               match={"method": "verified_site_sitemap", "detail": f"sitemap of verified site {domain}"})

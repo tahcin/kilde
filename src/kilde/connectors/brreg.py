@@ -371,6 +371,8 @@ async def fetch_group(f: Fetcher, ctx: CompanyContext) -> None:
                  "relationship": sub["relationship"], "ownership": sub["ownership"]}
         if sub.get("direct_stake"):
             value["direct_stake"] = sub["direct_stake"]
+        if sub.get("via"):
+            value["held_through"] = sub["via"]
         ctx.add_claim("group_subsidiary", "identity", value, evs, as_of=first_line.get("dato"), match=m)
 
 
@@ -420,6 +422,21 @@ def group_links(nodes: list[dict], org: str) -> dict:
         elif kmor:
             keep = [kmor] + [x for x in lines if _code(x) == "KGRL" and _share(x) == stake][:1]
             out.append({"lines": keep, "relationship": "indirect subsidiary", "ownership": None, "direct_stake": stake})
+    # Companies further down the tree, held through our subsidiaries by a chain of KDAT lines (a listed
+    # subsidiary's own subsidiaries), are indirect subsidiaries too; 'via' names the company they hang under.
+    reached = {x["lines"][0]["organisasjonsnummer"] for x in out if x["relationship"] == "direct subsidiary"}
+    listed = {x["lines"][0]["organisasjonsnummer"] for x in out}
+    grew = True
+    while grew:
+        grew = False
+        for n in nodes:
+            o = n.get("organisasjonsnummer")
+            if o and o != org and o not in listed and _code(n) == "KDAT" and n.get("parentOrganisasjonsnummer") in reached:
+                out.append({"lines": [n], "relationship": "indirect subsidiary", "ownership": None,
+                            "via": n.get("parentOrganisasjonsnummer")})
+                listed.add(o)
+                reached.add(o)
+                grew = True
     mine = [n for n in nodes if n.get("organisasjonsnummer") == org and n.get("parentOrganisasjonsnummer")]
     kdat = next((x for x in mine if _code(x) == "KDAT"), None)
     kmor = next((x for x in mine if _code(x) == "KMOR"), None)

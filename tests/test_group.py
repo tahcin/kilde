@@ -121,3 +121,23 @@ def test_distinct_keeps_claims_without_a_key():
     b = ctx.add_claim("job_ad", "hiring", {"uuid": "u1"}, ev)
     c = ctx.add_claim("job_ad", "hiring", {"title": "no id"}, ev)
     assert distinct([a, b, c], "uuid") == [a, c]
+
+
+def test_subsidiaries_of_a_subsidiary_are_indirect_with_the_company_they_hang_under():
+    """Hexagon Composites shape: a 74.7 % subsidiary's own subsidiaries are counted as indirect ones."""
+    global TREE
+    old = TREE
+    deep = "100000005"
+    TREE = {"organisasjonsnummer": TOP, "navn": "TOPP HOLDING AS", "children": [
+        line(SUB_A, "ALFA ASA", TOP, "TOPP HOLDING AS", "KDAT", "Konsern datter", "74,7%",
+             [line(deep, "ALFA H2 AS", SUB_A, "ALFA ASA", "KDAT", "Konsern datter", "100%")]),
+        line(SUB_B, "BETA AS", TOP, "TOPP HOLDING AS", "KDAT", "Konsern datter", "100%")]}
+    try:
+        ctx = group_ctx(TOP)
+    finally:
+        TREE = old
+    rel = {c.value["organisation_number"]: c.value for c in ctx.claims_for("group_subsidiary")}
+    assert set(rel) == {SUB_A, SUB_B, deep}
+    assert rel[deep]["relationship"] == "indirect subsidiary" and rel[deep]["held_through"] == SUB_A
+    ctx.add_claim("legal_name", "identity", "TOPP HOLDING AS", ctx.evidence[0])
+    assert "The registry lists 3 subsidiaries (2 held directly and 1 indirectly" in summarise(ctx, [])["text"]
