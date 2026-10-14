@@ -2,7 +2,7 @@
 
 **Kilde** (Norwegian for "source") is a company research agent for the Builderr Signalpost challenge. Give it Norwegian organisation numbers. For each one it returns a profile of public facts, and every fact carries the URL it came from, when it was retrieved, a SHA-256 of the saved response, the exact quoted text, and how it was tied to that organisation number. What it cannot find is marked as such, never as zero.
 
-- Deterministic: no language model is needed, and the declared third-party cost is **$0**.
+- Deterministic: the agent uses no language model and no API keys, and the declared third-party cost is **$0**.
 - Exact-entity first: a fact is published only when it can be tied to the organisation number. Anything weaker is `ambiguous` and stays out of the profile.
 - One terminal envelope per input, always, even when sources fail or the budget runs out.
 
@@ -41,7 +41,13 @@ Options: `--previous <envelopes.jsonl>` (refresh against an earlier run), `--sta
 
 - [`smoke/`](smoke/): the 100-company smoke test Builderr asks for, produced from a clean clone with the command above, with the HTML report, every saved snapshot, and a second run showing identical facts.
 - [`profiles-1000/`](profiles-1000/): 1,000 company profiles from a clean clone (about 13 requests per company, $0).
-- [EVAL.md](EVAL.md): seventeen evaluation rounds on fresh random samples, each audited against live sources, version 1 against version 2, independent judge reviews, the determinism drill, and a benchmark against Builderr's own 100-company sample.
+- [EVAL.md](EVAL.md): twenty evaluation rounds on fresh random samples, each audited against live sources, version 1 against version 2, independent judge reviews, the determinism drill, and a benchmark against Builderr's own 100-company sample.
+
+## Website
+
+A live demo is at **https://kilde.tahcin.tech**: a company explorer for the roughly 1,300 companies profiled in Kilde's final runs (a static export of their envelopes), a side-by-side compare of up to three companies, and the source behind every fact. Its "Ask" box answers questions with Claude Haiku 5.5 using only Kilde's verified facts, with a citation on every answer; a per-visitor rate limit and daily caps keep its cost bounded.
+
+The website is separate from the scored run. It lives in `web/`, is not called by `kilde run`, and Kilde itself uses no language model and needs no key.
 
 ## Envelope
 
@@ -115,7 +121,7 @@ Every run can diff against the previous envelopes (`--previous`, or automaticall
 
 Every request goes through one budgeted client. Defaults: 20 outbound HTTP requests per company and 30 minutes per batch (`--time-budget 1800`), both configurable. Identity, roles, accounts and workplaces for every company run first; external sources share what is left. Each step has a timeout; a step that times out rolls back anything it published half-way, and timed-out website steps get one unhurried second pass. DNS or network failures are reported as `failed`, never as absence. Transient failures (timeouts, HTTP 429 and 5xx, failed registry searches) end as `failed` and are retried in a second pass, so a slow site never turns into a different answer on the next run. When time or requests run out, the remaining facts are marked `failed` with the reason and every envelope is still written.
 
-Measured from a fresh clone (version 2): 1,000 companies with 12,608 requests (about 13 per company), in 12.3 minutes while other runs shared the connection (about 12 to 20 minutes depending on network); 100 companies in about 4 minutes with 1,373 requests. Details in [EVAL.md](EVAL.md). The run report gives HTTP requests and DNS lookups separately; DNS lookups are used only to drop name-derived domains that do not exist before any HTTP request. Fetches to private, loopback, link-local or other non-public addresses are refused, including on redirects, and each redirect hop must be allowed by its own host's robots.txt. Two runs of the same batch produce identical facts (Builderr runs each entry twice and compares).
+Measured from a fresh clone (version 2): 1,000 companies with 12,765 requests (about 13 per company), in 12.9 minutes while other runs shared the connection (about 12 to 20 minutes depending on network); 100 companies in about 4 minutes with 1,388 requests. Details in [EVAL.md](EVAL.md). The run report gives HTTP requests and DNS lookups separately; DNS lookups are used only to drop name-derived domains that do not exist before any HTTP request. Fetches to private, loopback, link-local or other non-public addresses are refused, including on redirects, and each redirect hop must be allowed by its own host's robots.txt. Two runs of the same batch produce identical facts (Builderr runs each entry twice and compares).
 
 | Item | Cost |
 |---|---|
@@ -153,7 +159,7 @@ To rebuild without the crawler, run `scripts/build_website_seeds.py` and `script
 ## Tests and evaluation
 
 ```bash
-uv run --extra dev pytest -q   # 513 tests
+uv run --extra dev pytest -q   # 538 tests
 uv run python scorer/score.py --envelopes out/envelopes.jsonl --expected-count 100 --report-html out/report.html --out out/score.json
 ```
 

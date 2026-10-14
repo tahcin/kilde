@@ -35,22 +35,26 @@ Important: the recall figures below are measured against our own reference pool 
 | 15 | (version 2 build, seed 1515) | not scored | n/a | n/a | **0** | Clean: 0 wrong-company facts, 0 invented financials. 3 wrong values, all fixed: a capped count given as the total, a reused post's date, a missing reason for a deceased general manager. |
 | 16 | (version 2 build d3461f4, seed 1616) | not scored | n/a | n/a | **0** | Clean: 0 wrong-company facts, 0 invented financials. 1 wrong value, 1 unsupported quoted span, 3 summary sentences that did not cite every claim they counted and 1 missed news listing, all fixed: summaries now cite every counted claim. |
 | 17 | (confirmation, code 853e897, seed 1717, 3 parallel auditors) | not scored | n/a | n/a | **0** | Clean: 0 wrong-company facts, 0 invented financials across 2,778 audited items. 4 wrong values and 2 wordings, all fixed in 5bfbb24: a product brand taken as the site's presenter, a site-builder host URL given as the website, a broken +53 phone, an error-redirect URL. The final release rerun of seed 1717 changed only those facts, plus two sites recovered (abcorneliussen.no's facts and tellierservice.no) that the auditors had confirmed as the companies' own. |
+| 18 | (code 45e8ad3, seed 1818, 3 parallel auditors) | not scored | n/a | n/a | **0** | 0 wrong-company facts, 0 invented financials across about 2,700 audited items. 3 of the companies' own sites were mislabelled as shared through false name-part matches (Optikk 2020, Agder Bolig Entreprenør, Høilund Bygg). Fix: another entity counts on a site only where its own name or org number appears. |
+| 19 | (code e1375ce, seed 1919, web-fact audit of all 252 web claims and 2,328 financial amounts) | not scored | n/a | n/a | 1 | A housing co-op's homepage quoted a festival hotline in a notice, taken as the co-op's contact phone; a rescan found a second case (a consumer council number on a terms page). Also 14 non-news items (concert listings, FAQ pages). Fix: contacts only from contact positions, never beside another organisation's address; FAQ, event, artist and search entries are not news. |
+| 20 | (final code 12b459d, seed 2020) | not scored | n/a | n/a | **0** | Clean: all 159 web claims, 42 citing summary sentences, 2,478 financial amounts, 96 share-capital values and 138 summary NOK figures correct. 0 wrong-company facts, 0 invented financials, 0 wrong values. |
 
 Across all rounds every registry, accounts and update-feed claim checked against the live APIs was correct (more than 15,000 claims in rounds 1 to 13), and no financial value was ever invented. Rounds 8 to 11 split each 30-company audit across three independent auditors running in parallel.
 
 ## Version 2
 
-Version 1 was frozen at d48937e (round 13 clean). Version 2 (final code 5bfbb24, artefacts at fc90fc6) raises recall in the four reported families without loosening any proof. Both versions were run on the same 1,000 random companies (and the same 100 smoke-test companies); the figures come from each version's committed `profiles-1000/` and `smoke/` artefacts. Registry, accounts and public-record families are unchanged between the two.
+Version 1 was frozen at d48937e (round 13 clean). Version 2 (final code 12b459d, artefacts at 45283d0) raises recall in the four reported families without loosening any proof. Both versions were run on the same 1,000 random companies (and the same 100 smoke-test companies); the figures come from each version's committed `profiles-1000/` and `smoke/` artefacts. Registry, accounts and public-record families are unchanged between the two, except financial-sector licences (13 to 17 companies, 21 to 50 licences), now also looked up for motor vehicle traders and travel agencies, which often hold credit or insurance agent licences.
 
-| Family (1,000 random companies) | Version 1 (d48937e) | Version 2 (5bfbb24) |
+| Family (1,000 random companies) | Version 1 (d48937e) | Version 2 final (12b459d) |
 |---|---|---|
-| Official website (companies) | 98 | 115 |
-| Social profiles (companies / facts) | 55 / 113 | 62 / 120 |
+| Official website (companies) | 98 | 120 |
+| Social profiles (companies / facts) | 55 / 113 | 65 / 126 |
 | Hiring signals (companies / facts) | 22 / 34 | 22 / 35 |
-| Dated news (companies / posts) | 22 / 249 | 29 / 346 |
+| NAV job ads (companies / ads) | 8 / 19 | 8 / 19 |
+| Dated news (companies / posts) | 22 / 249 | 31 / 370 |
 | Related website, labelled (companies) | 29 | 29 |
-| Website title (companies) | 88 | 104 |
-| Website description (companies) | 58 | 73 |
+| Website title (companies) | 88 | 109 |
+| Website description (companies) | 58 | 76 |
 
 On the 100-company smoke test: official website 13 to 16 companies, social profiles 5 / 13 to 7 / 16, dated news 3 / 48 to 4 / 57.
 
@@ -75,24 +79,31 @@ Fixes after the independent judges and round 17, each a general rule:
 - **Summaries.** Every counted claim is cited, capped totals are stated, indirect subsidiaries are labelled, and periods of different lengths are stated.
 - **Inputs and values.** An invalid org number gets a `failed` envelope; site-builder hosts and error URLs are normalised; a careers page with no openings is labelled as such.
 
+Fixes from rounds 18 to 20, each a general rule:
+
+- **Shared-site labels.** Another entity counts on a site only where its own name or org number appears, so false name-part matches no longer mark a company's own site as shared.
+- **Contacts.** Phones and emails come only from contact positions (header, footer, contact block or page), never from notices, terms pages or text beside another organisation's address.
+- **News.** FAQ, event, artist and search-overlay entries are not news.
+- **Name-only recovery without new trust.** An org number on the privacy page of a site already proven counts; a one-word domain counts only when the word is unique in the registry; staff bodies, place-and-trade names and holding companies are not treated as namesakes.
+- **Group parents.** A group parent keeps its own site when a namesake is only its subsidiary's workplace (StrongPoint).
+
 ## Determinism
 
 Builderr runs each entry twice and compares the facts. The same 100 companies were run twice, uncached: the first drill found 4 companies differing because website steps timed out under load; after the fixes (rollback on timeout, a retry pass, a larger connection pool) two runs produced identical facts. Version 2's smoke test was run twice in parallel from a fresh clone: 0 companies differ, 5,845 facts in each run.
 
 ## Benchmark against Builderr's own sample
 
-On the 100 companies of Builderr's public sample (https://builderr.ai/signalpost), compared with Builderr's own crawler (version 1 code, Oct 13; not rerun for version 2):
+On the 100 companies of Builderr's public sample (https://builderr.ai/signalpost), which lean towards larger companies, compared with Builderr's own crawler. Run on the final version 2 code:
 
 | Family | Builderr's crawler | Kilde |
 |---|---|---|
-| Verified websites | 84 | 73 (70 the same site; the rest withheld by the stricter proof and group-site rules) |
-| Social profiles | 87 across 43 companies | 64 across 29 companies (profiles on shared and group sites withheld) |
-| Leadership roles | 714 | 707 |
-| Workplaces | 180 | 180 |
-| Companies with filed financials | 97 | 97 |
-| Dated news posts | not in sample | 175 across 12 companies |
-| Hiring signals | not in sample | 10 companies |
+| Verified websites | 84 | 64 (61 the same domain as Builderr's; the rest withheld by the stricter proof and shared-site rules) |
+| Social profiles | 99 | 76 facts; 58 of Builderr's 99 matched |
+| Dated news | not in sample | news for 18 companies |
+| Hiring signals | none on company sites in the sample | 13 companies |
 | LinkedIn data | collected by Builderr as "experimental" | not collected (unofficial access is not permitted) |
+
+Registry families (leadership roles, workplaces, filed financials) come from the org-number-keyed Brønnøysund records and matched Builderr's sample closely in version 1 (707 of 714 roles, 180 of 180 workplaces, 97 of 97 companies with filed financials); those sources did not change in version 2.
 
 ## Independent judges
 
@@ -100,12 +111,14 @@ Six fresh agents acting as Builderr judges, given only the public challenge page
 
 Five more fresh judges reviewed version 2 under the same conditions (only the public rules, the repo and the submission email). On 7955bac: 64, 64.5 and 65. One of them found a wrong-company social profile (Radio Sandefjord given Radio Tønsberg's handles), fixed by the distinctive-token rule above. On 635b90c: 69 and 64.5, with no wrong-company facts found. All five again agreed that precision, synthesis and UX are near full marks and that recall decides the total.
 
-## Final runs (version 2, code 5bfbb24, fresh clone; artefacts committed at fc90fc6)
+Later fixes (after round 17 and in rounds 18 to 20) addressed the judges' findings with general rules, and round 20 on the final code found no wrong-company facts, invented financials or wrong values. The judges have not rescored the final code.
 
-- Tests: 513 pass.
-- Smoke test, 100 new companies: valid, run twice with identical facts (5,845 each), 1,373 requests, about 4 minutes. See `smoke/`.
-- 1,000 new companies: valid, 12,608 requests (about 13 per company), 12.3 minutes while other runs shared the same connection. See `profiles-1000/`.
-- A further 100 fresh companies (seed 1717, the round 17 audit sample): valid, 1,383 requests; changed only the facts the auditors flagged, plus two sites they had confirmed.
+## Final runs (version 2, code 12b459d, fresh clone; artefacts committed at 45283d0)
+
+- Tests: 538 pass.
+- Smoke test, 100 new companies: valid, run twice with identical facts (5,845 each), 1,388 requests, about 4 minutes. See `smoke/`.
+- 1,000 new companies: valid, 12,765 requests (about 13 per company), 12.9 minutes while other runs shared the same connection. See `profiles-1000/`.
+- A further 100 fresh companies (seed 2020, the round 20 audit sample): valid, 1,415 requests.
 - Output check on all runs: no problems except date-only news values (`title (YYYY-MM-DD)`), used where the source gives only a date.
 
 Version 1's final runs (commit 94a2493): smoke 100 valid with identical facts (5,797 each); 1,000 companies valid at about 13 requests per company in 22.5 minutes.
