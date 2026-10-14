@@ -2,7 +2,7 @@
 // phones). Pages say what it is about (one company, the compared set); elsewhere the visitor picks companies first.
 import * as Dialog from "@radix-ui/react-dialog";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
-import { Maximize2, Minimize2, Sparkles, X } from "lucide-react";
+import { Maximize2, Minimize2, RotateCcw, Sparkles, X } from "lucide-react";
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link, useLocation } from "react-router";
 import { useCompare } from "../lib/compare";
@@ -63,7 +63,7 @@ function Picker({ orgs, setOrgs }: { orgs: string[]; setOrgs: (o: string[]) => v
   const { data: rows } = useIndex();
   const name = (o: string) => displayName(rows?.find((r) => r.o === o)?.n ?? o);
   return (
-    <div className="border-b border-rule/70 px-4 pb-3">
+    <div className="border-b border-rule/70 px-4 py-3 sm:px-6">
       {orgs.length > 0 && (
         <div className="mb-2 flex flex-wrap gap-1.5">
           {orgs.map((o) => (
@@ -87,7 +87,7 @@ function FreeAsk({ panel }: { panel: (cos: Company[]) => ReactNode }) {
     <div className="flex min-h-0 flex-1 flex-col">
       <Picker orgs={orgs} setOrgs={setOrgs} />
       {cos?.length ? panel(cos)
-        : <p className="px-5 py-5 text-[14px] leading-relaxed text-ink-2">Pick one to three companies above, then ask in English or Norwegian. Claude answers from Kilde's facts only, with a numbered source on every sentence.</p>}
+        : <p className="mx-auto w-full max-w-[44rem] px-4 py-6 text-[14px] leading-relaxed text-ink-2 sm:px-6">Pick one to three companies above, then ask in English or Norwegian. Claude answers from Kilde's facts only, with a numbered source on every sentence.</p>}
     </div>
   );
 }
@@ -133,16 +133,16 @@ function Bubble({ items, onPick }: { items: { text: string; ask?: string }[]; on
 /** The expanded view's side panel: the companies in context, and the sources cited in the latest answer. */
 function ContextPanel({ companies, cites, lit, setLit }: { companies: Company[]; cites: Cite[]; lit: string | null; setLit: (k: string) => void }) {
   return (
-    <aside className="hidden w-[19rem] shrink-0 overflow-y-auto border-l border-rule/70 bg-paper/60 p-4 scroll-thin md:block" aria-label="Context">
+    <aside className="hidden w-[19rem] shrink-0 overflow-y-auto border-l border-rule/70 bg-paper/60 px-6 py-6 scroll-thin md:block" aria-label="Context">
       <p className="text-[12.5px] font-semibold text-ink">Companies</p>
-      <ul className="mt-2 space-y-1">
+      <ul className="-mx-2 mt-2 space-y-1">
         {companies.map((c) => (
           <li key={c.o}><Link to={`/c/${c.o}`} className="block rounded-lg px-2 py-1.5 text-[13.5px] text-brand hover:bg-hover">{displayName(c.n)}<span className="block font-mono text-[11px] text-muted">{c.o}</span></Link></li>
         ))}
       </ul>
-      <p className="mt-5 text-[12.5px] font-semibold text-ink">Sources in this answer</p>
+      <p className="mt-6 border-t border-rule/70 pt-6 text-[12.5px] font-semibold text-ink">Sources in this answer</p>
       {cites.length === 0 ? <p className="mt-2 text-[12.5px] text-muted">The numbered sources of the latest answer appear here.</p> : (
-        <ol className="mt-2 space-y-1">
+        <ol className="-mx-2 mt-2 space-y-1">
           {cites.map((c) => {
             const ev = c.co.ev[c.claim.e[0]];
             return (
@@ -171,6 +171,8 @@ export function AskLauncher() {
   const [expanded, setExpanded] = useState(false);
   const [cites, setCites] = useState<Cite[]>([]);
   const [lit, setLit] = useState<string | null>(null);
+  const [reset, setReset] = useState(0);
+  const [turnCount, setTurnCount] = useState(0);
   const label = scope?.label ?? "Ask Kilde";
   const trayUp = picked.length > 0 && pathname !== "/compare";
   useEffect(() => { if (!isOpen) setExpanded(false); }, [isOpen]);
@@ -184,8 +186,8 @@ export function AskLauncher() {
     : scope ? [{ text: "Ask Kilde" }, { text: "Which is biggest?", ask: "Which of these is biggest by revenue?" }, { text: "Who is hiring?", ask: "Which of these companies are hiring?" }]
       : [{ text: "Ask Kilde" }, { text: "Ask about any Norwegian company" }];
   const panel = (cos: Company[]) => (
-    <AskPanel bare wide={expanded} companies={cos} suggestions={cos.length > 1 ? SUGGEST_MANY : SUGGEST_ONE}
-      autoAsk={pending} onAutoAsked={clearPending} onCitations={setCites} onCite={setLit} lit={lit} />
+    <AskPanel wide={expanded} companies={cos} suggestions={cos.length > 1 ? SUGGEST_MANY : SUGGEST_ONE}
+      autoAsk={pending} onAutoAsked={clearPending} onCitations={setCites} onCite={setLit} lit={lit} resetKey={reset} onTurns={setTurnCount} />
   );
 
   return (
@@ -212,13 +214,19 @@ export function AskLauncher() {
               : cn("inset-x-0 bottom-0 max-h-[88dvh] min-h-[60dvh] rounded-t-[1.4rem] pb-[env(safe-area-inset-bottom)]",
                 "sm:inset-x-auto sm:bottom-6 sm:right-6 sm:h-[min(560px,calc(100dvh-3rem))] sm:max-h-none sm:min-h-0 sm:w-[400px] sm:rounded-[1.4rem] sm:pb-0"))}>
           {!expanded && <div className="mx-auto mt-2 h-1 w-10 rounded-full bg-rule sm:hidden" aria-hidden />}
-          <div className="flex items-center gap-3 border-b border-rule/60 px-4 pb-3 pt-3">
+          <div className="flex items-center gap-3 border-b border-rule/60 px-4 py-3.5 sm:px-6 sm:py-4">
             <span className="grid size-8 shrink-0 place-items-center rounded-full bg-fam-web"><Mark /></span>
             <div className="min-w-0 flex-1">
               <Dialog.Title className="truncate text-[15.5px] font-semibold text-ink">{label}</Dialog.Title>
               <p className="text-[12px] text-muted">Answers from Kilde's facts, with sources</p>
             </div>
-            <button onClick={() => setExpanded(!expanded)} aria-label={expanded ? "Back to the small window" : "Expand"} aria-pressed={expanded}
+            {turnCount > 0 && (
+              <button onClick={() => { setReset((x) => x + 1); setCites([]); setLit(null); }} aria-label="New conversation" title="New conversation"
+                className="grid size-8 shrink-0 place-items-center rounded-full text-muted transition hover:bg-hover hover:text-ink">
+                <RotateCcw className="size-4" />
+              </button>
+            )}
+            <button title={expanded ? "Back to the small window" : "Expand"} onClick={() => setExpanded(!expanded)} aria-label={expanded ? "Back to the small window" : "Expand"} aria-pressed={expanded}
               className="grid size-8 shrink-0 place-items-center rounded-full text-muted transition hover:bg-hover hover:text-ink">
               {expanded ? <Minimize2 className="size-4" /> : <Maximize2 className="size-4" />}
             </button>
@@ -227,7 +235,7 @@ export function AskLauncher() {
             </Dialog.Close>
           </div>
           <div className="flex min-h-0 flex-1">
-            <div className={cn("flex min-h-0 min-w-0 flex-1 flex-col", expanded && "sm:px-4")}>
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col">
               {scope ? panel(scope.companies) : <FreeAsk panel={panel} />}
             </div>
             {expanded && scope && <ContextPanel companies={scope.companies} cites={cites} lit={lit} setLit={setLit} />}
