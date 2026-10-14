@@ -4115,7 +4115,7 @@ async def _declared_by_other(sp: "_Spend", ctx: CompanyContext, dom: str) -> boo
         if not sp.can_registry():
             return True
         try:
-            snap = await sp.get(f"https://data.brreg.no/enhetsregisteret/api/enheter?hjemmeside={host}&size=20",
+            snap = await sp.get(f"https://data.brreg.no/enhetsregisteret/api/enheter?hjemmeside={host}&size=100",
                                 robots=False, headers={"Accept": "application/json"})
         except (BudgetExhausted, _OutOfRequests):
             raise
@@ -4189,7 +4189,7 @@ async def _codeclared(sp: "_Spend", ctx: CompanyContext, home: Page) -> dict[str
         rows = []
         if sp.can_registry():
             try:
-                snap = await sp.get(f"https://data.brreg.no/enhetsregisteret/api/enheter?hjemmeside={host}&size=20",
+                snap = await sp.get(f"https://data.brreg.no/enhetsregisteret/api/enheter?hjemmeside={host}&size=100",
                                     robots=False, headers={"Accept": "application/json"})
                 if snap.status == 200:
                     rows = (snap.json().get("_embedded") or {}).get("enheter") or []
@@ -4201,9 +4201,17 @@ async def _codeclared(sp: "_Spend", ctx: CompanyContext, home: Page) -> dict[str
     out = {}
     for r in rows:
         hj = bare(host_of(r.get("hjemmeside") or ""))
-        if hj == host and r.get("organisasjonsnummer") != ctx.org and _active(r):
+        if hj == host and r.get("organisasjonsnummer") != ctx.org and _active(r) and not _declares_section(r):
             out[r["organisasjonsnummer"]] = r.get("navn") or ""
     return out
+
+
+def _declares_section(r: dict) -> bool:
+    """The entity declares a section of the site (www.dnb.no/fond for a fund the bank manages), not its front
+    page: a page of the site, which does not make the whole site its own."""
+    raw = (r.get("hjemmeside") or "").strip()
+    path = urlsplit(raw if "//" in raw else "https://" + raw).path.strip("/")
+    return bool(path)
 
 
 DERIVED_FIELDS = (("website_description", SECTION), ("site_contact_email", SECTION), ("site_contact_phone", SECTION),

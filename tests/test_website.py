@@ -1094,7 +1094,7 @@ def test_spam_feed_and_sample_posts_are_dropped():
 
 # ---------------------------------------------------------------- round 4 audit (Elpro, Biri)
 def _hjem(host, rows):
-    return {f"https://data.brreg.no/enhetsregisteret/api/enheter?hjemmeside={host}&size=20":
+    return {f"https://data.brreg.no/enhetsregisteret/api/enheter?hjemmeside={host}&size=100":
             (200, json.dumps({"_embedded": {"enheter": rows}}), "application/json")}
 
 
@@ -3105,7 +3105,7 @@ def test_social_keys_leave_out_trade_place_and_person_words():
 
 
 def _hjem(host: str, rows: list[dict]) -> dict:
-    return {f"https://data.brreg.no/enhetsregisteret/api/enheter?hjemmeside={host}&size=20":
+    return {f"https://data.brreg.no/enhetsregisteret/api/enheter?hjemmeside={host}&size=100":
             (200, json.dumps({"_embedded": {"enheter": rows}}), "application/json")}
 
 
@@ -3440,3 +3440,9 @@ def test_four_letter_acronym_is_guessed_alone_after_the_whole_name():
     doms = W.name_domains("TTSS BYGGSERVICE AS")
     assert doms.index("ttss.no") > doms.index("ttssbyggservice.com") and "ttss.com" in doms
     assert "berg.no" not in W.name_domains("BERG BYGG AS") and "lyng.no" not in W.name_domains("LYNG MALING AS")
+
+
+def test_entities_declaring_a_section_of_the_site_do_not_co_declare_it():
+    """DNB shape: funds declare www.dnb.no/fond; the bank declares www.dnb.no."""
+    assert W._declares_section({"hjemmeside": "www.fjellbekk.no/fond"})
+    assert not W._declares_section({"hjemmeside": "www.fjellbekk.no"}) and not W._declares_section({"hjemmeside": "https://fjellbekk.no/"})
