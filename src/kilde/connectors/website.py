@@ -19,6 +19,7 @@ eight HTTP requests.
 from __future__ import annotations
 
 import asyncio
+import collections
 import json
 import re
 import unicodedata
@@ -34,7 +35,7 @@ from bs4 import BeautifulSoup
 
 from ..http import Blocked, BudgetExhausted, Fetcher
 from ..spans import contains_core
-from ..templates import is_template_url, template_post
+from ..templates import body_word_count, is_template_url, stub_posts, template_post
 from ..model import COMPANY_OWNED, CompanyContext, Evidence, Snapshot
 
 METHOD = "website_identity_v1"
@@ -1148,6 +1149,7 @@ async def check_candidate(f: Fetcher, sp: _Spend, ctx: CompanyContext, v: Verdic
     await _check_variant(sp, ctx, v)
     await _check_collision(sp, ctx, v)
     await _check_legal_name_unique(sp, ctx, v)
+    await _check_workplace(sp, ctx, v)
 
 
 def _related_name_operates(pages: list[Page], words: list[str]) -> bool:
@@ -1375,10 +1377,12 @@ def _distinct_words(name: str) -> list[str]:
             and w not in FORM_NAME_WORDS and _translit(w) not in FORM_WORDS and not w.isdigit()]
 
 
-async def _colocated_namesake(sp: "_Spend", ctx: CompanyContext) -> str | None:
+async def _colocated_namesake(sp: "_Spend", ctx: CompanyContext, entity: dict | None = None,
+                              skip: frozenset = frozenset()) -> str | None:
     """Another registered entity (main unit or another company's sub-unit) at our registered street address that
-    shares a distinctive word of our name ('Al-Rahma Islamic Center' beside 'Al-Rahma Kultur Hus Stiftelsen')."""
-    e = ctx.registry or {}
+    shares a distinctive word of our name ('Al-Rahma Islamic Center' beside 'Al-Rahma Kultur Hus Stiftelsen').
+    entity: another record to check instead of ours (a workplace: its name and location address)."""
+    e = entity or ctx.registry or {}
     ours = _entity_keys(e)
     if not ours:
         return None
@@ -1392,18 +1396,19 @@ async def _colocated_namesake(sp: "_Spend", ctx: CompanyContext) -> str | None:
                     rows, _c = await brreg_name_search(sp, path, q, extra=f"&{field_}.postnummer={pc}")
                     for r in rows:
                         if r.get("organisasjonsnummer") == ctx.org or r.get("overordnetEnhet") == ctx.org \
-                                or _staff_body(r):
+                                or r.get("organisasjonsnummer") in skip or _staff_body(r):
                             continue  # our own units, and our staff's union or sports club, are no namesake
                         if t in {_translit(x) for x in name_words(r.get("navn") or "")} and _entity_keys(r) & ours:
                             return f"{r.get('navn')} ({r.get('organisasjonsnummer')})"
     return None
 
 
-async def _address_shared(sp: "_Spend", ctx: CompanyContext) -> str | None:
+async def _address_shared(sp: "_Spend", ctx: CompanyContext, entity: dict | None = None,
+                          skip: frozenset = frozenset()) -> str | None:
     """Another registered entity with our registered street address and postcode (any name or legal form): our
     address then cannot identify our site. Returns that entity, or a reason when the postcode is too crowded to
-    read in full (also not a pass)."""
-    e = ctx.registry or {}
+    read in full (also not a pass). entity: another record to check instead of ours (a workplace)."""
+    e = entity or ctx.registry or {}
     ours = _entity_keys(e)
     for pc in sorted({pc for _k, pc in ours}):
         for path, field_ in (("enheter", "forretningsadresse"), ("enheter", "postadresse"),
@@ -1420,7 +1425,8 @@ async def _address_shared(sp: "_Spend", ctx: CompanyContext) -> str | None:
                     pages = int((data.get("page") or {}).get("totalPages") or 0)
                     _SEARCH[url] = (rows, pages)
                 for r in rows:
-                    if r.get("organisasjonsnummer") == ctx.org or r.get("overordnetEnhet") == ctx.org:
+                    if r.get("organisasjonsnummer") == ctx.org or r.get("overordnetEnhet") == ctx.org \
+                            or r.get("organisasjonsnummer") in skip:
                         continue
                     if _entity_keys(r) & ours:
                         return f"{r.get('navn')} ({r.get('organisasjonsnummer')})"
@@ -1850,7 +1856,116 @@ def candidates(ctx: CompanyContext) -> list[tuple[str, str, str | None]]:
         nm = old.get("navn") if isinstance(old, dict) else old
         for d in name_domains(nm or "", e)[:2]:
             add(d, "guess")
+    for d in workplace_domains(ctx):  # last: a registered workplace's own name (a restaurant, a shop)
+        add(d, "guess_workplace")
     return out
+
+
+WORKPLACE_NAMES = 2    # workplaces whose names give domain guesses
+WORKPLACE_DOMAINS = 3  # guesses per workplace name: joined .no, hyphenated .no, joined .com
+
+
+def _workplace_label(name: str) -> str | None:
+    """The domain label a workplace name gives (all its words joined), or None when the name is too weak to
+    stand for a site: a single common word, digits only, or under six letters."""
+    words = [w for w in name_words(name) if not w.isdigit()]
+    if not words or (len(words) == 1 and (_translit(words[0]) in COMMON_NOUNS or words[0] in GENERIC_WORDS)):
+        return None
+    lab = _ascii_variants(words)[0]
+    joined = "".join(lab)
+    return joined if len(re.sub(r"[^a-z]", "", joined)) >= 6 else None
+
+
+def workplace_domains(ctx: CompanyContext) -> list[str]:
+    """Domain guesses from the names of the company's registered workplaces (underenheter) whose names differ
+    from the legal name: 'BELLA BAMBINA' of 'EIK BELLA BAMBINA AS' gives bellabambina.no. Full names only
+    (never a shortened part), in registry order, at most WORKPLACE_NAMES names and WORKPLACE_DOMAINS each."""
+    e = ctx.registry or {}
+    legal = _workplace_label(e.get("navn") or "") or ""
+    out: list[str] = []
+    names = 0
+    for w in ctx.facts.get("workplaces") or []:
+        lab = _workplace_label(w.get("navn") or "")
+        if not lab or lab == legal or names >= WORKPLACE_NAMES:
+            continue
+        names += 1
+        words = _ascii_variants([x for x in name_words(w["navn"]) if not x.isdigit()])[0]
+        for d in ("".join(words) + ".no", "-".join(words) + ".no", "".join(words) + ".com")[:WORKPLACE_DOMAINS]:
+            if d not in out:
+                out.append(d)
+                ctx.facts.setdefault("website_workplace_domains", {})[d] = w.get("organisasjonsnummer")
+    return out
+
+
+async def _check_workplace(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> None:
+    """A domain guessed from a registered workplace's name is ours when the site prints that workplace's full
+    name and its registered location address (street, number and postcode), prints no other organisation
+    number, and no other registered entity or another company's workplace carries the workplace's name (a
+    chain or franchise under that name, or a namesake elsewhere): the same registry name search that guards
+    name-and-address proofs for the legal name, with no exception for shared addresses."""
+    if v.source != "guess_workplace" or v.cross or v.path_scoped or v.others or v.namesake or v.method:
+        return
+    if v.status not in ("no_match", "name_only") or (v.status == "name_only" and not str(v.detail or "").startswith("legal name shown")):
+        return
+    e = ctx.registry or {}
+    if ((e.get("organisasjonsform") or {}).get("kode") or "").upper() in NON_OPERATING:
+        return
+    wp_org = (ctx.facts.get("website_workplace_domains") or {}).get(bare(v.domain))
+    w = next((x for x in ctx.facts.get("workplaces") or [] if x.get("organisasjonsnummer") == wp_org), None)
+    if not w or not w.get("beliggenhetsadresse"):
+        return
+    label = re.sub(r"[^a-z0-9]", "", bare(v.pages[0].host).split(".")[0]) if v.pages else ""
+    if label != _workplace_label(w["navn"]):
+        return  # the site's own domain must be the workplace's whole name
+    words = [x for x in name_words(w["navn"]) if not x.isdigit()]
+    name_span = name_page = None
+    for p in v.pages:
+        s, conflict = name_check(p.text, words)
+        if s and not conflict:
+            name_span, name_page = s, p
+            break
+    addr = None
+    for p in v.pages:
+        s, core = find_address_core(p, {"forretningsadresse": w["beliggenhetsadresse"]})
+        if s:
+            addr = (p, s, core)
+            break
+    if not name_span or not addr:
+        return
+    ours = _core_tokens(w["navn"])
+    wp_addr = _addr_key({"beliggenhetsadresse": w["beliggenhetsadresse"]})
+    rows, cut = await registry_rows(sp, words)
+    if cut:
+        v.detail = f"workplace name {w['navn']} is too common in the registry to decide"
+        return
+    for r in rows:
+        org = r.get("organisasjonsnummer")
+        if org in (ctx.org, wp_org) or r.get("overordnetEnhet") == ctx.org or not _active(r):
+            continue
+        theirs = _core_tokens(r.get("navn") or "")
+        # the whole workplace name inside theirs (a chain's 'Bella Solsikke Storo AS'), or the same number of words
+        # each a near match ('Bela Solsike') at the workplace's address; a shorter unrelated name ('Bell & Bell AS',
+        # 'Bella AS') is not it
+        # (as for the legal name: a near-namesake, one letter off, collides only at the same address)
+        long_t, long_o = {w for w in theirs if len(w) >= 3}, {w for w in ours if len(w) >= 3}
+        near = bool(long_t) and len(long_t) == len(long_o) and _near(long_o, long_t)
+        if theirs and (ours <= theirs or (near and _addr_key(r) == wp_addr)):
+            owner = r.get("overordnetEnhet")
+            v.detail = (f"another registered entity carries the workplace name: {r.get('navn')} ({org}"
+                        + (f", workplace of {owner}" if owner else "") + ")")
+            return
+    # the same rules as for the legal name: the workplace's address must be nobody else's, no namesake sits at
+    # it, and no other registered namesake heads the site
+    wp_rec = {"navn": w["navn"], "beliggenhetsadresse": w["beliggenhetsadresse"]}
+    blocker = (_heading_namesake(v.pages, [r for r in rows if r.get("organisasjonsnummer") != wp_org], ctx)
+               or await _colocated_namesake(sp, ctx, wp_rec, frozenset({wp_org}))
+               or await _address_shared(sp, ctx, wp_rec, frozenset({wp_org})))
+    if blocker:
+        v.detail = f"workplace {w['navn']}: {blocker} (another registered entity at or under its name or address)"
+        return
+    v.status, v.method = "proven", "workplace_address_and_name"
+    v.detail = f"registered workplace {w['navn']} ({wp_org}): its name and location address shown on its own domain"
+    v.proof = [addr, (name_page, name_span, _match_core(name_span, words))]
 
 
 # ---------------------------------------------------------------- extraction
@@ -2973,14 +3088,20 @@ def news_items(page: Page, domain: str, scope: Scope, limit: int = 5) -> list[tu
             continue
         if NEWS_PATH.fullmatch(pu.path.rstrip("/") + "/") or re.search(r"/(page|side|tag|kategori|category)/", pu.path):
             continue
+        # The item block is the nearest element holding the link and a date: the link itself first (a card
+        # whose <a> wraps heading and date), then up to five ancestors. A block that also holds another
+        # post's card (a link of its own with a heading or a date) is a list of items: the date and title
+        # there may belong to the neighbour, so the item is dropped rather than stitched together.
         block, found = a, None
-        for _ in range(5):
-            if block.parent is None:
-                break
-            block = block.parent
+        for level in range(6):
+            if level:
+                if block.parent is None:
+                    break
+                block = block.parent
             txt = block.get_text(" ", strip=True)
             links = {urljoin(page.url, x["href"]).split("#")[0].split("?")[0] for x in block.find_all("a", href=True)}
-            if len(txt) > 700 or len({x for x in links if same_site(host_of(x), domain)} - {u}) > 1:
+            if len(txt) > 700 or len({x for x in links if same_site(host_of(x), domain)} - {u}) > 1 \
+                    or _holds_other_item(page, block, u, domain, slash):
                 found = None
                 break  # the block holds more than one item: a date here may belong to another post
             found = find_date(block, slash)
@@ -2990,10 +3111,11 @@ def news_items(page: Page, domain: str, scope: Scope, limit: int = 5) -> list[tu
             continue
         same = [x for x in page.soup.find_all("a", href=True)
                 if urljoin(page.url, x["href"].strip()).split("#")[0].split("?")[0] == u]
-        if any(block not in x.parents for x in same):
+        if any(x is not block and block not in x.parents for x in same):
             continue  # linked from several items: a category or tag, not a post
         head = block.find(re.compile(r"^h[1-5]$"))
-        anchors = [x for x in block.find_all("a", href=True) if same_site(host_of(urljoin(page.url, x["href"])), domain)]
+        anchors = ([block] if block.name == "a" else []) + \
+            [x for x in block.find_all("a", href=True) if same_site(host_of(urljoin(page.url, x["href"])), domain)]
         main = (head.find("a", href=True) if head else None) or max(anchors, key=lambda x: len(x.get_text(strip=True)))
         if urljoin(page.url, main["href"].strip()).split("#")[0].split("?")[0] != u:
             continue  # a tag, category or author link inside someone else's item block
@@ -3003,9 +3125,26 @@ def news_items(page: Page, domain: str, scope: Scope, limit: int = 5) -> list[tu
         if scope.shared and not (scope.url_ours(u) or scope.accept(block, page)):
             continue
         span = _clean(block.get_text(" ", strip=True), 300)
-        items[u] = ({"title": title, "url": u, "date": found[0], "date_text": found[1]}, span or found[1])
+        full = _iso_with_offset(found[1]) if re.match(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}", found[1]) else None
+        when = full if full and full[:10] == found[0] and re.search(r"([+-]\d{2}:\d{2})$", full) else found[0]
+        items[u] = ({"title": title, "url": u, "date": when, "date_text": found[1]}, span or found[1])
     ranked = sorted(items.values(), key=lambda x: x[0]["date"], reverse=True)
     return ranked[:limit]
+
+
+def _holds_other_item(page: Page, block, u: str, domain: str, slash: str | None) -> bool:
+    """True when `block` contains a link to another page of the site that heads an item of its own: the link
+    wraps a heading or a date, or sits in a heading. Then the block is a list, and its first heading or date
+    may not be ours."""
+    heading = re.compile(r"^h[1-6]$")
+    for x in block.find_all("a", href=True):
+        v = urljoin(page.url, x["href"].strip()).split("#")[0].split("?")[0]
+        if v == u or not same_site(host_of(v), domain):
+            continue
+        if x.find(heading) is not None or x.find("time") is not None or find_date(x, slash) \
+                or x.find_parent(heading) is not None:
+            return True
+    return False
 
 
 def news_listing_link(pages: list[Page], domain: str) -> str | None:
@@ -3170,6 +3309,53 @@ def _activity_blocked(ctx: CompanyContext, field_name: str) -> bool:
     return False
 
 
+BULK_MIN_URLS = 10      # a day stamped on at least this many URLs ...
+BULK_MIN_SHARE = 0.25   # ... that are at least this share of the sitemap is a bulk regeneration
+BULK_MANY_URLS = 25     # and 25 or more URLs on one day is one when they are at least a tenth of the sitemap
+BULK_MANY_SHARE = 0.1   # (a large active site touching 3-8% of its pages on a busy day is not)
+BULK_SECTION_SHARE = 0.5  # a path section mostly stamped on bulk days is platform or chain content
+BULK_SITE_SHARE = 0.5     # and a sitemap mostly stamped on bulk days gives no page update at all
+
+
+def drop_bulk_lastmods(dated: list[tuple[str, str, str]]) -> tuple[list[tuple[str, str, str]], str | None]:
+    """Sitemap lastmod values that show a platform, not the company, at work. A day carried by many URLs at
+    once (a theme or CMS regeneration, a chain pushing shared pages to every member site) is not a page
+    update, and neither is any page in a path section that is mostly stamped on such days (the section is
+    shared content: a chain's service or supplier pages, refreshed again on other days by the chain).
+    Thresholds from sitemaps seen across 1,000-company runs: chain sites put 52-55% of 300 URLs on one day,
+    template refreshes on small sites 70-90%, CMS migrations 25-40% of 80-470 URLs and chain pushes 11-14%
+    (25-45 URLs); an active 1,000-page site put at most 8% (84 URLs) on its busiest day, which stays."""
+    if len(dated) < BULK_MIN_URLS:
+        return dated, None
+    days = collections.Counter(d for _, d, _ in dated)
+    bulk = {d for d, n in days.items()
+            if (n >= BULK_MANY_URLS and n / len(dated) >= BULK_MANY_SHARE)
+            or (n >= BULK_MIN_URLS and n / len(dated) >= BULK_MIN_SHARE)}
+    if not bulk:
+        return dated, None
+
+    def section(u: str) -> str:
+        parts = [x for x in urlsplit(u).path.split("/") if x]
+        return parts[0].lower() if len(parts) > 1 else ""  # top-level pages are judged one by one
+
+    per: dict[str, list[int]] = {}
+    for loc, d, _ in dated:
+        per.setdefault(section(loc), [0, 0])
+        per[section(loc)][0] += 1
+        per[section(loc)][1] += d in bulk
+    shared = {sec for sec, (n, b) in per.items() if sec and n >= 5 and b / n >= BULK_SECTION_SHARE}
+    n_bulk = sum(days[d] for d in bulk)
+    if n_bulk / len(dated) >= BULK_SITE_SHARE:
+        kept = []  # most of the sitemap is stamped in bulk: its lastmod values are the platform's, page by page too
+    else:
+        kept = [x for x in dated if x[1] not in bulk and section(x[0]) not in shared
+                and urlsplit(x[0]).path.strip("/").lower() not in shared]  # a shared section's own index page
+    note = (f"{n_bulk} of {len(dated)} sitemap URLs share bulk lastmod day(s) {', '.join(sorted(bulk))}"
+            + (f"; sections {', '.join('/' + x for x in sorted(shared))} are platform or chain content" if shared else "")
+            + "; not used as page updates")
+    return kept, note
+
+
 async def sitemap_activity(f: Fetcher, sp: _Spend, ctx: CompanyContext, home: Page, domain: str,
                            scope: Scope | None = None) -> None:
     scope = scope or Scope("", [])
@@ -3207,11 +3393,16 @@ async def sitemap_activity(f: Fetcher, sp: _Spend, ctx: CompanyContext, home: Pa
                 ctx.facts["website_sitemap_note"] = "sitemap lastmod looks generated at request time; not used"
                 return
             dated = [x for x in dated if not re.search(r"/(tag|tags|kategori|category|author|forfatter)/", x[0], re.I)]
+            dated, bulk_note = drop_bulk_lastmods(dated)
+            if bulk_note:
+                ctx.facts["website_sitemap_bulk"] = bulk_note
             floor = _date_floor(ctx)
             early = [x for x in dated if x[1] < floor]
             if early:
                 ctx.facts["website_activity_before_founding"] = len(early)
-            dated = [x for x in dated if x[1] >= floor and not PLACEHOLDER_SLUG.search(x[0]) and not is_template_url(x[0])]
+            stubs = {u.rstrip("/") for u in ctx.facts.get("website_stub_posts") or []}
+            dated = [x for x in dated if x[1] >= floor and not PLACEHOLDER_SLUG.search(x[0]) and not is_template_url(x[0])
+                     and x[0].rstrip("/") not in stubs]
             if not dated:
                 return
             if _activity_blocked(ctx, "site_page_updated"):
@@ -3671,15 +3862,23 @@ def _iso_with_offset(raw: str) -> str | None:
         return None
     try:
         if re.match(r"^\d{4}-\d{2}-\d{2}", raw):
-            d = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            # fractions of a second (up to nanoseconds from some CMSs) are dropped: the value is to the second
+            d = datetime.fromisoformat(re.sub(r"(T\d{2}:\d{2}:\d{2})\.\d+", r"\1", raw).replace("Z", "+00:00"))
         else:
             from email.utils import parsedate_to_datetime
             d = parsedate_to_datetime(raw)
     except (ValueError, TypeError, IndexError):
         return None
     if d.tzinfo is None:
-        return d.date().isoformat() if len(raw) <= 10 else d.isoformat()
-    return d.isoformat()
+        return d.date().isoformat() if len(raw) <= 10 else d.replace(microsecond=0).isoformat()
+    return d.replace(microsecond=0).isoformat()
+
+
+def _cdata(s: str) -> str:
+    """An XML element's content as markup: CDATA unwrapped, or entity-escaped HTML unescaped once."""
+    import html as _html
+    m = re.fullmatch(r"\s*<!\[CDATA\[(.*?)\]\]>\s*", s, re.S)
+    return m.group(1) if m else _html.unescape(s)
 
 
 def _xml_text(s: str) -> str:
@@ -3717,8 +3916,10 @@ def parse_feed(raw: str) -> list[dict]:
         when = _iso_with_offset(_xml_text(dm.group(1)))
         if not when:
             continue
+        bm = re.search(r"<(content:encoded|description|summary|content)\b[^>]*>(.*?)</\1>", b, re.S | re.I)
         out.append({"title": _xml_text(t.group(1)), "url": url.strip(), "datetime": when,
-                    "title_span": t.group(0), "date_span": dm.group(0)})
+                    "title_span": t.group(0), "date_span": dm.group(0),
+                    "body_words": body_word_count(_cdata(bm.group(2)), url.strip()) if bm else None})
     return out
 
 
@@ -3767,7 +3968,9 @@ def _wp_posts(raw: str) -> list[dict]:
         tspan, tpos = _raw_field(raw, "rendered", rendered, pos)
         dspan, dpos = _raw_field(raw, "date" if local and off else "date_gmt", local if local and off else gmt, pos)
         pos = max(pos, tpos, dpos)
-        out.append({"title": title, "url": r["link"], "datetime": when, "title_span": tspan, "date_span": dspan})
+        body = (r.get("excerpt") or {}).get("rendered") if isinstance(r.get("excerpt"), dict) else None
+        out.append({"title": title, "url": r["link"], "datetime": when, "title_span": tspan, "date_span": dspan,
+                    "body_words": body_word_count(body, r["link"])})
     return out
 
 
@@ -3967,7 +4170,14 @@ async def collect_dated_news(sp: "_Spend", ctx: CompanyContext, pages: list[Page
 
     def clean_feed(items: list[dict]) -> list[dict]:
         # a hacked site's feed full of spam is not company news: drop the whole feed
-        return [] if any(SPAM.search(it["title"]) for it in items) else items
+        if any(SPAM.search(it["title"]) for it in items):
+            return []
+        # bodiless filler posts (a demo product beside "Hello world!"); a stub found in one source (the REST
+        # list) stays a stub when a feed lists it again
+        stubs = stub_posts(items) | set(ctx.facts.get("website_stub_posts") or [])
+        if stubs:
+            ctx.facts["website_stub_posts"] = sorted(stubs)
+        return [it for it in items if it["url"] not in stubs]
 
     def keep(items: list[dict], snap: Snapshot) -> None:
         for it in items:
@@ -3977,12 +4187,12 @@ async def collect_dated_news(sp: "_Spend", ctx: CompanyContext, pages: list[Page
 
     if _is_wordpress(home) and sp.can(1):
         try:  # WordPress: the REST list gives the newest 20 posts in one request
-            snap = await sp.get(origin + "/wp-json/wp/v2/posts?per_page=20&_fields=title,link,date,date_gmt")
+            snap = await sp.get(origin + "/wp-json/wp/v2/posts?per_page=20&_fields=title,link,date,date_gmt,excerpt")
             if snap.status == 200:
                 rows = _wp_posts(snap.content.decode("utf-8", "replace"))
                 keep(clean_feed(rows), snap)
                 if len(rows) >= 20 and len(found) < limit and sp.can(1):
-                    snap2 = await sp.get(origin + "/wp-json/wp/v2/posts?per_page=20&page=2&_fields=title,link,date,date_gmt")
+                    snap2 = await sp.get(origin + "/wp-json/wp/v2/posts?per_page=20&page=2&_fields=title,link,date,date_gmt,excerpt")
                     if snap2.status == 200:
                         keep(clean_feed(_wp_posts(snap2.content.decode("utf-8", "replace"))), snap2)
         except (BudgetExhausted, _OutOfRequests):

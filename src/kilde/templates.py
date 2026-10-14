@@ -64,3 +64,46 @@ def is_template_title(title: str) -> bool:
 def template_post(title: str | None, url: str | None) -> bool:
     """True for a site builder's default post or page, by its title or its URL slug."""
     return bool((title and is_template_title(title)) or (url and is_template_url(url)))
+
+
+# Stub posts: a post with (almost) no body text is not news when something else marks it as filler: a one-word
+# title (a product or demo item such as "Purefloor"), every other post on the site being a builder default
+# ("Hello world!"), or a theme's foreign-language default category in its path (an imported shop demo).
+# Real posts on page-builder sites often have empty excerpts too, so emptiness alone never decides.
+# Data (WordPress REST excerpts on 19 sites from the 1,000-company runs): posts with body text had 5 or
+# more words (median about 50); empty excerpts were page-builder posts with descriptive titles.
+MIN_BODY_WORDS = 5
+DEMO_CATEGORIES = {"tienda", "sin-categoria", "sin-categorizar", "non-classe", "non-classifie", "senza-categoria",
+                   "geen-categorie", "sem-categoria", "bez-kategorii", "allgemein", "shop-demo", "demo"}
+
+
+def body_word_count(html_text: str | None, own_url: str | None = None) -> int | None:
+    """Visible words in a post body or excerpt (tags, entities and the [...] read-more marker removed);
+    None when the source gave no body at all. A paragraph that links the post itself is a feed plugin's
+    footer ("The post X appeared first on Y", "La entrada X se publicó primero en Y") and is not body text."""
+    if html_text is None:
+        return None
+    import html as _html
+    raw = str(html_text)
+    if own_url:
+        key = re.escape(own_url.rstrip("/")) + r"/?[\"']"
+        raw = re.sub(r"(?is)<p\b[^>]*>(?:(?!</p>).)*?href=[\"']" + key + r"(?:(?!</p>).)*</p>", " ", raw)
+    text = _html.unescape(re.sub(r"<[^>]+>", " ", raw))
+    text = re.sub(r"\[(?:…|\.\.\.)\]", " ", text)
+    return len(re.findall(r"[^\W\d_]{2,}", text))
+
+
+def stub_posts(items: list[dict]) -> set[str]:
+    """URLs of items ({title, url, body_words}) that are filler, not news (see the rule above)."""
+    out: set[str] = set()
+    for it in items:
+        n = it.get("body_words")
+        if n is None or n >= MIN_BODY_WORDS or template_post(it.get("title"), it.get("url")):
+            continue
+        others = [x for x in items if x is not it]
+        segs = {x.lower() for x in unquote(urlsplit(it.get("url") or "").path).split("/") if x}
+        if (len(str(it.get("title") or "").split()) <= 1
+                or (others and all(template_post(x.get("title"), x.get("url")) for x in others))
+                or segs & DEMO_CATEGORIES):
+            out.add(it.get("url"))
+    return out

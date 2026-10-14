@@ -6,6 +6,7 @@ organisation number by the endpoint itself.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -269,6 +270,10 @@ async def fetch_subunits(f: Fetcher, ctx: CompanyContext) -> None:
                               span='"totalElements":0')
         ctx.mark("registered_workplace", "locations", "not_available", ev, note="No registered sub-units")
         return
+    # active workplaces as registered (name and location address), for website candidates by workplace name
+    ctx.facts["workplaces"] = [{"organisasjonsnummer": u.get("organisasjonsnummer"), "navn": u.get("navn"),
+                                "beliggenhetsadresse": u.get("beliggenhetsadresse")}
+                               for u in items if not u.get("nedleggelsesdato") and u.get("navn")]
     for u in items:
         if u.get("nedleggelsesdato"):
             continue
@@ -301,30 +306,97 @@ async def fetch_group(f: Fetcher, ctx: CompanyContext) -> None:
             walk(child)
 
     walk(data)
-    # The root is the ultimate parent; each node names its direct parent.
-    me = next((n for n in nodes if n.get("organisasjonsnummer") == ctx.org), None)
-    if me and me.get("parentOrganisasjonsnummer"):
+    # The root is the ultimate parent; each node names the company it hangs under. One company can sit in
+    # the tree several times: a KDAT line ("Konsern datter") is a direct subsidiary, a KMOR line
+    # ("Konsern mor", grunnlag "Indirekte mor") says the node it hangs under is that company's indirect
+    # parent, and KGRL lines ("Konsern grunnlag") are minority stakes that only add up to control.
+    links = group_links(nodes, ctx.org)
+    up = links["parent"]
+    if up:
+        line = up["line"]
         ev = ctx.add_evidence(snap, source_class=OFFICIAL_REGISTRY, method="brreg_group_v1", licence=LICENCE,
-                              span=span_of(me, "parentOrganisasjonsnummer", "parentNavn", "organisasjonsnummer", "grunnlag", "dato"),
-                              effective_date=me.get("dato"), anchor=("organisasjonsnummer", ctx.org))
-        ctx.add_claim("group_parent", "identity", {"organisation_number": me["parentOrganisasjonsnummer"],
-                                                   "name": me.get("parentNavn"), "ownership": me.get("grunnlag")},
-                      ev, as_of=me.get("dato"), match=m)
+                              span=span_of(line, "parentOrganisasjonsnummer", "parentNavn", "organisasjonsnummer",
+                                           "knytningsform", "grunnlag", "dato"),
+                              effective_date=line.get("dato"), anchor=_line_anchor(line))
+        ctx.add_claim("group_parent", "identity", {"organisation_number": line["parentOrganisasjonsnummer"],
+                                                   "name": line.get("parentNavn"), "relationship": up["relationship"],
+                                                   "ownership": up["ownership"]},
+                      ev, as_of=line.get("dato"), match=m)
     if data.get("organisasjonsnummer") and data["organisasjonsnummer"] != ctx.org and \
-            (not me or data["organisasjonsnummer"] != me.get("parentOrganisasjonsnummer")):
+            (not up or data["organisasjonsnummer"] != up["line"].get("parentOrganisasjonsnummer")):
         ev = ctx.add_evidence(snap, source_class=OFFICIAL_REGISTRY, method="brreg_group_v1", licence=LICENCE,
                               span=span_of(data, "organisasjonsnummer", "navn"))
         ctx.add_claim("group_ultimate_parent", "identity", {"organisation_number": data["organisasjonsnummer"],
                                                             "name": data.get("navn")}, ev, match=m)
-    children = [n for n in nodes if n.get("parentOrganisasjonsnummer") == ctx.org]
-    for c in children[:50]:
-        ev = ctx.add_evidence(snap, source_class=OFFICIAL_REGISTRY, method="brreg_group_v1", licence=LICENCE,
-                              span=span_of(c, "organisasjonsnummer", "navn", "knytningsform", "grunnlag", "dato"),
-                              effective_date=c.get("dato"), anchor=("organisasjonsnummer", c["organisasjonsnummer"]))
-        ctx.add_claim("group_subsidiary", "identity",
-                      {"organisation_number": c["organisasjonsnummer"], "name": c.get("navn"),
-                       "relationship": (c.get("knytningsform") or {}).get("beskrivelse"), "ownership": c.get("grunnlag")},
-                      ev, as_of=c.get("dato"), match=m)
+    for sub in links["subsidiaries"][:50]:
+        evs = [ctx.add_evidence(snap, source_class=OFFICIAL_REGISTRY, method="brreg_group_v1", licence=LICENCE,
+                                span=span_of(line, "organisasjonsnummer", "navn", "parentOrganisasjonsnummer",
+                                             "knytningsform", "grunnlag", "dato"),
+                                effective_date=line.get("dato"), anchor=_line_anchor(line))
+               for line in sub["lines"]]
+        first_line = sub["lines"][0]
+        value = {"organisation_number": first_line["organisasjonsnummer"], "name": first_line.get("navn"),
+                 "relationship": sub["relationship"], "ownership": sub["ownership"]}
+        if sub.get("direct_stake"):
+            value["direct_stake"] = sub["direct_stake"]
+        ctx.add_claim("group_subsidiary", "identity", value, evs, as_of=first_line.get("dato"), match=m)
+
+
+def _line_anchor(line: dict) -> tuple:
+    """Anchor one tree line: a company can appear several times, so name it by number, parent and code."""
+    pairs = [("organisasjonsnummer", line.get("organisasjonsnummer"))]
+    if line.get("parentOrganisasjonsnummer"):
+        pairs.append(("parentOrganisasjonsnummer", line["parentOrganisasjonsnummer"]))
+    if line.get("knytningsform"):
+        pairs.append(("knytningsform", line["knytningsform"]))
+    return tuple(pairs)
+
+
+def _code(node: dict) -> str:
+    return str((node.get("knytningsform") or {}).get("kode") or "").upper()
+
+
+def _share(node: dict) -> str | None:
+    """The registry's ownership text when it is a share ("100 %", "14,3%"), else None ("Indirekte mor")."""
+    g = str(node.get("grunnlag") or "").strip()
+    return g if re.search(r"\d", g) else None
+
+
+def group_links(nodes: list[dict], org: str) -> dict:
+    """Our parent and our subsidiaries from a konsernstruktur tree, one entry per distinct organisation number.
+
+    Subsidiaries are only lines hanging directly under us: KDAT is a direct subsidiary (ownership is its
+    share), KMOR is an indirect subsidiary (we control it through our subsidiaries; our own KGRL stake, if
+    any, is kept as direct_stake). A company with only KGRL lines under us is a minority stake, not a
+    subsidiary. Our parent comes from our own KDAT line, else our KMOR line (indirect); a KGRL line under
+    another company never makes that company our parent."""
+    subs: dict[str, dict] = {}
+    for n in nodes:
+        o = n.get("organisasjonsnummer")
+        if o and o != org and n.get("parentOrganisasjonsnummer") == org:
+            subs.setdefault(o, {"lines": []})["lines"].append(n)
+    out = []
+    for o, s in subs.items():
+        lines = s["lines"]
+        kdat = next((x for x in lines if _code(x) == "KDAT"), None)
+        kmor = next((x for x in lines if _code(x) == "KMOR"), None)
+        stake = next((_share(x) for x in lines if _code(x) == "KGRL" and _share(x)), None)
+        if kdat:
+            out.append({"lines": [kdat], "relationship": "direct subsidiary", "ownership": _share(kdat)})
+        elif not any(_code(x) for x in lines):  # minimal records without a relationship code
+            out.append({"lines": lines[:1], "relationship": "direct subsidiary", "ownership": _share(lines[0])})
+        elif kmor:
+            keep = [kmor] + [x for x in lines if _code(x) == "KGRL" and _share(x) == stake][:1]
+            out.append({"lines": keep, "relationship": "indirect subsidiary", "ownership": None, "direct_stake": stake})
+    mine = [n for n in nodes if n.get("organisasjonsnummer") == org and n.get("parentOrganisasjonsnummer")]
+    kdat = next((x for x in mine if _code(x) == "KDAT"), None)
+    kmor = next((x for x in mine if _code(x) == "KMOR"), None)
+    # Lines without a relationship code (older or minimal records) keep the plain direct-parent reading.
+    bare = next((x for x in mine if not _code(x)), None)
+    parent = ({"line": kdat, "relationship": "direct parent", "ownership": _share(kdat)} if kdat else
+              {"line": kmor, "relationship": "indirect parent", "ownership": None} if kmor else
+              {"line": bare, "relationship": "direct parent", "ownership": _share(bare)} if bare else None)
+    return {"parent": parent, "subsidiaries": out}
 
 
 # ---------------------------------------------------------------- signature rules

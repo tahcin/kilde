@@ -1253,7 +1253,7 @@ def test_wordpress_rest_posts_first_and_feed_page_two():
                       "date": f"2026-0{1 + i % 8}-1{i % 9}T12:00:00",
                       "date_gmt": f"2026-0{1 + i % 8}-1{i % 9}T10:00:00"} for i in range(12)])
     body = f'<link href="/wp-content/a.css"><footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>'
-    f = _site({"https://fjellbekk.no/wp-json/wp/v2/posts?per_page=20&_fields=title,link,date,date_gmt":
+    f = _site({"https://fjellbekk.no/wp-json/wp/v2/posts?per_page=20&_fields=title,link,date,date_gmt,excerpt":
                (200, wp, "application/json")}, body=body)
     ctx = ctx_for(hjemmeside="fjellbekk.no")
     run(f, ctx)
@@ -2513,3 +2513,257 @@ def test_contact_at_our_group_parents_domain_does_not_share_the_site():
     ctx = ctx_for()
     run(FakeFetcher({"https://fjellbekktrevare.no/": (200, html(body))}), ctx)
     assert "nordtopp" in json.dumps([c.match for c in ctx.claims if c.field in ("official_website", "related_website")])
+
+def _card(slug: str, title: str, iso: str, shown: str) -> str:
+    """One item card shaped like a CMS article list: the <a> wraps image, heading, summary and date."""
+    return (f'<a href="/aktuelt/{slug}" class="flow list-item"><img src="/img/{slug}.jpg" alt="">'
+            f'<div class="kicker"><div class="kicker--text"></div><h2 class="heading-md">{title}</h2></div>'
+            f'<div class="article-summary">Kort ingress om {title.lower()} fra verkstedet.</div>'
+            f'<div class="avatar"><div class="avatar--name">Ola Testesen</div><div class="avatar--divider">|</div>'
+            f'<time class="avatar--date" datetime="{iso}">{shown}</time></div></a>')
+
+
+def test_card_listing_ties_title_date_and_link_to_the_same_item_and_reads_page_one():
+    """Regression: on a card list the date and title of one card were paired with the next card's link, and
+    only page 2 (two cards) yielded items while the newer posts on page 1 were missed."""
+    body = f'<a href="/aktuelt">Aktuelt</a><footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>'
+    nav = ('<nav aria-label="Søkeresultat navigasjon" class="pagination"><ul>'
+           '<li><a rel="prev" href="/aktuelt?page={p}"><span></span></a></li>'
+           '<li><a rel="next" href="/aktuelt?page={n}"><span></span></a></li></ul></nav>')
+    page1 = html('<main><h1>Aktuelt</h1><div class="article-list-items">'
+                 + _card("ny-selger", "Ny selger i teamet vårt", "2026-09-09T16:30:25.444893748Z", "9. september 2026")
+                 + _card("sommerapent", "Sommeråpent i butikken", "2026-06-03T11:40:19.7892Z", "3. juni 2026")
+                 + _card("ny-maskin", "Ny maskin på verkstedet", "2026-03-18T06:07:10.7479Z", "18. mars 2026")
+                 + '</div>' + nav.format(p=1, n=2) + '</main>')
+    page2 = html('<main><div class="article-list-items">'
+                 + _card("sterk-partner", "Sterk partner for fremtiden", "2025-02-25T07:36:46.1099Z", "25. februar 2025")
+                 + _card("presisjon", "Presisjon som grunnlag", "2025-03-05T19:54:20.4817Z", "5. mars 2025")
+                 + '</div>' + nav.format(p=1, n=3) + '</main>')
+    f = _site({"https://fjellbekk.no/aktuelt": (200, page1), "https://fjellbekk.no/aktuelt?page=2": (200, page2)}, body=body)
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(f, ctx)
+    news = [c for c in ctx.claims if c.field == "dated_news"]
+    got = {c.match["detail"].split(" ")[0].rsplit("/", 1)[-1]: c.value for c in news}
+    # the card's own <time datetime> (fractions dropped, offset kept)
+    assert got == {"ny-selger": "Ny selger i teamet vårt (2026-09-09T16:30:25+00:00)",
+                   "sommerapent": "Sommeråpent i butikken (2026-06-03T11:40:19+00:00)",
+                   "ny-maskin": "Ny maskin på verkstedet (2026-03-18T06:07:10+00:00)",
+                   "presisjon": "Presisjon som grunnlag (2025-03-05T19:54:20+00:00)",
+                   "sterk-partner": "Sterk partner for fremtiden (2025-02-25T07:36:46+00:00)"}
+    assert f.calls.index("https://fjellbekk.no/aktuelt") < f.calls.index("https://fjellbekk.no/aktuelt?page=2")
+    for c in news:  # the quoted title and date are the claimed item's own
+        spans = " ".join(e.claim_span for e in ctx.evidence if e.id in c.evidence_ids)
+        assert c.value.rsplit(" (", 1)[0] in spans or c.value.rsplit(" (", 1)[1][:19] in spans
+
+
+def test_list_without_item_containers_drops_dates_it_cannot_tie_to_one_link():
+    """Two headed links share one block with a single date: the date could be either post's, so neither gets it."""
+    body = f'<a href="/nyheter">Nyheter</a><footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>'
+    listing = html('<main><div class="list"><h3><a href="/nyheter/a">Første sak om verkstedet</a></h3>'
+                   '<h3><a href="/nyheter/b">Andre sak om verkstedet</a></h3><time datetime="2026-05-02">2. mai 2026</time>'
+                   '</div></main>')
+    page = W.parse_page(Snapshot(url="https://fjellbekk.no/nyheter", final_url="https://fjellbekk.no/nyheter", status=200,
+                                 retrieved_at=utc_now(), content=listing.encode(), content_type="text/html"))
+    assert W.news_items(page, "fjellbekk.no", W.Scope(OURS, ["fjellbekk"])) == []
+
+
+def _dated(rows):
+    return [(f"https://fjellbekk.no{p}", d, d) for p, d in rows]
+
+
+def test_bulk_lastmod_days_and_chain_sections_are_not_page_updates():
+    # chain platform: 60 service pages pushed on one day plus a supplier section, a few own pages on other days
+    chain = ([(f"/tjenester/t{i}", "2026-10-05") for i in range(60)] + [(f"/tjenester/n{i}", "2026-10-12") for i in range(3)]
+             + [(f"/leverandorer/l{i}", "2026-10-05") for i in range(8)] + [("/leverandorer", "2026-10-12")]
+             + [(f"/produkt/p{i}", f"2026-0{1 + i % 8}-1{i % 9}") for i in range(80)] + [("/om-oss", "2026-09-01")])
+    kept, note = W.drop_bulk_lastmods(_dated(chain))
+    paths = {urlsplit(u).path for u, _, _ in kept}
+    assert note and "2026-10-05" in note and "/tjenester" in note
+    assert not any(p.startswith(("/tjenester", "/leverandorer")) for p in paths)  # section and its index page
+    assert "/om-oss" in paths and "/produkt/p3" in paths
+    # mostly stamped in bulk: nothing from the sitemap is a page update
+    mostly = [(f"/tjenester/t{i}", "2026-10-05") for i in range(40)] + [(f"/x{i}", f"2026-0{1 + i}-01") for i in range(5)]
+    assert W.drop_bulk_lastmods(_dated(mostly))[0] == []
+    small_refresh = [(f"/side{i}", "2026-09-28") for i in range(12)] + [("/en/a", "2026-10-01"), ("/b", "2026-07-02")]
+    assert W.drop_bulk_lastmods(_dated(small_refresh))[0] == []
+
+
+def test_ordinary_and_large_active_sitemaps_keep_their_dates():
+    spread = [(f"/p{i}", f"2026-{1 + i % 9:02d}-{1 + i % 27:02d}") for i in range(40)]
+    assert W.drop_bulk_lastmods(_dated(spread)) == (_dated(spread), None)
+    # a 1,000-page site touching 80 pages (8%) on its busiest day is an active site, not a platform push
+    big = [(f"/kunnskap/a{i}", "2026-05-08") for i in range(80)] + \
+        [(f"/kunnskap/b{i}", f"2026-{1 + i % 9:02d}-{1 + i % 28:02d}") for i in range(920)]
+    kept, note = W.drop_bulk_lastmods(_dated(big))
+    assert note is None and len(kept) == 1000
+    assert W.drop_bulk_lastmods(_dated(spread[:5]))[1] is None  # too few URLs to judge
+
+
+def test_chain_sitemap_gives_no_site_page_updates():
+    body = f"<footer>Org nr {OURS}</footer>"
+    rows = [(f"/tjenester/t{i}", "2026-10-05") for i in range(30)] + [(f"/tjenester/n{i}", "2026-10-13") for i in range(4)]
+    sm = ('<?xml version="1.0"?><urlset>' + "".join(f"<url><loc>https://fjellbekk.no{p}</loc><lastmod>{d}</lastmod></url>"
+                                                   for p, d in rows) + "</urlset>")
+    f = FakeFetcher({"https://fjellbekk.no/": (200, html(body)), "https://fjellbekk.no/sitemap.xml": (200, sm, "application/xml")})
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(f, ctx)
+    assert not [c for c in ctx.claims if c.field == "site_page_updated" and c.availability == "available"]
+    assert "bulk" in ctx.facts["website_sitemap_bulk"]
+
+
+WP = "999000045"
+
+
+def _workplace_ctx(**rec) -> CompanyContext:
+    ctx = ctx_for(navn="LYNGSTAD BELLA SOLSIKKE AS", **rec)
+    ctx.facts["workplaces"] = [{"organisasjonsnummer": WP, "navn": "BELLA SOLSIKKE",
+                                "beliggenhetsadresse": {"adresse": ["Torget 3"], "postnummer": "9998", "poststed": "TESTBY"}}]
+    return ctx
+
+
+def _workplace_site(body: str) -> dict:
+    return {"https://bellasolsikke.no/": (200, html(body, title="Bella Solsikke"))}
+
+
+def test_workplace_name_gives_domain_candidates_after_the_legal_name():
+    ctx = _workplace_ctx()
+    cands = W.candidates(ctx)
+    srcs = [s for _d, s, _u in cands]
+    assert [d for d, s, _u in cands if s == "guess_workplace"] == ["bellasolsikke.no", "bella-solsikke.no", "bellasolsikke.com"]
+    assert srcs.index("guess_workplace") > max(i for i, s in enumerate(srcs) if s == "guess")
+    # a workplace named like the company, or by a single common word, gives no extra guesses
+    ctx.facts["workplaces"] = [{"organisasjonsnummer": WP, "navn": "LYNGSTAD BELLA SOLSIKKE AS"},
+                               {"organisasjonsnummer": THIRD, "navn": "FRISOR"}]
+    assert not [d for d, s, _u in W.candidates(ctx) if s == "guess_workplace"]
+
+
+def test_workplace_site_proven_by_workplace_name_and_location_address():
+    body = "<main><h1>Bella Solsikke</h1><p>Besøksadresse: Torget 3, 9998 Testby</p><a href='mailto:post@bellasolsikke.no'>e</a></main>"
+    f = FakeFetcher(_workplace_site(body))
+    ctx = _workplace_ctx()
+    claims = run(f, ctx)
+    site = claims["official_website"]
+    assert site.availability == "available" and site.value == "bellasolsikke.no"
+    assert site.match["method"] == "workplace_address_and_name"
+    spans = " | ".join(e.claim_span for e in ctx.evidence if e.id in site.evidence_ids)
+    assert "Torget 3" in spans and "Bella Solsikke" in spans
+
+
+@pytest.mark.parametrize("body,namesake", [
+    # the workplace's name without its registered address
+    ("<main><h1>Bella Solsikke</h1><p>Storgata 1, 9998 Testby</p></main>", None),
+    # another company's organisation number on the site
+    (f"<main><h1>Bella Solsikke</h1><p>Torget 3, 9998 Testby</p><footer>Org.nr {OTHER}</footer></main>", None),
+    # another registered entity carries the workplace name (a chain or a namesake): never ours by name
+    ("<main><h1>Bella Solsikke</h1><p>Torget 3, 9998 Testby</p></main>", "BELLA SOLSIKKE KJEDEN AS"),
+])
+def test_workplace_site_needs_address_no_other_number_and_no_namesake(body, namesake):
+    pages = _workplace_site(body)
+    if namesake:
+        row = {"organisasjonsnummer": FOURTH, "navn": namesake, "organisasjonsform": {"kode": "AS"},
+               "forretningsadresse": {"adresse": ["Torget 3"], "postnummer": "9998"}}
+        pages["https://data.brreg.no/enhetsregisteret/api/enheter?navn=bella%20solsikke&size=50"] = (
+            200, json.dumps({"_embedded": {"enheter": [row]}, "page": {"totalPages": 1}}), "application/json")
+    ctx = _workplace_ctx()
+    claims = run(FakeFetcher(pages), ctx)
+    assert claims["official_website"].availability != "available"
+    got = next(x for x in ctx.facts["website_candidates"] if x["domain"] == "bellasolsikke.no")
+    if namesake:
+        assert "carries the workplace name" in got["detail"]
+    else:
+        assert got["status"] in ("no_match", "other_company")
+
+
+def _wp_row(title, slug, day, excerpt):
+    return {"date": f"{day}T13:39:31", "date_gmt": f"{day}T11:39:31", "link": f"https://fjellbekk.no/{slug}/",
+            "title": {"rendered": title}, "excerpt": {"rendered": excerpt, "protected": False}}
+
+
+def test_bodiless_demo_post_beside_hello_world_is_not_news_nor_a_page_update():
+    wp = json.dumps([_wp_row("Purevegg", "butikk-demo/tienda/purevegg", "2024-10-03", ""),
+                     _wp_row("Hello world!", "hello-world", "2024-09-17",
+                             "<p>Welcome to WordPress. This is your first post. Edit or delete it, then start writing!</p>")])
+    sm = ('<?xml version="1.0"?><urlset><url><loc>https://fjellbekk.no/butikk-demo/tienda/purevegg/</loc>'
+          '<lastmod>2024-10-03T11:39:33+00:00</lastmod></url></urlset>')
+    body = f'<link href="/wp-content/a.css"><footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>'
+    f = _site({"https://fjellbekk.no/wp-json/wp/v2/posts?per_page=20&_fields=title,link,date,date_gmt,excerpt":
+               (200, wp, "application/json"), "https://fjellbekk.no/sitemap.xml": (200, sm, "application/xml")}, body=body)
+    ctx = ctx_for(hjemmeside="fjellbekk.no", stiftelsesdato="2020-01-01")
+    run(f, ctx)
+    assert not [c for c in ctx.claims if c.field in ("dated_news", "site_page_updated") and c.availability == "available"]
+    from kilde.synthesis import summarise
+    ctx.add_claim("legal_name", "identity", "FJELLBEKK TREVARE AS", ctx.evidence[0])
+    assert "news post" not in summarise(ctx, [])["text"]  # no sentence rests on a withheld or dropped post
+
+
+def test_bodiless_posts_with_real_titles_on_page_builder_sites_stay_news():
+    from kilde.templates import stub_posts
+    items = [{"title": "Strandrydding på Steilene", "url": "https://x.no/strandrydding/", "body_words": 0},
+             {"title": "Investeringsrapport 30.06.25", "url": "https://x.no/rapport/", "body_words": 0},
+             {"title": "Nytt verksted", "url": "https://x.no/nytt/", "body_words": 40}]
+    assert stub_posts(items) == set()
+    # a one-word title with no body, or a bodiless post whose only sibling is a builder default, is filler
+    assert stub_posts([{"title": "Purevegg", "url": "https://x.no/p/", "body_words": 2}]) == {"https://x.no/p/"}
+    assert stub_posts([{"title": "Ny sak om oss", "url": "https://x.no/a/", "body_words": 0},
+                       {"title": "Hello world!", "url": "https://x.no/hello-world/", "body_words": 15}]) == {"https://x.no/a/"}
+    # unknown body (a titles-only feed) never decides
+    assert stub_posts([{"title": "Purevegg", "url": "https://x.no/p/", "body_words": None}]) == set()
+
+
+def test_feed_plugin_footer_is_not_body_text_and_rest_stub_stays_out_of_the_feed():
+    footer = ('<p>The post <a href="https://fjellbekk.no/demo/purevegg/">Purevegg</a> appeared first on '
+              '<a href="https://fjellbekk.no">Fjellbekk</a>.</p>')
+    rss = ('<rss><channel><item><title>Purevegg</title><link>https://fjellbekk.no/demo/purevegg/</link>'
+           '<pubDate>Thu, 03 Oct 2024 11:39:31 +0000</pubDate>'
+           f'<description><![CDATA[{footer}]]></description></item>'
+           '<item><title>Nytt verksted i Testby</title><link>https://fjellbekk.no/nytt-verksted/</link>'
+           '<pubDate>Thu, 03 Oct 2024 11:39:31 +0000</pubDate><description><![CDATA[<p>Vi har flyttet inn i et nytt '
+           'og større verksted på Testby.</p>' + footer.replace("demo/purevegg", "nytt-verksted") + ']]></description></item>'
+           '</channel></rss>')
+    items = W.parse_feed(rss)
+    assert [x["body_words"] for x in items] == [0, 11]
+    from kilde.templates import stub_posts
+    assert stub_posts(items) == {"https://fjellbekk.no/demo/purevegg/"}
+    # the REST list found only a stub and "Hello world!", so the feed is read next: the stub stays out of it
+    wp = json.dumps([_wp_row("Purevegg", "demo/purevegg", "2024-10-03", ""),
+                     _wp_row("Hello world!", "hello-world", "2024-09-17", "<p>Welcome to WordPress. This is your first post.</p>")])
+    body = f'<link href="/wp-content/a.css"><footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>'
+    f = _site({"https://fjellbekk.no/wp-json/wp/v2/posts?per_page=20&_fields=title,link,date,date_gmt,excerpt":
+               (200, wp, "application/json"),
+               "https://fjellbekk.no/feed/": (200, rss.replace("<item><title>Nytt", "<itemX><title>Nytt").replace(
+                   "</item></channel>", "</itemX></channel>"), "application/rss+xml")}, body=body)
+    ctx = ctx_for(hjemmeside="fjellbekk.no", stiftelsesdato="2020-01-01")
+    run(f, ctx)
+    assert not [c for c in ctx.claims if c.field == "dated_news" and c.availability == "available"]
+
+
+def test_workplace_collision_ignores_shorter_unrelated_names_but_not_chains():
+    body = "<main><h1>Bella Solsikke</h1><p>Torget 3, 9998 Testby</p></main>"
+    for name, addr, blocked in (("BELL & BELL AS", "Torget 3", False), ("BELLA AS", "Torget 3", False),
+                                ("BELLA SOLSIKKE STORO AS", "Storoveien 1", True),
+                                ("BELA SOLSIKE AS", "Storoveien 1", False), ("BELA SOLSIKE AS", "Torget 3", True)):
+        W._SEARCH.clear()
+        pages = _workplace_site(body)
+        row = {"organisasjonsnummer": FOURTH, "navn": name, "organisasjonsform": {"kode": "AS"},
+               "forretningsadresse": {"adresse": [addr], "postnummer": "9998"}}
+        pages["https://data.brreg.no/enhetsregisteret/api/enheter?navn=bella%20solsikke&size=50"] = (
+            200, json.dumps({"_embedded": {"enheter": [row]}, "page": {"totalPages": 1}}), "application/json")
+        claims = run(FakeFetcher(pages), _workplace_ctx())
+        assert (claims["official_website"].availability != "available") is blocked, name
+
+
+def test_workplace_proof_follows_the_address_and_visible_name_rules():
+    ok = "<main><h1>Bella Solsikke</h1><p>Besøksadresse: Torget 3, 9998 Testby</p></main>"
+    # another registered entity at the workplace's address: the address identifies nothing
+    pages = _workplace_site(ok)
+    pages.update(_listing("enheter", "forretningsadresse", [_row(OTHER, "TESTBY TORG AS", street="Torget 3", pc="9998")],
+                          pc="9998"))
+    ctx = _workplace_ctx()
+    run(FakeFetcher(pages), ctx)
+    assert not ctx.claims_for("official_website")
+    # the workplace name only inside an email address is no name
+    W._SEARCH.clear()
+    ctx = _workplace_ctx()
+    body = html("<main><p>bellasolsikke@gmail.com · Torget 3, 9998 Testby</p></main>", title="Velkommen")
+    run(FakeFetcher({"https://bellasolsikke.no/": (200, body)}), ctx)
+    assert not ctx.claims_for("official_website")

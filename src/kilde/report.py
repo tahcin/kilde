@@ -815,7 +815,7 @@ function render(f,v){
   if(f==='employees_reported')return '<span class="num">'+nfmt(v.count)+'</span>'+(v.point_in_time?' <span class="sub2">'+dfmt(v.point_in_time)+'</span>':'');
   if(v.lei&&(f==='lei_direct_parent'||f==='lei_ultimate_parent'))return '<span class="t">'+esc(v.name||'')+'</span> <span class="sub2 num">'+(v.organisation_number?orgf(v.organisation_number)+', ':'')+'LEI '+esc(v.lei)+'</span>';
   if(v.lei)return '<span class="num">'+esc(v.lei)+'</span><span class="note">'+[v.status?'Entity '+esc(String(v.status).toLowerCase()):'',v.registration_status?'registration '+esc(String(v.registration_status).toLowerCase()):'',v.next_renewal?'next renewal '+dfmt(v.next_renewal):''].filter(Boolean).join(', ')+'</span>';
-  if(f==='group_parent'||f==='group_subsidiary'||f==='group_ultimate_parent')return '<span class="t">'+esc(v.name||'')+'</span> <span class="sub2 num">'+orgf(v.organisation_number)+'</span>'+(v.ownership?' <span class="sub2">'+esc(v.ownership)+' owned</span>':'');
+  if(f==='group_parent'||f==='group_subsidiary'||f==='group_ultimate_parent')return '<span class="t">'+esc(v.name||'')+'</span> <span class="sub2 num">'+orgf(v.organisation_number)+'</span>'+(v.ownership?' <span class="sub2">'+esc(v.ownership)+' owned</span>':'')+(/^indirect/.test(v.relationship||'')?' <span class="sub2">'+esc(v.relationship)+(v.direct_stake?', '+esc(v.direct_stake)+' held directly':'')+'</span>':'');
   if(v.url&&(v.title||v.date))return link(v.url,v.title||v.url);
   if(v.code!=null&&v.name)return esc(v.name)+' <span class="sub2 num">'+esc(v.code)+'</span>';
   if(v.year&&v.url)return link(v.url,v.year);
@@ -1141,11 +1141,11 @@ function answerFor(co,intent){
     else if(pt.length)out.push(S('It is owned by its partners: '+pt.map(function(x){return x.v.name;}).join(', ')+'.',pt));
     else if(code==='STI')out.push(S('It is a foundation, so it has no owners.',[lf_]));
     else out.push(S('Owners and shareholders are not published in the open registers Kilde checks.',[]));
-    c=one(co,'group_parent');if(c)out.push(S('Its parent company is '+dn(c.v.name)+' ('+orgf(c.v.organisation_number)+')'+(c.v.ownership?', which owns '+c.v.ownership:'')+'.',[c]));
+    c=one(co,'group_parent');if(c)out.push(S('Its parent company is '+dn(c.v.name)+' ('+orgf(c.v.organisation_number)+')'+(c.v.relationship==='indirect parent'?', which controls it indirectly through its subsidiaries':c.v.ownership?', which owns '+c.v.ownership:'')+'.',[c]));
     else{c=one(co,'lei_direct_parent')||one(co,'lei_ultimate_parent');if(c)out.push(S('GLEIF lists '+dn(c.v.name)+' as its parent company.',[c]));
       else{c=one(co,'part_of_group');if(c)out.push(S(c.v?'It is registered as part of a group.':'It is not registered as part of a group.',[c]));}}
     c=one(co,'board_chair');if(c&&!own.length)out.push(S('Who controls it: the board, chaired by '+c.v.name+'.',[c]));}
-  else if(intent==='group'){c=one(co,'group_parent');if(c)out.push(S('Parent company: '+c.v.name+' ('+orgf(c.v.organisation_number)+')'+(c.v.ownership?', '+c.v.ownership+' owned':'')+'.',[c]));
+  else if(intent==='group'){c=one(co,'group_parent');if(c)out.push(S('Parent company: '+c.v.name+' ('+orgf(c.v.organisation_number)+')'+(c.v.relationship==='indirect parent'?', indirect control':c.v.ownership?', '+c.v.ownership+' owned':'')+'.',[c]));
     cs=av(co,'group_subsidiary');if(cs.length)out.push(S('Subsidiaries: '+cs.map(function(x){return x.v.name;}).join(', ')+'.',cs));
     c=one(co,'part_of_group');if(c&&!out.length)out.push(S(c.v?'It is registered as part of a group.':'It is not registered as part of a group.',[c]));}
   return out;
@@ -1351,7 +1351,7 @@ function cardOwner(co){
   var par=one(co,'group_parent'),ult=one(co,'group_ultimate_parent'),subs=av(co,'group_subsidiary'),pog=one(co,'part_of_group'),
       lp=one(co,'lei_direct_parent')||one(co,'lei_ultimate_parent'),lei=one(co,'lei'),own=av(co,'owner'),pt=av(co,'partner'),lf=one(co,'legal_form'),
       cap_=one(co,'share_capital'),wd=one(co,'wikidata_item'),a=[],cls=[],code=lf&&lf.v?lf.v.code:'';
-  if(par){a.push('It is owned by '+nm(par.v)+(par.v.ownership?' ('+esc(par.v.ownership)+')':'')+'.');cls.push(par);}
+  if(par){a.push((par.v.relationship==='indirect parent'?'It is controlled indirectly by '+nm(par.v)+', through its subsidiaries':'It is owned by '+nm(par.v)+(par.v.ownership?' ('+esc(par.v.ownership)+')':''))+'.');cls.push(par);}
   else if(lp){a.push('GLEIF lists '+nm(lp.v)+' as its parent company.');cls.push(lp);}
   else if(own.length){a.push('It belongs to its owner, '+esc(own[0].v.name)+'.');cls.push(own[0]);}
   else if(pt.length){a.push('It is owned by its partners.');cls=cls.concat(pt);}

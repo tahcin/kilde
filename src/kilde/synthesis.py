@@ -69,6 +69,21 @@ def money(amount: Any, cur: str | None) -> str:
     return f"{sign}{s} {cur or ''}".strip()
 
 
+def distinct(claims: list[Claim], *keys: str) -> list[Claim]:
+    """One claim per distinct entity: counts in sentences are of companies, places, ads or awards, never of
+    registry lines (a company can be listed twice in one source). Claims without the key stay as they are."""
+    out, seen = [], set()
+    for c in claims:
+        v = c.value if isinstance(c.value, dict) else {}
+        k = tuple(str(v.get(x) or "") for x in keys)
+        if any(k):
+            if k in seen:
+                continue
+            seen.add(k)
+        out.append(c)
+    return out
+
+
 def first(ctx: CompanyContext, field: str) -> Claim | None:
     xs = ctx.claims_for(field)
     return xs[0] if xs else None
@@ -177,11 +192,18 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
 
     parent = first(ctx, "group_parent")
     if parent:
-        say(f"It is part of a group whose direct parent is {parent.value.get('name')} ({parent.value.get('organisation_number')}).", parent)
-    subs = ctx.claims_for("group_subsidiary")
+        if parent.value.get("relationship") == "indirect parent":
+            say(f"It is part of a group in which {parent.value.get('name')} ({parent.value.get('organisation_number')}) "
+                f"controls it indirectly, through its own subsidiaries.", parent)
+        else:
+            say(f"It is part of a group whose direct parent is {parent.value.get('name')} ({parent.value.get('organisation_number')}).", parent)
+    subs = distinct(ctx.claims_for("group_subsidiary"), "organisation_number")
     if subs:
-        say(f"The registry lists {len(subs)} subsidiar{'y' if len(subs) == 1 else 'ies'}.", *subs[:5])
-    wp = ctx.claims_for("registered_workplace")
+        n_ind = sum(1 for c in subs if c.value.get("relationship") == "indirect subsidiary")
+        split = (f" ({len(subs) - n_ind} held directly and {n_ind} indirectly, through its subsidiaries)"
+                 if n_ind and n_ind < len(subs) else " (all held indirectly, through its subsidiaries)" if n_ind else "")
+        say(f"The registry lists {len(subs)} subsidiar{'y' if len(subs) == 1 else 'ies'}{split}.", *subs[:5])
+    wp = distinct(ctx.claims_for("registered_workplace"), "organisation_number")
     if wp:
         munis = sorted({c.value.get("municipality", "").title() for c in wp if c.value.get("municipality")})
         say(f"It has {len(wp)} registered workplace{'s' if len(wp) != 1 else ''}"
@@ -196,6 +218,8 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
                "address_and_name": "the site shows the registered address and the company name",
                "registry_email_domain_and_name": "the registry email address uses this site's domain and the site "
                                                  "shows the company name",
+               "workplace_address_and_name": "its domain is the name of a registered workplace of the company, "
+                                             "and the site shows that workplace's name and registered address",
                "legal_name_unique": "the site shows the exact registered legal name, which no other registered "
                                     "entity carries, and its domain is that name",
                "registry_declared": "the company registered it with Brønnøysundregistrene"}.get((site.match or {}).get("method"))
@@ -217,7 +241,7 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
         state = {"ISSUED": "registration current", "LAPSED": "registration lapsed", "PENDING_TRANSFER": "transfer pending",
                  "RETIRED": "retired"}.get(reg, f"registration status {reg.lower()}" if reg else "status not stated")
         say(f"It holds the Legal Entity Identifier {lei.value.get('lei')} ({state}).", lei)
-    lic = ctx.claims_for("financial_licence")
+    lic = distinct(ctx.claims_for("financial_licence"), "code", "role", "on_behalf_of", "finanstilsynet_id")
     if lic:
         own = [c for c in lic if (c.value or {}).get("role") not in ("agent", "branch")]
         agent = [c for c in lic if (c.value or {}).get("role") == "agent"]
@@ -231,7 +255,7 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
         if parts:
             say("According to Finanstilsynet it " + " and ".join(parts) + ".", *(own + agent))
 
-    jobs = ctx.claims_for("job_ad")
+    jobs = distinct(ctx.claims_for("job_ad"), "uuid")
     if jobs:
         newest = max(jobs, key=lambda c: c.value.get("published") or "")
         say(f"NAV lists {len(jobs)} active job ad{'s' if len(jobs) != 1 else ''} with its organisation number; the newest, "
@@ -246,14 +270,14 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
         say(f"Kilde collected {len(news)} dated news post{'s' if len(news) != 1 else ''} from its website; the newest, "
             f"\"{clip(title, 120)}\", is from {news[0].as_of}.", *news[:3])
 
-    awards = sorted(ctx.claims_for("public_contract_award"), key=lambda c: c.as_of or "", reverse=True)
+    awards = sorted(distinct(ctx.claims_for("public_contract_award"), "notice"), key=lambda c: c.as_of or "", reverse=True)
     if awards:
         say(f"TED, the EU procurement journal, lists {len(awards)} contract award{'s' if len(awards) != 1 else ''} won with its "
             f"organisation number, the latest on {awards[0].as_of}.", *awards[:3])
-    tenders = ctx.claims_for("procurement_notice")
+    tenders = distinct(ctx.claims_for("procurement_notice"), "notice")
     if tenders:
         say(f"As a buyer it has published {len(tenders)} procurement notice{'s' if len(tenders) != 1 else ''} on TED.", *tenders[:3])
-    projects = sorted(ctx.claims_for("research_project"), key=lambda c: c.as_of or "", reverse=True)
+    projects = sorted(distinct(ctx.claims_for("research_project"), "scheme", "project_number"), key=lambda c: c.as_of or "", reverse=True)
     if projects:
         say(f"The Research Council of Norway lists {len(projects)} funded or approved R&D project{'s' if len(projects) != 1 else ''} "
             f"for it (including SkatteFUNN), the latest \"{clip(str((projects[0].value or {}).get('title', '')), 100)}\".", *projects[:3])
@@ -274,7 +298,7 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
         say(f"It holds a central approval for construction work from DiBK"
             + (f", valid until {v.get('valid_to')}" if v.get("valid_to") else "") + ".", approval)
 
-    reg_changes = ctx.claims_for("registry_change")
+    reg_changes = distinct(ctx.claims_for("registry_change"), "update_id")
     if reg_changes:
         latest = max(reg_changes, key=lambda c: c.value.get("date") or "")
         what = ", ".join(latest.value.get("changed") or []) or latest.value.get("type")

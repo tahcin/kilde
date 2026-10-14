@@ -164,3 +164,40 @@ def test_legal_name_site_checks_the_proof_core_before_the_span_is_made_exact():
     ctx.cores[ev] = "Fjelltopp Rør\n  AS"  # the page split the name and form over two lines
     gate.check(ctx)
     assert ctx.claims_for("official_website")
+
+
+def short_label_ctx(site: str, name: str, method: str, name_span: str) -> CompanyContext:
+    ctx = CompanyContext("999999999")
+    ctx.registry = {"navn": name, "organisasjonsform": {"kode": "AS"}, "telefon": "22 33 44 55"}
+    s = Snapshot(url=site, final_url=site, status=200, retrieved_at="2026-10-13T08:00:00Z", content=b"x", content_type="text/html")
+    evs = [ctx.add_evidence(s, source_class="company_owned", span="tel:4722334455", method="t"),
+           ctx.add_evidence(s, source_class="company_owned", span=name_span, method="t")]
+    ctx.add_claim("official_website", "web_presence", site, evs, match={"method": method})
+    ctx.add_claim("website_title", "web_presence", "Tittel", evs[1], match={"method": "verified_site"})
+    return ctx
+
+
+def test_short_name_word_as_the_whole_domain_counts_when_the_proof_quotes_the_legal_name():
+    # a three-letter surname from the legal name is the domain; the registry phone and the full name are on it
+    ctx = short_label_ctx("https://www.vik.no/", "ING OLAV VIK AS", "phone_and_name", "Ing. Olav VIK – verktøy for industrien")
+    gate.check(ctx)
+    assert states(ctx) == {"website_title": "available"}
+
+
+def test_short_name_word_stays_strict_without_the_full_name_or_a_strong_proof_or_exact_label():
+    # the proof does not quote the whole registered name
+    ctx = short_label_ctx("https://www.vik.no/", "ING OLAV VIK AS", "phone_and_name", "Vik verktøy for industrien")
+    gate.check(ctx)
+    assert states(ctx) == {"website_title": "ambiguous"}
+    # a weaker proof (address and name) is not enough
+    ctx = short_label_ctx("https://www.vik.no/", "ING OLAV VIK AS", "address_and_name", "Ing. Olav Vik")
+    gate.check(ctx)
+    assert states(ctx) == {"website_title": "ambiguous"}
+    # the short word only inside a longer label (a chain or agency domain) never counts
+    ctx = short_label_ctx("https://www.vikkjeden.no/", "ING OLAV VIK AS", "phone_and_name", "Ing. Olav Vik")
+    gate.check(ctx)
+    assert states(ctx) == {"website_title": "ambiguous"}
+    # a generic word of the name as the domain (bil.no for 'OLAV VIK BIL AS') is not the company's name
+    ctx = short_label_ctx("https://www.bil.no/", "OLAV VIK BIL AS", "phone_and_name", "Olav Vik Bil")
+    gate.check(ctx)
+    assert states(ctx) == {"website_title": "ambiguous"}
