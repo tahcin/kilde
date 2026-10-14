@@ -817,6 +817,7 @@ class Verdict:
     path_scoped: bool = False   # the site is one section of a host that serves others (chain or portal)
     transient: list[str] = field(default_factory=list)  # pages of this site that failed transiently (timeout, 429, 5xx)
     alias_host: str | None = None  # the company's own domain when it is served from a site builder's technical host
+    aside: list[Page] = field(default_factory=list)  # pages read but kept out of the proof (a privacy page read early)
 
     def summary(self) -> dict[str, Any]:
         return {"domain": self.domain, "source": self.source, "status": self.status, "method": self.method,
@@ -1232,12 +1233,21 @@ async def check_candidate(f: Fetcher, sp: _Spend, ctx: CompanyContext, v: Verdic
                 return
     judge(v, ctx.org, e, registry_host)
     await _group_parent_site(sp, ctx, v, registry_host)  # a subsidiary's number may first appear on a subpage
-    if v.status == "name_only" and sp.can(1) and not any(re.search(r"(?i)personvern|privacy", p.url) for p in v.pages):
-        # a privacy, terms or imprint page often prints the operator's org number (ludenso.com/privacy-policy)
+    upgrade = v.status == "proven" and v.method != "orgnr_on_page"
+    if (v.status == "name_only" or upgrade) and sp.can(1) and \
+            not any(re.search(r"(?i)personvern|privacy", p.url) for p in v.pages):
+        # a privacy, terms or imprint page often prints the operator's org number (ludenso.com/privacy-policy).
+        # A site already proven by phone, email or address reads it too: our org number there is the stronger
+        # proof (the later namesake and shared-address checks do not apply to it); otherwise the page is set
+        # aside, so a processor's org number on it never undoes the proof.
         fetched = {_page_key(p.url) for p in v.pages} | {_page_key(p.snap.url) for p in v.pages}
         links = [urljoin(home.url, a["href"]).split("#")[0] for a in home.soup.find_all("a", href=True)
                  if re.search(r"(?i)personvern|privacy|cookie|vilk|terms|impressum|imprint", a["href"] + " " + a.get_text())]
         links = [u for u in links if same_site(host_of(u), home.host) and _page_key(u) not in fetched]
+        if upgrade:
+            # the privacy page the exclusivity test reads anyway, so a proven site costs no extra request
+            priv = next((u for u in internal_links(home) if re.search(r"(?i)personvern|privacy", u)), None)
+            links = [priv] if priv and _page_key(priv) not in fetched else links
         origin = f"{urlsplit(home.url).scheme}://{urlsplit(home.url).netloc}"
         for u in links[:1]:
             if not sp.can(1):
@@ -1246,6 +1256,9 @@ async def check_candidate(f: Fetcher, sp: _Spend, ctx: CompanyContext, v: Verdic
             if p and same_site(p.host, home.host):
                 v.pages.append(p)
                 judge(v, ctx.org, e, registry_host)
+                if upgrade and v.method != "orgnr_on_page":
+                    v.aside.append(v.pages.pop())
+                    judge(v, ctx.org, e, registry_host)
                 if v.status == "proven":
                     break
     await _check_variant(sp, ctx, v)
@@ -1290,7 +1303,8 @@ async def _group_parent_site(sp: "_Spend", ctx: CompanyContext, v: Verdict, regi
             judge(v, ctx.org, ctx.registry or {}, registry_host)
 
 
-COMMON_NOUNS = {"forsikring", "bank", "sparebank", "kraft", "energi", "entreprenor", "tak", "maling", "frisor", "klinikk",
+HOLDING_WORDS = {"holding", "holdings"}
+COMMON_NOUNS = {"advokatfirma", "advokatfirmaet", "advokatkontor", "advokatkontoret", "forsikring", "bank", "sparebank", "kraft", "energi", "entreprenor", "tak", "maling", "frisor", "klinikk",
                 "tannlege", "lege", "butikk", "kafe", "restaurant", "hotell", "skole", "barnehage", "verksted", "rorlegger",
                 "elektriker", "snekker", "regnskap", "revisjon", "advokat", "eiendom", "bygg", "transport", "service",
                 "senter", "sport", "trafikkskole", "taxi", "bilverksted", "utleie", "salg", "marina", "camping"}
@@ -1655,6 +1669,34 @@ def _shared_address_still_ours(v: Verdict, ctx: CompanyContext) -> bool:
     return any(_visible(_full_name_rx(name), p.text) for p in v.pages)
 
 
+async def _short_label_unique(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> bool:
+    """A domain made from one word of our name (kapadokya.no for KAPADOKYA RESTAURANT TONSBERG AS) carries no
+    chain or parent brand risk when the word is distinctive (four letters or more, not a trade, generic or place
+    word) and no other registered entity (main unit or another company's sub-unit) has that word in its name: no
+    sister, parent or other branch could own the brand. The site must be that domain itself, not a redirect or
+    a section of a host. A truncated registry search never passes."""
+    if v.cross or v.path_scoped or not v.pages or not same_site(bare(v.pages[0].host), bare(v.domain)):
+        return False
+    e = ctx.registry or {}
+    label = re.sub(r"[^a-z0-9]", "", bare(v.domain).split(".")[0])
+    places = _places(e)
+    word = next((w for w in _distinct_words(e.get("navn") or "")
+                 if label in {"".join(x) for x in _ascii_variants([w])} and _translit(w) not in places
+                 and _translit(w) not in COMMON_LABELS), None)
+    if not word:
+        return False
+    rows, truncated = await registry_rows(sp, [word])
+    if truncated:
+        return False
+    t = _translit(word)
+    for r in rows:
+        if r.get("organisasjonsnummer") == ctx.org or r.get("overordnetEnhet") == ctx.org:
+            continue
+        if t in {_translit(x) for x in name_words(r.get("navn") or "")}:
+            return False
+    return True
+
+
 async def _check_collision(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> None:
     """For proofs other than our org number: reject the site when another active registered entity (or another
     company's workplace) carries the same distinctive name, unless the site names our full legal name (with its
@@ -1662,7 +1704,7 @@ async def _check_collision(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> Non
     org number on the site or the registry-declared website."""
     if v.status != "proven" or v.method == "orgnr_on_page":
         return
-    if v.source == "guess_short":
+    if v.source == "guess_short" and not await _short_label_unique(sp, ctx, v):
         v.status, v.method = "name_only", None
         v.detail = "a domain made from part of the name needs our org number on the site (chain or parent brand risk)"
         return
@@ -1716,6 +1758,8 @@ async def _check_collision(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> Non
         theirs = _core_tokens(r.get("navn") or "")
         if not theirs or theirs == ours or not _near(ours, theirs) or _staff_body(r):
             continue
+        if theirs > ours and theirs - ours <= HOLDING_WORDS and not ours & HOLDING_WORDS:
+            continue  # our own name plus 'Holding' ('Unimar Holding AS' beside 'Unimar AS'): an owner, not a namesake
         if our_street and our_street & theirs:
             continue  # named after our street ('Hardangerfjordvegen 48 AS'): the building's owner, not a namesake
         shares = (our_addr and _addr_key(r) == our_addr) or bool(our_phones & _digits_phones(r))
@@ -1737,6 +1781,8 @@ async def _check_collision(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> Non
     # another entity's full name seen only inside ours ('Well AS' inside 'The Well AS') does not name it
     masked = our_rx.sub(" ", text) if our_rx else text
     our_core_rx = name_regex([w for w in name_words(e.get("navn") or "") if w not in FORM_NAME_WORDS])
+    plain_words = _places(e) | COMMON_NOUNS | GENERIC_WORDS
+    form_only_place = ours <= plain_words
     for r in rows:
         org = r.get("organisasjonsnummer")
         if org == ctx.org or r.get("overordnetEnhet") == ctx.org or not _active(r):
@@ -1744,6 +1790,8 @@ async def _check_collision(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> Non
         theirs = _core_tokens(r.get("navn") or "")
         if not theirs or not (theirs <= ours or ours <= theirs) or _staff_body(r):
             continue
+        if theirs < ours and theirs <= plain_words and not form_only_place:
+            continue  # a name of only place and trade words ('Testby Borettslag', 'Restaurant AS') names no brand
         other_rx = _full_name_rx(r.get("navn") or "")
         # a foreign company's Norwegian branch (NUF) under our name is the parent: never masked away
         nuf = ((r.get("organisasjonsform") or {}).get("kode") or "").upper() == "NUF" or \
@@ -2779,7 +2827,8 @@ def other_company_names(pages: list[Page], words: list[str],
 
 
 STAFF_ONLY = re.compile(r"(?i)bedriftsidrettslag|bedriftsklubb|personalforening|velferdsforening|fagforening|"
-                        r"pensjonskasse|ansattes|personalklubb")
+                        r"pensjonskasse|ansattes|personalklubb|pensjonistforening|pensjonistlag|pensjonistklubb|"
+                        r"bedriftsgruppe")
 
 
 def _staff_body(row: dict) -> bool:
@@ -2787,7 +2836,11 @@ def _staff_body(row: dict) -> bool:
     sports club, a staff welfare fund): an association (FLI) named as a staff body or registered as a trade
     union (NACE 94.2). It never runs the company's website, so it is no namesake for it. An ordinary sports
     club sharing a name (a club and its elite-team company) is not a staff body."""
-    if ((row.get("organisasjonsform") or {}).get("kode") or "").upper() != "FLI":
+    form = ((row.get("organisasjonsform") or {}).get("kode") or "").upper()
+    if form == "AAFY" and row.get("overordnetEnhet"):
+        # the association's own workplace (a sub-unit), named as a staff body
+        return bool(STAFF_ONLY.search(row.get("navn") or ""))
+    if form != "FLI":
         return False
     nace = ((row.get("naeringskode1") or {}).get("kode") or "")
     return bool(STAFF_ONLY.search(row.get("navn") or "")) or nace.startswith("94.2")
@@ -3826,7 +3879,10 @@ async def prepare_scope(sp: _Spend, ctx: CompanyContext, v: Verdict) -> Scope:
                 break
     if not (v.cross or v.path_scoped):
         priv = next((u for u in internal_links(home) if re.search(r"(?i)personvern|privacy", u)), None)
-        if priv and sp.can(1) and _page_key(priv) not in {_page_key(p.url) for p in v.pages}:
+        held = next((p for p in v.aside if priv and _page_key(p.snap.url) == _page_key(priv)), None)
+        if held and _page_key(priv) not in {_page_key(p.url) for p in v.pages}:
+            v.pages.append(held)  # already read while the site was judged
+        elif priv and sp.can(1) and _page_key(priv) not in {_page_key(p.url) for p in v.pages}:
             p, _st = await _site_page(sp, v, priv)
             if p and same_site(p.host, home.host):
                 v.pages.append(p)  # read for operator and controller names; never a contact source

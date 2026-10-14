@@ -1581,7 +1581,48 @@ def test_first_word_domain_needs_our_org_number():
     ctx = ctx_for(navn="KVIST LYNGHAUG BARNEHAGE AS",
                   forretningsadresse={"adresse": ["Hamnegata 8b"], "postnummer": "9999", "poststed": "TESTBY"})
     assert ("kvist.no", "guess_short", None) in W.candidates(ctx)
-    run(FakeFetcher({"https://kvist.no/": (200, html(body))}), ctx)
+    parent = _brreg("enheter", "kvist", [{"organisasjonsnummer": OTHER, "navn": "KVIST AS"}])
+    run(FakeFetcher({"https://kvist.no/": (200, html(body)), **parent}), ctx)
+    assert not ctx.claims_for("official_website")
+
+
+def test_first_word_domain_of_a_word_nobody_else_is_registered_with():
+    """Kapadokya shape: kapadokya.no for KAPADOKYA RESTAURANT TESTBY AS, our address and legal name on it, and no
+    other registered entity has 'Kapadokya' in its name: no chain or parent can own the brand."""
+    body = "<h1>Kapadokya</h1><footer>Kapadokya Restaurant Testby AS · Hamnegata 8b, 9999 Testby</footer>"
+    rec = dict(navn="KAPADOKYA RESTAURANT TESTBY AS",
+               forretningsadresse={"adresse": ["Hamnegata 8b"], "postnummer": "9999", "poststed": "TESTBY"})
+    ctx = ctx_for(**rec)
+    assert ("kapadokya.no", "guess_short", None) in W.candidates(ctx)
+    claims = run(FakeFetcher({"https://kapadokya.no/": (200, html(body, title="Kapadokya"))}), ctx)
+    assert claims["official_website"].value == "kapadokya.no"
+    # a sister or branch with the word in its name, or our own sub-unit's owner elsewhere, keeps it withheld
+    for row in ({"organisasjonsnummer": OTHER, "navn": "KAPADOKYA AS"},
+                {"organisasjonsnummer": SISTER, "navn": "KAPADOKYA GRILL", "overordnetEnhet": OTHER}):
+        W._SEARCH.clear()
+        W._NAME_SEARCH.clear()
+        pages = {"https://kapadokya.no/": (200, html(body, title="Kapadokya")),
+                 **_brreg("underenheter", "kapadokya", [row])}
+        ctx = ctx_for(**rec)
+        run(FakeFetcher(pages), ctx)
+        assert not ctx.claims_for("official_website"), row
+    # our own sub-unit is not another entity
+    W._SEARCH.clear()
+    W._NAME_SEARCH.clear()
+    own = {"organisasjonsnummer": SISTER, "navn": "KAPADOKYA RESTAURANT TESTBY AS", "overordnetEnhet": OURS}
+    ctx = ctx_for(**rec)
+    claims = run(FakeFetcher({"https://kapadokya.no/": (200, html(body, title="Kapadokya")),
+                              **_brreg("underenheter", "kapadokya", [own])}), ctx)
+    assert claims["official_website"].value == "kapadokya.no"
+
+
+def test_first_word_domain_that_redirects_elsewhere_stays_withheld():
+    body = "<h1>Kapadokya</h1><footer>Kapadokya Restaurant Testby AS · Hamnegata 8b, 9999 Testby</footer>"
+    ctx = ctx_for(navn="KAPADOKYA RESTAURANT TESTBY AS",
+                  forretningsadresse={"adresse": ["Hamnegata 8b"], "postnummer": "9999", "poststed": "TESTBY"})
+    f = FakeFetcher({"https://restaurantportal.no/": (200, html(body, title="Kapadokya"))},
+                    redirects={"https://kapadokya.no/": "https://restaurantportal.no/"})
+    run(f, ctx)
     assert not ctx.claims_for("official_website")
 
 
@@ -1987,6 +2028,12 @@ def test_staff_union_club_sharing_our_address_is_no_namesake():
     q = "https://data.brreg.no/enhetsregisteret/api/enheter?navn=fjellbekk&forretningsadresse.postnummer=9999&size=50"
     for row, published in ((_near_row("TEKNA FJELLBEKK", "FLI", "94.200"), True),
                            (_near_row("FJELLBEKK BEDRIFTSIDRETTSLAG", "FLI", "93.120"), True),
+                           (_near_row("FJELLBEKK PENSJONISTFORENING", "FLI", "94.992"), True),  # retired staff
+                           (_near_row("BEDRIFTSGRUPPEN LEDERNE FJELLBEKK", "FLI", "94.992"), True),  # union branch
+                           (_near_row("FJELLBEKK PENSJONISTFORENING AS", "AS", "94.992"), False),  # not an association
+                           (dict(_near_row("BEDRIFTSGRUPPEN LEDERNE FJELLBEKK", "AAFY", "94.992"),
+                                 overordnetEnhet=OTHER), True),  # the association's own sub-unit
+                           (dict(_near_row("FJELLBEKK BYGG", "AAFY", "94.992"), overordnetEnhet=OTHER), False),
                            (_near_row("FJELLBEKK IDRETTSLAG", "FLI", "93.120"), False),  # a club, not staff
                            (_near_row("FJELLBEKKS AS", "AS", "41.000"), False)):
         W._NAME_SEARCH.clear()
@@ -3515,3 +3562,73 @@ def test_unrelated_namesake_at_our_address_declaring_our_site_still_shares_it():
     claims = run(f, ctx)
     assert claims["official_website"].availability == "ambiguous"
     assert claims["related_website"].value["domain"] == "fjellbekk.no"
+
+
+def test_privacy_page_upgrades_a_phone_proof_to_our_org_number():
+    """TGS shape: the contact page proves the site by phone; the privacy page prints our org number, which the
+    later shared-address and namesake checks cannot undo."""
+    home = html('<a href="/kontakt">Kontakt</a><a href="/om-oss">Om oss</a><a href="/selskapet">Selskapet</a>'
+                '<a href="/privacy-policy">Privacy</a><h1>Fjellbekk Trevare</h1>')
+    kontakt = html("<footer>Fjellbekk Trevare AS · Tlf 41 00 00 01</footer>")
+    priv = html(f"<p>Fjellbekk Trevare AS (org. no. {OURS}) processes personal data.</p>")
+    pages = {"https://fjellbekktrevare.no/": (200, home), "https://fjellbekktrevare.no/kontakt": (200, kontakt),
+             "https://fjellbekktrevare.no/om-oss": (200, html("<p>Snekkere siden 1999.</p>")),
+             "https://fjellbekktrevare.no/selskapet": (200, html("<p>Vi lager kjøkken.</p>")),
+             "https://fjellbekktrevare.no/privacy-policy": (200, priv)}
+    claims = run(FakeFetcher(pages), ctx_for(telefon="41000001"))
+    assert claims["official_website"].match["method"] == "orgnr_on_page"
+    # a privacy page that names only a processor's org number leaves the phone proof as it was
+    W._SEARCH.clear()
+    W._NAME_SEARCH.clear()
+    pages["https://fjellbekktrevare.no/privacy-policy"] = (200, html(f"<p>Databehandler: Webby AS, org.nr {OTHER}</p>"))
+    f = FakeFetcher(pages)
+    ctx = ctx_for(telefon="41000001")
+    run(f, ctx)
+    assert ctx.facts["website_candidates"][0]["method"] == "phone_and_name"
+    assert f.calls.count("https://fjellbekktrevare.no/privacy-policy") == 1  # read once, reused by the scope test
+
+
+def test_our_own_holding_company_at_our_address_is_no_near_namesake():
+    """Unimar shape: 'Fjellbekk Trevare Holding AS' shares our address; a holding company owns us and runs no
+    site. A sister with another extra word still collides, and a holding company's own check is unchanged."""
+    body = "<h1>Fjellbekk Trevare</h1><footer>Fjellbekk Trevare AS · Tlf 41 00 00 01</footer>"
+    for name, published in (("FJELLBEKK TREVARE HOLDING AS", True), ("FJELLBEKK TREVARE BYGG AS", False)):
+        W._SEARCH.clear()
+        W._NAME_SEARCH.clear()
+        pages = {"https://fjellbekktrevare.no/": (200, html(body)),
+                 **_brreg("enheter", "fjellbekk%20trevare", [_row(OTHER, name)])}
+        ctx = ctx_for(telefon="41000001")
+        run(FakeFetcher(pages), ctx)
+        assert bool(ctx.claims_for("official_website")) is published, name
+    W._SEARCH.clear()
+    W._NAME_SEARCH.clear()
+    pages = {"https://fjellbekktrevareholding.no/": (200, html(body.replace("Trevare AS", "Trevare Holding AS"))),
+             **_brreg("enheter", "fjellbekk%20trevare%20holding", [_row(OTHER, "FJELLBEKK TREVARE HOLDING INVEST AS")])}
+    ctx = ctx_for(navn="FJELLBEKK TREVARE HOLDING AS", telefon="41000001")
+    run(FakeFetcher(pages), ctx)
+    assert not ctx.claims_for("official_website")
+
+
+def test_law_firm_word_is_shared_by_every_law_firm():
+    """'Advokatfirmaet' in two firms' names at one address does not make them namesakes."""
+    body = "<h1>Advokatfirmaet Fjellbekk</h1><footer>Advokatfirmaet Fjellbekk AS · Tlf 41 00 00 01</footer>"
+    q = "https://data.brreg.no/enhetsregisteret/api/enheter?navn=advokatfirmaet&forretningsadresse.postnummer=9999&size=50"
+    pages = {"https://advokatfirmaetfjellbekk.no/": (200, html(body, title="Advokatfirmaet Fjellbekk")),
+             q: (200, json.dumps({"_embedded": {"enheter": [_row(OTHER, "ADVOKATFIRMAET CLEVE AS")]}}), "application/json")}
+    claims = run(FakeFetcher(pages), ctx_for(navn="ADVOKATFIRMAET FJELLBEKK AS", telefon="41000001"))
+    assert claims["official_website"].value == "advokatfirmaetfjellbekk.no"
+
+
+def test_a_registered_name_of_only_place_or_trade_words_is_no_namesake():
+    """Kapadokya shape: 'Testby Borettslag' shares only the town word of KAPADOKYA RESTAURANT TESTBY AS, whose
+    site shows the town. A shorter name with a word that is no place still collides."""
+    body = "<h1>Kapadokya Restaurant</h1><footer>Kapadokya Restaurant · midt i Testby · Tlf 41 00 00 01</footer>"
+    rec = dict(navn="KAPADOKYA RESTAURANT TESTBY AS", telefon="41000001")
+    for name, published in (("TESTBY BORETTSLAG", True), ("RESTAURANT AS", True), ("KAPADOKYA AS", False)):
+        W._SEARCH.clear()
+        W._NAME_SEARCH.clear()
+        pages = {"https://kapadokyarestauranttestby.no/": (200, html(body, title="Kapadokya Restaurant")),
+                 **_brreg("enheter", "kapadokya%20restaurant%20testby", [_row(OTHER, name, street="Elsewhere 1")])}
+        ctx = ctx_for(**rec)
+        run(FakeFetcher(pages), ctx)
+        assert bool(ctx.claims_for("official_website")) is published, name
