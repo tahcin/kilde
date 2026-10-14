@@ -348,7 +348,7 @@ def emit_entity(ctx: CompanyContext, batch: WikidataBatch, qsnap: Snapshot, snap
 
     # Official website (P856)
     site, n = pick_website(statements(claims, "P856"))
-    from .website import canonical_social, site_domain
+    from .website import canonical_social, site_domain, social_path_is_link
     from urllib.parse import urlsplit as _us
     known = {str(c.value) for c in ctx.claims_for("official_website")}
     site_dom = site_domain(_us(str(_value(site))).netloc) if site and isinstance(_value(site), str) else None
@@ -438,7 +438,10 @@ def emit_entity(ctx: CompanyContext, batch: WikidataBatch, qsnap: Snapshot, snap
                 # Socials only when Wikidata's website is the site Kilde verified for this company.
                 if not site_dom or site_dom not in known:
                     continue
-                social = canonical_social(platform, pattern.format(quote(handle.strip(), safe="-_./")))
+                link = pattern.format(quote(handle.strip(), safe="-_./"))
+                if social_path_is_link(link):
+                    continue  # a domain, URL or email entered as the handle
+                social = canonical_social(platform, link)
                 if str(social) in {str(c.value) for c in ctx.claims_for("social_profile")}:
                     continue
                 ctx.add_claim("social_profile", "web_presence", social, ev(p, s), match=m)

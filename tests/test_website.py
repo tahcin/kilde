@@ -269,6 +269,19 @@ def test_request_cap():
     ("https://www.youtube.com/watch?v=abc", None),
     ("https://www.instagram.com/p/abc/", None),
     ("https://www.tiktok.com/@fjellbekk?lang=nb", ("tiktok", "https://www.tiktok.com/@fjellbekk")),
+    # a domain, URL or email typed where the handle belongs is a link to the site, not a profile
+    ("https://www.facebook.com/www.fjellbekk.no/?locale=nb_NO", None),
+    ("https://www.facebook.com/fjellbekk.com", None),
+    ("https://www.facebook.com/fjellbekk.no", ("facebook", "https://www.facebook.com/fjellbekk.no")),
+    ("https://www.facebook.com/https://fjellbekk.no", None),
+    ("https://www.instagram.com/post@fjellbekk.no", None),
+    ("https://www.instagram.com/www.fjellbekk.no/", None),
+    ("https://www.instagram.com/fjellbekk.no/", ("instagram", "https://www.instagram.com/fjellbekk.no")),
+    ("https://www.linkedin.com/company/fjellbekk.com/", None),
+    ("https://www.youtube.com/@www.fjellbekk.no", None),
+    ("https://www.pinterest.com/fjellbekk.no/", None),
+    ("https://x.com/www.fjellbekk.no", None),
+    ("https://www.instagram.com/fjell.bekk/", ("instagram", "https://www.instagram.com/fjell.bekk")),
 ])
 def test_clean_social(url, expected):
     assert W.clean_social(url) == expected
@@ -282,6 +295,15 @@ def test_candidates_order_and_free_mail():
     assert ("fjellbekktrevare.no", "guess", None) in c
     ctx2 = ctx_for(epostadresse="post@fjellbekk-trevare.no")
     assert W.candidates(ctx2)[0][:2] == ("fjellbekk-trevare.no", "email")
+
+
+def test_social_path_is_link():
+    assert W.social_path_is_link("facebook.com/www.fjellbekk.no")
+    assert W.social_path_is_link("https://www.facebook.com/fjellbekk.com/")
+    assert W.social_path_is_link("https://x.com/fjellbekk.no")
+    assert not W.social_path_is_link("https://www.facebook.com/fjellbekk.no")
+    assert not W.social_path_is_link("https://www.facebook.com/fjellbekk")
+    assert not W.social_path_is_link("https://www.instagram.com/fjell.bekk/")
 
 
 def test_name_domain_guesses_skip_generic():

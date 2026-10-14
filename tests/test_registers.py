@@ -372,3 +372,19 @@ def test_wikidata_batch_failure_never_raises():
     (t("+2018-00-00T00:00:00Z", 9), "2018"), (t("+1800-00-00T00:00:00Z", 7), None), (None, None)])
 def test_wd_date(value, expected):
     assert wikidata.wd_date(value) == expected
+
+
+@pytest.mark.parametrize("site,expected", [
+    ("www.facebook.com/fjellbekk", ["facebook.com/fjellbekk"]),
+    ("facebook.com/www.fjellbekk.no", []),
+    ("https://www.instagram.com/www.fjellbekk.no/", []),
+    ("https://www.linkedin.com/company/fjellbekk.no/", []),
+])
+def test_registry_declared_social_must_be_a_handle(site, expected):
+    from kilde.connectors import brreg
+    e = {"organisasjonsnummer": ORG, "navn": "FJELLBEKK AS", "hjemmeside": site}
+    snap = Snapshot(url=f"https://data.brreg.no/enhetsregisteret/api/enheter/{ORG}", final_url="", status=200,
+                    retrieved_at="2026-10-13T00:00:00Z", content=json.dumps(e).encode(), content_type="application/json")
+    ctx = CompanyContext(ORG)
+    brreg.emit_entity_claims(ctx, snap, e)
+    assert [str(c.value) for c in ctx.claims_for("social_profile")] == expected

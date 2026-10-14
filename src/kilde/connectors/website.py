@@ -2115,6 +2115,39 @@ def unwrap_redirect(url: str) -> str:
     return url
 
 
+HANDLE_TLD = re.compile(r"(?i)\.(?:no|com|net|org|se|dk|fi|is|de|uk|eu|io|biz|info|nu|as|co|app|online|shop|"
+                        r"store|site|web|xyz|me|tv)(?:$|[.?#:/])")
+
+
+# Instagram, TikTok, YouTube and Facebook names may contain dots, and Norwegian pages often use their domain as
+# the name ('fjellbekk.no'); Facebook refuses names ending in .com or .net. LinkedIn, X and Pinterest names
+# have no dots, so a domain there is a pasted link.
+DOMAIN_HANDLES_OK = ("instagram", "tiktok", "youtube", "facebook")
+FB_BAD_ENDING = re.compile(r"(?i)\.(?:com|net)$")
+
+
+def _handle_is_link(seg: str, platform: str = "") -> bool:
+    """A profile path segment that is really a link: starts with www., carries a scheme or is an email address,
+    or (on platforms where a handle is not normally written as a domain) ends in a domain name."""
+    s = unquote(seg).strip().lower().lstrip("@")
+    if s.startswith(("www.", "http:", "https:")) or ":" in s or "@" in s:
+        return True
+    if platform == "facebook" and FB_BAD_ENDING.search(s):
+        return True
+    return platform not in DOMAIN_HANDLES_OK and bool(HANDLE_TLD.search(s))
+
+
+def social_path_is_link(url: str) -> bool:
+    """True when a profile URL's path holds a domain, URL or email instead of a handle."""
+    try:
+        path = urlsplit(url.strip() if "://" in url else "https://" + url.strip()).path
+    except ValueError:
+        return True
+    host = host_of(url)
+    plat = next((k for k, hs in SOCIAL.items() if any(host == h or host.endswith("." + h) for h in hs)), "")
+    return any(_handle_is_link(x, plat) for x in re.sub(r"/+", "/", path).split("/") if x)
+
+
 def clean_social(url: str) -> tuple[str, str] | None:
     """(platform, cleaned url) for a company profile link, or None for share links and generic pages."""
     try:
@@ -2176,6 +2209,8 @@ def clean_social(url: str) -> tuple[str, str] | None:
     handle = (segs[1] if segs[0] in ("people", "p") and len(segs) >= 2 else segs[-1]).lstrip("@").lower()
     if segs[0] != "profile.php" and handle in PLACEHOLDER_HANDLES:
         return None
+    if any(_handle_is_link(x, plat) for x in segs):
+        return None  # a domain, URL or email typed where the handle belongs (facebook.com/www.petol.no)
     canon_host = {"linkedin": "www.linkedin.com", "facebook": "www.facebook.com", "instagram": "www.instagram.com",
                   "youtube": "www.youtube.com", "x": "x.com", "tiktok": "www.tiktok.com",
                   "pinterest": "www.pinterest.com"}[plat]
