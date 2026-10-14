@@ -32,6 +32,18 @@ _copy_lock = asyncio.Lock()
 _copy_last = 0.0
 
 
+def _record_anchor(r: dict) -> tuple:
+    """Anchor one accounts record by its id, period end and account type together: some responses repeat an
+    id (or leave it out), and each year must quote its own figure, not the first record's."""
+    pairs = [("id", r.get("id"))] if r.get("id") is not None else []
+    end = (r.get("regnskapsperiode") or {}).get("tilDato")
+    if end:
+        pairs.append(("tilDato", end))
+    if r.get("regnskapstype"):
+        pairs.append(("regnskapstype", r["regnskapstype"]))
+    return tuple(pairs) if len(pairs) > 1 else (pairs[0] if pairs else None)
+
+
 def _dig(obj: dict, path: tuple[str, ...]):
     for key in path:
         if not isinstance(obj, dict) or key not in obj:
@@ -73,7 +85,7 @@ async def fetch_accounts(f: Fetcher, ctx: CompanyContext) -> None:
             span = json.dumps({path[-1]: val, "valuta": cur, "regnskapsperiode": period, "regnskapstype": kind,
                                "id": r.get("id")}, ensure_ascii=False)
             ev = ctx.add_evidence(snap, source_class=OFFICIAL_ACCOUNTS, span=span, effective_date=end,
-                                  method="brreg_accounts_v1", licence=LICENCE, anchor=("id", r.get("id")))
+                                  method="brreg_accounts_v1", licence=LICENCE, anchor=_record_anchor(r))
             ctx.add_claim(field, "financials",
                           {"amount": val, "currency": cur, "year": year, "period_start": period.get("fraDato"),
                            "period_end": end, "account_type": "group" if kind == "KONSERN" else "company",
@@ -83,7 +95,7 @@ async def fetch_accounts(f: Fetcher, ctx: CompanyContext) -> None:
         if audit.get("fravalgRevisjon") is not None or audit.get("ikkeRevidertAarsregnskap") is not None:
             ev = ctx.add_evidence(snap, source_class=OFFICIAL_ACCOUNTS, method="brreg_accounts_v1", licence=LICENCE,
                                   span=json.dumps({"revisjon": audit, "regnskapsperiode": period}), effective_date=end,
-                                  anchor=("id", r.get("id")))
+                                  anchor=_record_anchor(r))
             ctx.add_claim("accounts_audited", "financials",
                           {"year": year, "account_type": "group" if kind == "KONSERN" else "company",
                            "audited": not (audit.get("fravalgRevisjon") or audit.get("ikkeRevidertAarsregnskap"))},
