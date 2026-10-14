@@ -1252,7 +1252,7 @@ def test_wordpress_rest_posts_first_and_feed_page_two():
                       "date": f"2026-0{1 + i % 8}-1{i % 9}T12:00:00",
                       "date_gmt": f"2026-0{1 + i % 8}-1{i % 9}T10:00:00"} for i in range(12)])
     body = f'<link href="/wp-content/a.css"><footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>'
-    f = _site({"https://fjellbekk.no/wp-json/wp/v2/posts?per_page=20&_fields=title,link,date,date_gmt":
+    f = _site({"https://fjellbekk.no/wp-json/wp/v2/posts?per_page=20&_fields=title,link,date,date_gmt,excerpt":
                (200, wp, "application/json")}, body=body)
     ctx = ctx_for(hjemmeside="fjellbekk.no")
     run(f, ctx)
@@ -2539,3 +2539,39 @@ def test_workplace_site_needs_address_no_other_number_and_no_namesake(body, name
         assert "carries the workplace name" in got["detail"]
     else:
         assert got["status"] in ("no_match", "other_company")
+
+
+def _wp_row(title, slug, day, excerpt):
+    return {"date": f"{day}T13:39:31", "date_gmt": f"{day}T11:39:31", "link": f"https://fjellbekk.no/{slug}/",
+            "title": {"rendered": title}, "excerpt": {"rendered": excerpt, "protected": False}}
+
+
+def test_bodiless_demo_post_beside_hello_world_is_not_news_nor_a_page_update():
+    wp = json.dumps([_wp_row("Purevegg", "butikk-demo/tienda/purevegg", "2024-10-03", ""),
+                     _wp_row("Hello world!", "hello-world", "2024-09-17",
+                             "<p>Welcome to WordPress. This is your first post. Edit or delete it, then start writing!</p>")])
+    sm = ('<?xml version="1.0"?><urlset><url><loc>https://fjellbekk.no/butikk-demo/tienda/purevegg/</loc>'
+          '<lastmod>2024-10-03T11:39:33+00:00</lastmod></url></urlset>')
+    body = f'<link href="/wp-content/a.css"><footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>'
+    f = _site({"https://fjellbekk.no/wp-json/wp/v2/posts?per_page=20&_fields=title,link,date,date_gmt,excerpt":
+               (200, wp, "application/json"), "https://fjellbekk.no/sitemap.xml": (200, sm, "application/xml")}, body=body)
+    ctx = ctx_for(hjemmeside="fjellbekk.no", stiftelsesdato="2020-01-01")
+    run(f, ctx)
+    assert not [c for c in ctx.claims if c.field in ("dated_news", "site_page_updated") and c.availability == "available"]
+    from kilde.synthesis import summarise
+    ctx.add_claim("legal_name", "identity", "FJELLBEKK TREVARE AS", ctx.evidence[0])
+    assert "news post" not in summarise(ctx, [])["text"]  # no sentence rests on a withheld or dropped post
+
+
+def test_bodiless_posts_with_real_titles_on_page_builder_sites_stay_news():
+    from kilde.templates import stub_posts
+    items = [{"title": "Strandrydding på Steilene", "url": "https://x.no/strandrydding/", "body_words": 0},
+             {"title": "Investeringsrapport 30.06.25", "url": "https://x.no/rapport/", "body_words": 0},
+             {"title": "Nytt verksted", "url": "https://x.no/nytt/", "body_words": 40}]
+    assert stub_posts(items) == set()
+    # a one-word title with no body, or a bodiless post whose only sibling is a builder default, is filler
+    assert stub_posts([{"title": "Purevegg", "url": "https://x.no/p/", "body_words": 2}]) == {"https://x.no/p/"}
+    assert stub_posts([{"title": "Ny sak om oss", "url": "https://x.no/a/", "body_words": 0},
+                       {"title": "Hello world!", "url": "https://x.no/hello-world/", "body_words": 15}]) == {"https://x.no/a/"}
+    # unknown body (a titles-only feed) never decides
+    assert stub_posts([{"title": "Purevegg", "url": "https://x.no/p/", "body_words": None}]) == set()

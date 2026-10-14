@@ -35,7 +35,7 @@ from bs4 import BeautifulSoup
 
 from ..http import Blocked, BudgetExhausted, Fetcher
 from ..spans import contains_core
-from ..templates import is_template_url, template_post
+from ..templates import body_word_count, is_template_url, stub_posts, template_post
 from ..model import COMPANY_OWNED, CompanyContext, Evidence, Snapshot
 
 METHOD = "website_identity_v1"
@@ -3175,7 +3175,9 @@ async def sitemap_activity(f: Fetcher, sp: _Spend, ctx: CompanyContext, home: Pa
             early = [x for x in dated if x[1] < floor]
             if early:
                 ctx.facts["website_activity_before_founding"] = len(early)
-            dated = [x for x in dated if x[1] >= floor and not PLACEHOLDER_SLUG.search(x[0]) and not is_template_url(x[0])]
+            stubs = {u.rstrip("/") for u in ctx.facts.get("website_stub_posts") or []}
+            dated = [x for x in dated if x[1] >= floor and not PLACEHOLDER_SLUG.search(x[0]) and not is_template_url(x[0])
+                     and x[0].rstrip("/") not in stubs]
             if not dated:
                 return
             if _activity_blocked(ctx, "site_page_updated"):
@@ -3654,8 +3656,10 @@ def parse_feed(raw: str) -> list[dict]:
         when = _iso_with_offset(_xml_text(dm.group(1)))
         if not when:
             continue
+        bm = re.search(r"<(content:encoded|description|summary|content)\b[^>]*>(.*?)</\1>", b, re.S | re.I)
         out.append({"title": _xml_text(t.group(1)), "url": url.strip(), "datetime": when,
-                    "title_span": t.group(0), "date_span": dm.group(0)})
+                    "title_span": t.group(0), "date_span": dm.group(0),
+                    "body_words": body_word_count(_xml_text(bm.group(2))) if bm else None})
     return out
 
 
@@ -3704,7 +3708,9 @@ def _wp_posts(raw: str) -> list[dict]:
         tspan, tpos = _raw_field(raw, "rendered", rendered, pos)
         dspan, dpos = _raw_field(raw, "date" if local and off else "date_gmt", local if local and off else gmt, pos)
         pos = max(pos, tpos, dpos)
-        out.append({"title": title, "url": r["link"], "datetime": when, "title_span": tspan, "date_span": dspan})
+        body = (r.get("excerpt") or {}).get("rendered") if isinstance(r.get("excerpt"), dict) else None
+        out.append({"title": title, "url": r["link"], "datetime": when, "title_span": tspan, "date_span": dspan,
+                    "body_words": body_word_count(body)})
     return out
 
 
@@ -3904,7 +3910,12 @@ async def collect_dated_news(sp: "_Spend", ctx: CompanyContext, pages: list[Page
 
     def clean_feed(items: list[dict]) -> list[dict]:
         # a hacked site's feed full of spam is not company news: drop the whole feed
-        return [] if any(SPAM.search(it["title"]) for it in items) else items
+        if any(SPAM.search(it["title"]) for it in items):
+            return []
+        stubs = stub_posts(items)  # bodiless filler posts (a demo product beside "Hello world!")
+        if stubs:
+            ctx.facts["website_stub_posts"] = sorted(set(ctx.facts.get("website_stub_posts") or []) | stubs)
+        return [it for it in items if it["url"] not in stubs]
 
     def keep(items: list[dict], snap: Snapshot) -> None:
         for it in items:
@@ -3914,12 +3925,12 @@ async def collect_dated_news(sp: "_Spend", ctx: CompanyContext, pages: list[Page
 
     if _is_wordpress(home) and sp.can(1):
         try:  # WordPress: the REST list gives the newest 20 posts in one request
-            snap = await sp.get(origin + "/wp-json/wp/v2/posts?per_page=20&_fields=title,link,date,date_gmt")
+            snap = await sp.get(origin + "/wp-json/wp/v2/posts?per_page=20&_fields=title,link,date,date_gmt,excerpt")
             if snap.status == 200:
                 rows = _wp_posts(snap.content.decode("utf-8", "replace"))
                 keep(clean_feed(rows), snap)
                 if len(rows) >= 20 and len(found) < limit and sp.can(1):
-                    snap2 = await sp.get(origin + "/wp-json/wp/v2/posts?per_page=20&page=2&_fields=title,link,date,date_gmt")
+                    snap2 = await sp.get(origin + "/wp-json/wp/v2/posts?per_page=20&page=2&_fields=title,link,date,date_gmt,excerpt")
                     if snap2.status == 200:
                         keep(clean_feed(_wp_posts(snap2.content.decode("utf-8", "replace"))), snap2)
         except (BudgetExhausted, _OutOfRequests):
