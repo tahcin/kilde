@@ -407,11 +407,30 @@ HOSTNAME_TAIL = re.compile(r"\.(?:no|com|net|org|se|dk|io|eu|biz|info|nu)\b|\.[a
 
 
 def _in_hostname(text: str, a: int, b: int) -> bool:
-    """True when a name match is only part of a domain name or email address (e.g. 'totentre.no')."""
+    """True when a name match is not the name written as words in visible text: part of a domain name, email
+    address, URL, social handle or hashtag ('totentre.no', 'alrahmakulturhus@gmail.com', '@fishlab'), or a
+    run-together lower-case token of several words ('alrahmakulturhus' as a bare word)."""
     if HOSTNAME_TAIL.match(text, b):
         return True
     before = text[max(0, a - 8):a].lower()
-    return before.endswith(("www.", "@", "/", "://", ".")) or (a > 0 and text[a - 1] == "@")
+    if before.endswith(("www.", "@", "/", "://", ".", "#", "_")) or (a > 0 and text[a - 1] == "@"):
+        return True
+    # the whitespace-delimited token that holds the match
+    s, e = a, b
+    while s > 0 and not text[s - 1].isspace():
+        s -= 1
+    while e < len(text) and not text[e].isspace():
+        e += 1
+    token = text[s:e]
+    if "@" in token or "/" in token or "_" in token or re.search(r"\.[A-Za-z]{2,}", token.rstrip(".,;:!?)»\"'")):
+        return True
+    m = text[a:b]
+    return len(m) >= 10 and m == m.lower() and not re.search(r"[\s\-.&]", m)
+
+
+def _visible(rx: re.Pattern | None, text: str) -> bool:
+    """The pattern matches somewhere as visible words (not inside a domain, email, URL or handle)."""
+    return bool(rx) and any(not _in_hostname(text, m.start(), m.end()) for m in rx.finditer(text))
 
 
 def _match_core(span: str, words: list[str]) -> str | None:
@@ -562,7 +581,7 @@ def _names_in(text: str, names: list[list[str]]) -> bool:
     t = _translit(text)
     for ws in names:
         rx = name_regex(ws)
-        if rx and rx.search(text):
+        if _visible(rx, text):
             return True
         toks = [_translit(w) for w in ws if len(w) >= 3 and w not in GENERIC_WORDS and w not in FORM_NAME_WORDS]
         if toks and all(re.search(r"(?<![a-z0-9])" + re.escape(x) + r"(?![a-z0-9])", t) for x in toks):
@@ -1300,6 +1319,143 @@ async def registry_rows(sp: "_Spend", words: list[str], *, postcode: str | None 
     return rows, truncated
 
 
+ADDRESS_PAGE = 500          # rows per page when listing every entity at a postcode
+ADDRESS_PAGES = 10          # pages read at most per listing; a longer listing cannot clear an address proof
+
+
+def _street_key(lines: list[str] | None, postcode: str | None) -> tuple[str, str] | None:
+    """(normalised street and number, postcode) of an address, for comparing two registry entries."""
+    if not postcode:
+        return None
+    for line in lines or []:
+        if not line or line.lower().startswith("c/o") or not re.search(r"\d", line):
+            continue
+        t = _translit(line)
+        t = re.sub(r"(gata|gaten|gt\.?)(?=\s|\d|$)", "gate", t)
+        t = re.sub(r"(vegen|veien|vegen|veg|vn\.?)(?=\s|\d|$)", "vei", t)
+        return re.sub(r"[^a-z0-9]", "", t), postcode
+    return None
+
+
+def _entity_keys(r: dict) -> set[tuple[str, str]]:
+    out = set()
+    for k in ("forretningsadresse", "postadresse", "beliggenhetsadresse"):
+        a = r.get(k) or {}
+        key = _street_key(a.get("adresse"), a.get("postnummer"))
+        if key:
+            out.add(key)
+    return out
+
+
+def _distinct_words(name: str) -> list[str]:
+    """Distinctive words of a name in registered spelling: four letters or more, not generic or form words."""
+    return [w for w in name_words(name) if len(_translit(w)) >= 4 and _translit(w) not in GENERIC_WORDS
+            and w not in FORM_NAME_WORDS and _translit(w) not in FORM_WORDS and not w.isdigit()]
+
+
+async def _colocated_namesake(sp: "_Spend", ctx: CompanyContext) -> str | None:
+    """Another registered entity (main unit or another company's sub-unit) at our registered street address that
+    shares a distinctive word of our name ('Al-Rahma Islamic Center' beside 'Al-Rahma Kultur Hus Stiftelsen')."""
+    e = ctx.registry or {}
+    ours = _entity_keys(e)
+    if not ours:
+        return None
+    pcs = sorted({pc for _k, pc in ours})
+    for w in _distinct_words(e.get("navn") or ""):
+        t = _translit(w)
+        for pc in pcs:
+            for path, field_ in (("enheter", "forretningsadresse"), ("enheter", "postadresse"),
+                                 ("underenheter", "beliggenhetsadresse")):
+                for q in _search_queries([w]):
+                    rows, _c = await brreg_name_search(sp, path, q, extra=f"&{field_}.postnummer={pc}")
+                    for r in rows:
+                        if r.get("organisasjonsnummer") == ctx.org or r.get("overordnetEnhet") == ctx.org \
+                                or _staff_body(r):
+                            continue  # our own units, and our staff's union or sports club, are no namesake
+                        if t in {_translit(x) for x in name_words(r.get("navn") or "")} and _entity_keys(r) & ours:
+                            return f"{r.get('navn')} ({r.get('organisasjonsnummer')})"
+    return None
+
+
+async def _address_shared(sp: "_Spend", ctx: CompanyContext) -> str | None:
+    """Another registered entity with our registered street address and postcode (any name or legal form): our
+    address then cannot identify our site. Returns that entity, or a reason when the postcode is too crowded to
+    read in full (also not a pass)."""
+    e = ctx.registry or {}
+    ours = _entity_keys(e)
+    for pc in sorted({pc for _k, pc in ours}):
+        for path, field_ in (("enheter", "forretningsadresse"), ("enheter", "postadresse"),
+                             ("underenheter", "beliggenhetsadresse")):
+            base = f"{BRREG_API}/{path}?{field_}.postnummer={pc}&size={ADDRESS_PAGE}"
+            page = 0
+            while True:
+                url = f"{base}&page={page}"
+                if url in _SEARCH:
+                    rows, pages = _SEARCH[url][0], int(_SEARCH[url][1])
+                else:
+                    data = await _search_json(sp, url)
+                    rows = (data.get("_embedded") or {}).get(path) or []
+                    pages = int((data.get("page") or {}).get("totalPages") or 0)
+                    _SEARCH[url] = (rows, pages)
+                for r in rows:
+                    if r.get("organisasjonsnummer") == ctx.org or r.get("overordnetEnhet") == ctx.org:
+                        continue
+                    if _entity_keys(r) & ours:
+                        return f"{r.get('navn')} ({r.get('organisasjonsnummer')})"
+                page += 1
+                if page >= pages:
+                    break
+                if page >= ADDRESS_PAGES:
+                    return f"more entities at postcode {pc} than can be checked"
+    return None
+
+
+def _heading_namesake(pages: list[Page], rows: list[dict], ctx: CompanyContext) -> str | None:
+    """A registered entity other than us that shares a distinctive word of our name, named as words in a page
+    title or main heading (h1, h2): the site presents itself as that organisation."""
+    e = ctx.registry or {}
+    ours = {_translit(w) for w in _distinct_words(e.get("navn") or "")}
+    our_rx = name_regex(name_words(e.get("navn") or ""))
+    heads = []
+    for p in pages:
+        if p.soup.title:
+            heads.append(p.soup.title.get_text(" ", strip=True))
+        heads += [h.get_text(" ", strip=True) for h in p.soup.find_all(["h1", "h2"])]
+    text = " | ".join(x for x in heads if x)
+    if our_rx:
+        text = our_rx.sub(" ", text)  # our own name in a heading never names the other
+    for r in rows:
+        if r.get("organisasjonsnummer") == ctx.org or r.get("overordnetEnhet") == ctx.org:
+            continue
+        if not ours & {_translit(w) for w in name_words(r.get("navn") or "")}:
+            continue
+        for ws in name_variants(r.get("navn") or "", r):
+            if [_translit(w) for w in ws] == [_translit(w) for w in name_words(e.get("navn") or "")]:
+                continue
+            if len(ws) >= 2 and _visible(name_regex(ws), text):
+                return f"{r.get('navn')} ({r.get('organisasjonsnummer')})"
+    return None
+
+
+async def _identity_conflict(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> str | None:
+    """Checks every proof without our org number must pass: no namesake at our address, no other registered
+    namesake as the site's heading, and an address proof only when nobody else is registered at that address."""
+    e = ctx.registry or {}
+    words = [w for w in name_words(e.get("navn") or "") if w not in FORM_NAME_WORDS]
+    rows, _cut = await registry_rows(sp, words) if words else ([], False)
+    head = _heading_namesake(v.pages, rows, ctx)
+    if head:
+        return f"the site's title or heading names another registered entity: {head}"
+    near = await _colocated_namesake(sp, ctx)
+    if near:
+        return f"another registered entity at our address shares our name: {near}"
+    if v.method == "address_and_name":
+        shared = await _address_shared(sp, ctx)
+        if shared:
+            return f"our registered address is shared ({shared}), so it cannot identify the site"
+    return None
+
+
 async def _check_collision(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> None:
     """For proofs other than our org number: reject the site when another active registered entity (or another
     company's workplace) carries the same distinctive name, unless the site names our full legal name (with its
@@ -1317,6 +1473,14 @@ async def _check_collision(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> Non
         v.status, v.method = "name_only", None
         v.detail = f"{form} entities need the org number on the site or a registry-declared website"
         return
+    conflict = await _identity_conflict(sp, ctx, v)
+    if conflict and not (v.method == "registry_website_and_name" and "shared" in conflict):
+        if v.method == "registry_website_and_name":
+            v.namesake = (conflict, "")
+            v.detail = f"{v.detail}; {conflict}"
+        else:
+            v.status, v.method, v.detail = "name_only", None, conflict
+            return
     ours = _core_tokens(e.get("navn") or "")
     if not ours:
         return
@@ -1354,7 +1518,7 @@ async def _check_collision(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> Non
         return
     text = " ".join(p.text for p in v.pages)
     our_rx = _full_name_rx(e.get("navn") or "")
-    names_us = bool(our_rx and our_rx.search(text))
+    names_us = _visible(our_rx, text)
     # another entity's full name seen only inside ours ('Well AS' inside 'The Well AS') does not name it
     masked = our_rx.sub(" ", text) if our_rx else text
     our_core_rx = name_regex([w for w in name_words(e.get("navn") or "") if w not in FORM_NAME_WORDS])
@@ -1376,7 +1540,7 @@ async def _check_collision(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> Non
             core_rx = name_regex([w for w in name_words(r.get("navn") or "") if _translit(w) in theirs])
             if not (core_rx and any(not _in_hostname(text, m.start(), m.end()) for m in core_rx.finditer(text))):
                 continue
-            if theirs < ours and our_core_rx and our_core_rx.search(text):
+            if theirs < ours and _visible(our_core_rx, text):
                 continue  # the site shows our longer name too, so the short form is just ours abbreviated
         if names_us and not names_them:
             continue
@@ -1561,6 +1725,10 @@ async def _check_legal_name_unique(sp: "_Spend", ctx: CompanyContext, v: Verdict
     """Upgrade a name-only candidate to proven (legal_name_unique) when every page and registry check holds."""
     got = legal_name_unique_page(v, ctx)
     if not got:
+        return
+    conflict = await _identity_conflict(sp, ctx, v)
+    if conflict:
+        v.detail = f"{v.detail}; {conflict}"
         return
     namesakes = await _legal_namesakes(sp, ctx)
     if namesakes:
@@ -3144,7 +3312,7 @@ async def prepare_scope(sp: _Spend, ctx: CompanyContext, v: Verdict) -> Scope:
     a = e.get("forretningsadresse") or {}
     srx = _street_regex(([x for x in a.get("adresse") or [] if x] or [""])[-1]) if a.get("adresse") else None
     addr = (srx, a["postnummer"]) if srx and a.get("postnummer") else None
-    sc = Scope(ctx.org, words, others, sisters, dominant, v.cross, v.path_scoped, other_mail, codeclared, addr)
+    sc = Scope(ctx.org, words, others, sisters, dominant, v.cross, v.path_scoped, other_mail, codeclared, addr=addr)
     sc.dominant_kind = kinds
     sc.ours_printed = ours_printed
     if own_proof and _group_handle_linked(v.pages, words):

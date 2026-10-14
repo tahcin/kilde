@@ -47,11 +47,11 @@ class FakeFetcher:
         final = self.redirects.get(url, url)
         hit = self.pages.get(final)
         search = final.startswith(("https://data.brreg.no/enhetsregisteret/api/enheter?",
-                                   "https://data.brreg.no/enhetsregisteret/api/underenheter?")) and "navn=" in final
+                                   "https://data.brreg.no/enhetsregisteret/api/underenheter?"))
         if search and self.brreg_down:
             raise ConnectionError("registry search unavailable")
         if hit is None and search:
-            hit = (200, json.dumps({"page": {"totalPages": 0}}), "application/json")  # no namesakes
+            hit = (200, json.dumps({"page": {"totalPages": 0}}), "application/json")  # nobody else registered
         if hit is None:
             raise ConnectionError("no such host")
         status, body = hit[0], hit[1]
@@ -2382,3 +2382,83 @@ def test_failed_sister_search_fails_the_step(monkeypatch):
     ctx = ctx_for(hjemmeside="fjellbekk.no")
     claims = run(f, ctx)
     assert claims["official_website"].availability == "failed" and ctx.module_states["website"] == "timeout"
+
+
+# ---------------------------------------------------------------- round 14: name as words, shared addresses
+def _row(org, name, street="Lyngveien 12B", pc="9999", **extra):
+    return {"organisasjonsnummer": org, "navn": name,
+            "forretningsadresse": {"adresse": [street], "postnummer": pc}, **extra}
+
+
+def _listing(path, field_, rows, pc="9999", pages=1):
+    return {f"https://data.brreg.no/enhetsregisteret/api/{path}?{field_}.postnummer={pc}&size=500&page=0":
+            (200, json.dumps({"_embedded": {path: rows}, "page": {"totalPages": pages}}), "application/json")}
+
+
+def test_name_inside_an_email_url_or_handle_is_not_a_name():
+    t = "Kontakt: fjellbekktrevare@gmail.com, www.fjellbekktrevare.no/kontakt, @fjellbekktrevare og fjellbekktrevare"
+    rx = W.name_regex(["fjellbekk", "trevare"])
+    assert not W._visible(rx, t)
+    assert W._visible(rx, t + " · Fjellbekk Trevare, Testby")
+    assert W._visible(rx, "Velkommen til FjellbekkTrevare")  # a brand written together, capitalised
+
+
+def test_al_rahma_shape_email_and_shared_address_is_not_proof():
+    """Round 14: the legal name only inside the contact email, and the registered address, which a different
+    organisation at the same address (the site's real operator) also has."""
+    body = ("<h2>Fjellbekk Moské Testby</h2><p>Om oss: Fjellbekk Islamsk Senter, etablert i 2010.</p>"
+            "<p>EMAIL fjellbekktrevare@gmail.com ADDRESS Lyngveien 12B, 9999 Testby</p>")
+    pages = {"https://fjellbekktrevare.no/": (200, html(body, title="fjellbekktrevare.no"))}
+    pages.update(_listing("enheter", "forretningsadresse", [_row(OTHER, "FJELLBEKK ISLAMSK SENTER TESTBY")]))
+    ctx = ctx_for(navn="FJELLBEKK TREVARE STIFTELSEN", organisasjonsform={"kode": "STI"})
+    run(FakeFetcher(pages), ctx)
+    assert not ctx.claims_for("official_website")
+
+
+def test_colocated_namesake_makes_any_name_proof_ambiguous():
+    body = "<h1>Fjellbekk Trevare</h1><footer>Fjellbekk Trevare AS · Tlf 41 00 00 01</footer>"
+    q = "https://data.brreg.no/enhetsregisteret/api/enheter?navn=fjellbekk&forretningsadresse.postnummer=9999&size=50"
+    pages = {"https://fjellbekktrevare.no/": (200, html(body)),
+             q: (200, json.dumps({"_embedded": {"enheter": [_row(OTHER, "FJELLBEKK KULTURSENTER")]}}), "application/json")}
+    ctx = ctx_for(telefon="41000001")
+    run(FakeFetcher(pages), ctx)
+    assert not ctx.claims_for("official_website")
+    assert "at our address shares our name" in ctx.facts["website_candidates"][0]["detail"]
+
+
+def test_address_proof_needs_an_address_nobody_else_has():
+    body = "<footer>Fjellbekk Trevare AS, Lyngveien 12 B, 9999 Testby</footer>"
+    for rows, proven in (([], True), ([_row(OTHER, "TESTBY REVISJON AS")], False),
+                         ([_row(OTHER, "TESTBY REVISJON AS", street="Lyngveien 14")], True)):
+        W._SEARCH.clear()
+        pages = {"https://fjellbekktrevare.no/": (200, html(body))}
+        pages.update(_listing("enheter", "forretningsadresse", rows))
+        ctx = ctx_for()
+        run(FakeFetcher(pages), ctx)
+        assert bool(ctx.claims_for("official_website")) is proven, rows
+    # a co-tenant does not touch a proof by our org number
+    W._SEARCH.clear()
+    pages = {"https://fjellbekktrevare.no/": (200, html(body.replace("</footer>", f" · Org.nr {OURS}</footer>")))}
+    pages.update(_listing("enheter", "forretningsadresse", [_row(OTHER, "TESTBY REVISJON AS")]))
+    ctx = ctx_for()
+    run(FakeFetcher(pages), ctx)
+    assert ctx.claims_for("official_website")[0].match["method"] == "orgnr_on_page"
+
+
+def test_address_proof_fails_closed_on_a_crowded_postcode(monkeypatch):
+    monkeypatch.setattr(W, "ADDRESS_PAGES", 1)
+    pages = {"https://fjellbekktrevare.no/": (200, html("<footer>Fjellbekk Trevare AS, Lyngveien 12 B, 9999 Testby</footer>"))}
+    pages.update(_listing("enheter", "forretningsadresse", [], pages=4))
+    ctx = ctx_for()
+    run(FakeFetcher(pages), ctx)
+    assert not ctx.claims_for("official_website")
+
+
+def test_heading_naming_another_registered_namesake_is_ambiguous():
+    body = "<h1>Fjellbekk Senter</h1><footer>Fjellbekk Trevare AS · Tlf 41 00 00 01</footer>"
+    pages = {"https://fjellbekktrevare.no/": (200, html(body))}
+    pages.update(_brreg("enheter", "fjellbekk%20trevare", [_row(OTHER, "FJELLBEKK SENTER AS", street="Annen vei 1", pc="1111")]))
+    ctx = ctx_for(telefon="41000001")
+    run(FakeFetcher(pages), ctx)
+    assert not ctx.claims_for("official_website")
+    assert "title or heading" in ctx.facts["website_candidates"][0]["detail"]
