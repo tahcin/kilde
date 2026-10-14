@@ -2826,3 +2826,11 @@ def test_heading_with_a_shared_trade_word_is_no_namesake():
     ctx = ctx_for(navn="FJELLBEKK FRISØR AS", telefon="41000001")
     run(FakeFetcher(pages), ctx)
     assert ctx.claims_for("official_website")
+
+
+def test_legal_form_with_capital_a_right_after_the_whole_name():
+    rx = W._legal_name_rx("MOI RØR AS", "AS")
+    assert rx.search("Kontakt oss Moi Rør As Vi er") and rx.search("MOI RØR AS")
+    for text in ("Moi Rør as part of the group", "Moi Rør, As we said", "Moi As", "Moi Rør A/S", "as Moi Rør"):
+        assert not rx.search(text), text
+    assert W._legal_name_rx("SOLVANG ASA", "ASA").search("Solvang Asa")

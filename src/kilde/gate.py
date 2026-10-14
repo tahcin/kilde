@@ -87,7 +87,8 @@ def legal_name_site_problem(ctx: CompanyContext, site) -> str | None:
     spans = [x for e in ctx.evidence if e.id in site.evidence_ids
              for x in (e.claim_span, (getattr(ctx, "cores", None) or {}).get(e.id)) if x]
     quoted = {_alnum(" ".join(ws)) + form.lower() for ws in variants}
-    if not any(re.search(r"(?<![A-Za-z])" + form + r"(?![A-Za-z/])", s) and any(q in _alnum(s) for q in quoted)
+    capital = form[0] + "(?:" + form[1:] + "|" + form[1:].lower() + ")"  # 'AS' or 'As', never 'as'
+    if not any(re.search(r"(?<![A-Za-z])" + capital + r"(?![A-Za-z/])", s) and any(q in _alnum(s) for q in quoted)
                for s in spans):
         return "the proof does not quote the legal name with its legal form"
     return None

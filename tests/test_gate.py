@@ -201,3 +201,13 @@ def test_short_name_word_stays_strict_without_the_full_name_or_a_strong_proof_or
     ctx = short_label_ctx("https://www.bil.no/", "OLAV VIK BIL AS", "phone_and_name", "Olav Vik Bil")
     gate.check(ctx)
     assert states(ctx) == {"website_title": "ambiguous"}
+
+
+def test_legal_name_site_accepts_capital_a_form_but_not_lower_case():
+    reg = {"navn": "FJELLTOPP RØR AS", "organisasjonsform": {"kode": "AS"}}
+    ctx = _legal_ctx("https://fjelltopproer.no/", "Kontakt Fjelltopp Rør As", reg)
+    gate.check(ctx)
+    assert ctx.claims_for("official_website")
+    ctx = _legal_ctx("https://fjelltopproer.no/", "Fjelltopp Rør as", reg)
+    gate.check(ctx)
+    assert not ctx.claims_for("official_website")

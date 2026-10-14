@@ -1651,15 +1651,16 @@ async def _check_variant(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> None:
 # site; the site shows the registered post town or municipality, or a current role holder's full name; and a
 # registry name search (main units and sub-units, active or not, original spelling) finds no other entity whose
 # name contains all of ours ('Fishlab Holding AS', a second 'Fishlab AS' elsewhere, another company's workplace).
-LEGAL_UNIQUE_FORMS = {"AS": "AS", "ASA": "ASA"}
+LEGAL_UNIQUE_FORMS = {"AS": "(?:AS|As)", "ASA": "(?:ASA|Asa)"}  # capital A; never the English word "as"
 LEGAL_UNIQUE_TLDS = {"no", "com", "net", "org", "io", "as", "eu", "biz", "info"}
 _CREDIT_LEAD = re.compile(r"^(nettside|nettsted|nettbutikk|hjemmeside|utviklet|levert|laget|designet|design|webdesign|"
                           r"drevet|driftet|powered|made|built|hosted|hosting|produsert|publisert|tema|theme)\s+(av|by|med|with|fra)\b")
 
 
 def _legal_name_rx(name: str, form: str) -> re.Pattern | None:
-    """The registered name followed by its legal form written in capitals ('Fishlab AS', 'FISHLAB AS'); the
-    lower-case English word 'as' after a name ('Faceless as part of') and a Danish 'A/S' never match."""
+    """The registered name followed by its legal form with a capital A ('Fishlab AS', 'Moi Rør As'), right after
+    the whole name; the lower-case English word 'as' after a name ('Faceless as part of') and a Danish 'A/S'
+    never match."""
     suffix = LEGAL_UNIQUE_FORMS.get(form)
     words = name_words(name)
     rx = name_regex(words) if words and suffix else None
