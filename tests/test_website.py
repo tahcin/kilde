@@ -2868,3 +2868,24 @@ def test_domain_named_after_the_company_is_tried_before_a_brand_site(monkeypatch
     seeds[OURS] = [{"domain": "brandsite.no", "sources": ["crawl_orgnr"]}]
     doms = [d for d, _s, _u in W.candidates(ctx_for())]
     assert doms.index("fjellbekktrevare.no") < doms.index("brandsite.no")
+
+# ---------------------------------------------------------------- crawl-gap rules (v2-gap)
+
+
+def test_phone_repeated_in_header_and_named_footer_counts():
+    """The number is in a header bar without the name, and again in a deeply nested footer that names us."""
+    deep = "<div><div><div><div><div><div><p class='footertext'><span><a href='tel:41000001'><span>41 00 00 01</span></a></span></p></div></div></div></div></div></div>"
+    body = (f"<header><p>Bestill time <span>41 00 00 01</span></p></header><main><h1>Fjellbekk Trevare</h1>"
+            f"<p>Snekkerverksted.</p></main><footer><div><div><p>FJELLBEKK TREVARE AS</p></div>{deep}</div></footer>")
+    f = FakeFetcher({"https://fjellbekktrevare.no/": (200, html(body))})
+    claims = run(f, ctx_for(mobil="41000001"))
+    assert claims["official_website"].match["method"] == "phone_and_name"
+
+
+def test_phone_only_in_unnamed_header_is_not_proof():
+    body = ("<header><p>Bestill time <span>41 00 00 01</span></p></header><main><h1>Fjellbekk Trevare</h1>"
+            "<p>Snekkerverksted.</p></main>")
+    f = FakeFetcher({"https://fjellbekktrevare.no/": (200, html(body))})
+    ctx = ctx_for(mobil="41000001")
+    run(f, ctx)
+    assert not [c for c in ctx.claims if c.field == "official_website" and c.availability == "available"]

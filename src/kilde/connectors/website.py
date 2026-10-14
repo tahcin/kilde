@@ -597,11 +597,14 @@ def _headed_contact_card(node) -> bool:
                                          h.get_text(" ", strip=True))) and len(node.get_text(" ", strip=True)) <= 600
 
 
+BLOCK_DEPTH = 16  # ancestors climbed from a phone to its contact block; site builders nest a footer 10 deep
+
+
 def _phone_in_named_block(el, page: Page, names: list[list[str]]) -> bool:
     """The phone sits in a contact block, header or footer whose text also names us."""
     on_contact_page = bool(INTERNAL_PRIORITY[0].search(urlsplit(page.url).path))
     node = el.parent if el is not None and getattr(el, "name", None) is None else el
-    for _ in range(8):
+    for _ in range(BLOCK_DEPTH):
         if node is None or getattr(node, "name", None) in (None, "[document]", "html"):
             break
         marks = " ".join(node.get("class") or []) + " " + (node.get("id") or "")
@@ -624,12 +627,17 @@ def find_phone(page: Page, wanted: set[str], names: list[list[str]] | None = Non
     that also names us counts (a number in an arbitrary content block is not proof)."""
     if not wanted:
         return None
+    seen: dict[str, int] = {}
     for m in PHONE_TEXT.finditer(page.text):
         d = re.sub(r"\D", "", m.group(0))
         if not phone_shaped(m.group(0)):
             continue
         if len(d) >= 8 and d[-8:] in wanted:
-            if names is None or _phone_in_named_block(_element_for(page, m.group(0).strip()), page, names):
+            needle = m.group(0).strip()
+            k = seen[needle] = seen.get(needle, -1) + 1
+            # the k-th time the number is written is judged in its own element (a header copy without our
+            # name must not hide the footer copy that names us)
+            if names is None or _phone_in_named_block(_nth_element_for(page, needle, k), page, names):
                 return _window(page.text, m.start(), m.end(), 25)
     for a in page.soup.find_all("a", href=re.compile(r"^tel:", re.I)):
         d = re.sub(r"\D", "", unquote(a["href"]))
@@ -2834,6 +2842,15 @@ def _element_for(page: Page, needle: str):
     if not needle:
         return None
     return page.soup.find(string=lambda x: bool(x) and needle in x)
+
+
+def _nth_element_for(page: Page, needle: str, k: int):
+    """The text node holding the k-th written occurrence of needle (the last one when there are fewer)."""
+    if not needle:
+        return None
+    nodes = page.soup.find_all(string=lambda x: bool(x) and needle in x)
+    seq = [n for n in nodes for _ in range(n.count(needle))]
+    return seq[min(k, len(seq) - 1)] if seq else None
 
 
 LEGAL_PAGE = re.compile(r"(?i)personvern|privacy|cookie|informasjonskapsl|vilk[aå]r|terms|legal|gdpr|"
