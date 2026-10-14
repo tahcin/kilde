@@ -270,6 +270,10 @@ async def fetch_subunits(f: Fetcher, ctx: CompanyContext) -> None:
                               span='"totalElements":0')
         ctx.mark("registered_workplace", "locations", "not_available", ev, note="No registered sub-units")
         return
+    listed = (snap.json().get("page") or {}).get("totalElements")
+    if isinstance(listed, int) and listed > len(items):
+        # one page of 100 read: the registry holds more sub-units (closed ones included) than were read
+        ctx.set_total("registered_workplace", sum(1 for u in items if not u.get("nedleggelsesdato")), exact=False)
     # active workplaces as registered (name and location address), for website candidates by workplace name
     ctx.facts["workplaces"] = [{"organisasjonsnummer": u.get("organisasjonsnummer"), "navn": u.get("navn"),
                                 "beliggenhetsadresse": u.get("beliggenhetsadresse")}
@@ -328,6 +332,7 @@ async def fetch_group(f: Fetcher, ctx: CompanyContext) -> None:
                               span=span_of(data, "organisasjonsnummer", "navn"))
         ctx.add_claim("group_ultimate_parent", "identity", {"organisation_number": data["organisasjonsnummer"],
                                                             "name": data.get("navn")}, ev, match=m)
+    ctx.set_total("group_subsidiary", len(links["subsidiaries"]))
     for sub in links["subsidiaries"][:50]:
         evs = [ctx.add_evidence(snap, source_class=OFFICIAL_REGISTRY, method="brreg_group_v1", licence=LICENCE,
                                 span=span_of(line, "organisasjonsnummer", "navn", "parentOrganisasjonsnummer",
@@ -472,6 +477,7 @@ async def fetch_change_feed(f: Fetcher, orgs: list[str], days: int = 365) -> dic
 
 def emit_change_claims(ctx: CompanyContext, snap: Snapshot, items: list[dict]) -> None:
     m = {"method": "registry_endpoint", "detail": f"Enhetsregisteret update feed filtered on {ctx.org}"}
+    ctx.set_total("registry_change", len({x.get("oppdateringsid") for x in items if x.get("organisasjonsnummer") == ctx.org}))
     for item in sorted(items, key=lambda x: x.get("dato", ""), reverse=True)[:25]:
         if item.get("organisasjonsnummer") != ctx.org:
             continue

@@ -197,6 +197,8 @@ def _emit(ctx: CompanyContext, batch: dict | None) -> None:
         ctx.module_states["ted"] = "not_available"
         return
     won = _newest(hit.get("won", []), records, MAX_WON)
+    won_all = len(_newest(hit.get("won", []), records, 10 ** 6))
+    ctx.set_total("public_contract_award", won_all)
     for pub, rec in won:
         ln = records[pub]
         at = retrieved.get(pub, batch["built_at"])
@@ -218,8 +220,11 @@ def _emit(ctx: CompanyContext, batch: dict | None) -> None:
                                                   f"TED Search API v3 (POST, notice {pub})"))
         m = {"method": "winner_identifier_equals_orgnr",
              "detail": f"TED eForms winner-identifier[{idx}] '{raw_id}' (winner-country NOR) equals {org}"}
-        ctx.add_claim("public_contract_award", "activity", value, ev, as_of=_date(rec), match=m)
+        ctx.add_claim("public_contract_award", "activity", value, ev, as_of=_date(rec), match=m,
+                      note=f"{won_all} awards in total; newest {MAX_WON} shown" if won_all > MAX_WON else None)
     bought = _newest(hit.get("bought", []), records, MAX_BOUGHT)
+    bought_all = len(_newest(hit.get("bought", []), records, 10 ** 6))
+    ctx.set_total("procurement_notice", bought_all)
     for pub, rec in bought:
         ln = records[pub]
         raw_id = next(i for i in rec["organisation-identifier-buyer"] if str(i).replace(" ", "") == org)
@@ -234,7 +239,8 @@ def _emit(ctx: CompanyContext, batch: dict | None) -> None:
                                                   f"TED Search API v3 (POST, notice {pub})"))
         m = {"method": "organisation_identifier_buyer_equals_orgnr",
              "detail": f"TED eForms organisation-identifier-buyer '{raw_id}' (buyer-country NOR) equals {org}"}
-        ctx.add_claim("procurement_notice", "activity", value, ev, as_of=_date(rec), match=m)
+        ctx.add_claim("procurement_notice", "activity", value, ev, as_of=_date(rec), match=m,
+                      note=f"{bought_all} notices in total; newest {MAX_BOUGHT} shown" if bought_all > MAX_BOUGHT else None)
     if not won:
         ctx.mark("public_contract_award", "activity", "not_available",
                  note="TED lists this organisation only as a buyer, not as a contract winner")

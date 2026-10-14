@@ -110,3 +110,24 @@ def test_private_addresses_are_refused():
         raise AssertionError("metadata address was not refused")
     except UnsafeAddress:
         pass
+
+
+def test_capped_counts_say_the_source_total():
+    ctx = build("Kari Testesen", ["a", "b"])
+    ctx.set_total("job_ad", 14)
+    text = summarise(ctx, [])["text"]
+    assert "NAV's feed holds 14 active job ads" in text and "the 2 re-checked in this run are shown" in text
+    ctx2 = build("Kari Testesen", ["a"])
+    ev = ctx2.evidence[0]
+    for i in range(3):
+        ctx2.add_claim("registered_workplace", "locations", {"organisation_number": f"99999990{i}", "municipality": "OSLO"}, ev)
+    ctx2.set_total("registered_workplace", 3, exact=False)
+    assert "It has at least 3 registered workplaces in Oslo." in summarise(ctx2, [])["text"]
+    ctx3 = build("Kari Testesen", [])
+    for i in range(2):
+        ctx3.add_claim("public_contract_award", "activity", {"notice": f"n{i}"}, ev, as_of=f"2026-0{i + 1}-01")
+    ctx3.set_total("public_contract_award", 25)
+    assert "lists 25 contract awards won with its organisation number, the latest on 2026-02-01; the 2 most recent " \
+           "are shown." in summarise(ctx3, [])["text"]
+    ctx4 = build("Kari Testesen", ["a"])  # no cap: the plain count
+    assert "NAV lists 1 active job ad with its organisation number" in summarise(ctx4, [])["text"]

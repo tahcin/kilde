@@ -85,6 +85,8 @@ async def _run(f: Fetcher, ctx: CompanyContext) -> None:
         ctx.module_states["finanstilsynet"] = "not_available"
         return
     emitted = 0
+    n_lic = sum(len(ent.get("licences") or []) for ent in entities)
+    ctx.set_total("financial_licence", n_lic)
     for ent in entities:
         m = {"method": "organisation_number_field",
              "detail": f"Finanstilsynet organisationNumber {ent.get('organisationNumber')} "
@@ -104,7 +106,9 @@ async def _run(f: Fetcher, ctx: CompanyContext) -> None:
             ev = ctx.add_evidence(snap, source_class=OFFICIAL_REGISTER_OTHER, method=METHOD, licence=LICENCE, span=span,
                                   effective_date=value.get("registered_date"),
                                   note=f"Human-readable register: {HUMAN}")
-            ctx.add_claim("financial_licence", "identity", value, ev, as_of=value.get("registered_date"), match=m)
+            ctx.add_claim("financial_licence", "identity", value, ev, as_of=value.get("registered_date"), match=m,
+                          note=f"{len(ent.get('licences') or [])} licences listed for this entity; first {MAX_LICENCES} shown"
+                          if len(ent.get("licences") or []) > MAX_LICENCES else None)
             emitted += 1
     if emitted:
         ctx.module_states["finanstilsynet"] = "available"

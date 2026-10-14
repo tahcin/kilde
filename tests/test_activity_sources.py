@@ -437,3 +437,21 @@ def test_cached_extracts_cite_the_export_not_the_human_page(tmp_path):
     run(forskningsradet.fetch_forskningsradet(None, ctx, rb))
     assert all(e.source_url in (forskningsradet.SF_HIST, forskningsradet.RCN_CSV) for e in ctx.evidence)
     assert all(c.value["page_url"] for c in available(ctx, "research_project"))
+
+
+def test_capped_research_projects_keep_the_true_total(tmp_path, monkeypatch):
+    from kilde.synthesis import summarise
+    monkeypatch.setattr(forskningsradet, "MAX_PROJECTS", 1)
+    path = rcn_cache(tmp_path)
+    f = fetcher({"robots.txt": (200, "User-agent: *\nDisallow: /episerver/\n"), "suksesshistorier": (200, "")})
+    batch = run(forskningsradet.prepare_forskningsradet(f, [ORG, OTHER], cache_path=path))
+    ctx = CompanyContext(ORG)
+    ev = ctx.add_evidence(None, source_url="https://data.brreg.no/x", source_class="official_registry", span="x", method="t")
+    ctx.add_claim("legal_name", "identity", "TESTFIRMA AS", ev)
+    run(forskningsradet.fetch_forskningsradet(f, ctx, batch))
+    shown = available(ctx, "research_project")
+    total = ctx.source_total("research_project", len(shown))[0]
+    assert len(shown) == 1 and total == 2
+    text = summarise(ctx, [])["text"]
+    assert "lists 2 funded or approved R&D projects" in text and "the most recent is shown" in text
+    assert shown[0].note == "2 projects in total; newest 1 shown"

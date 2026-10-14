@@ -167,6 +167,16 @@ class CompanyContext:
         return self.add_claim(field, section, None, evidence, availability=availability, note=note,
                               confidence=1.0 if availability != "ambiguous" else 0.0)
 
+    def set_total(self, field: str, total: int, *, exact: bool = True) -> None:
+        """How many items the source holds for this company when a connector publishes only some of them (a
+        count of rows, never a financial value). exact=False: the source was read only in part, so 'at least'."""
+        self.facts.setdefault("source_totals", {})[field] = {"total": int(total), "exact": bool(exact)}
+
+    def source_total(self, field: str, shown: int) -> tuple[int, bool]:
+        """(total, exact) for a field; the shown count when no connector capped it."""
+        t = (self.facts.get("source_totals") or {}).get(field)
+        return (max(t["total"], shown), t["exact"]) if t else (shown, True)
+
     def error(self, module: str, message: str) -> None:
         self.errors.append({"module": module, "message": message[:300], "at": utc_now()})
 

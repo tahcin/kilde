@@ -84,6 +84,17 @@ def distinct(claims: list[Claim], *keys: str) -> list[Claim]:
     return out
 
 
+def count(ctx: CompanyContext, field: str, shown: int, one: str, many: str) -> tuple[str, str]:
+    """('150 projects', '; the 8 most recent are shown') for a capped field: the source's true total, or 'at least'
+    when the source was read only in part; never a capped subset presented as the full count."""
+    total, exact = ctx.source_total(field, shown)
+    noun = one if total == 1 else many
+    if not exact:
+        return f"at least {total} {noun}", (f"; {shown} {'is' if shown == 1 else 'are'} shown" if shown < total else "")
+    recent = "the most recent is shown" if shown == 1 else f"the {shown} most recent are shown"
+    return f"{total} {noun}", (f"; {recent}" if shown < total else "")
+
+
 def first(ctx: CompanyContext, field: str) -> Claim | None:
     xs = ctx.claims_for(field)
     return xs[0] if xs else None
@@ -202,13 +213,18 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
         n_ind = sum(1 for c in subs if c.value.get("relationship") == "indirect subsidiary")
         split = (f" ({len(subs) - n_ind} held directly and {n_ind} indirectly, through its subsidiaries)"
                  if n_ind and n_ind < len(subs) else " (all held indirectly, through its subsidiaries)" if n_ind else "")
-        say(f"The registry lists {len(subs)} subsidiar{'y' if len(subs) == 1 else 'ies'}{split}.", *subs[:5])
+        n_subs, more = count(ctx, "group_subsidiary", len(subs), "subsidiary", "subsidiaries")
+        if more:
+            split, more = "", f"; {len(subs)} are shown"
+        say(f"The registry lists {n_subs}{split}{more}.", *subs[:5])
     wp = distinct(ctx.claims_for("registered_workplace"), "organisation_number")
     if wp:
         munis = sorted({c.value.get("municipality", "").title() for c in wp if c.value.get("municipality")})
-        say(f"It has {len(wp)} registered workplace{'s' if len(wp) != 1 else ''}"
+        n_wp, more_wp = count(ctx, "registered_workplace", len(wp), "registered workplace", "registered workplaces")
+        say(f"It has {n_wp}"
             + (f" in {join_and(munis[:5] + ([f'{len(munis) - 5} other municipalit' + ('y' if len(munis) == 6 else 'ies')] if len(munis) > 5 else []))}"
-               if munis else "") + ".", *wp[:5])
+               if munis else "") + (more_wp.replace("; ", "; of these, ").replace(" are shown", " were read")
+                                    if more_wp else "") + ".", *wp[:5])
 
     site = first(ctx, "official_website")
     if site:
@@ -252,14 +268,22 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
             names = sorted({str((c.value or {}).get("on_behalf_of") or "").strip() for c in agent} - {""})
             parts.append(f"is a registered agent under {len(agent)} licence{'s' if len(agent) != 1 else ''} held by others"
                          + (f" ({', '.join(names)})" if names else ""))
+        n_lic, _x = ctx.source_total("financial_licence", len(lic))
         if parts:
-            say("According to Finanstilsynet it " + " and ".join(parts) + ".", *(own + agent))
+            say("According to Finanstilsynet it " + " and ".join(parts) +
+                (f" ({n_lic} licences are listed in all; {len(lic)} are shown)" if n_lic > len(lic) else "") + ".",
+                *(own + agent))
 
     jobs = distinct(ctx.claims_for("job_ad"), "uuid")
     if jobs:
         newest = max(jobs, key=lambda c: c.value.get("published") or "")
-        say(f"NAV lists {len(jobs)} active job ad{'s' if len(jobs) != 1 else ''} with its organisation number; the newest, "
-            f"\"{newest.value.get('title')}\", was published {(newest.value.get('published') or '')[:10]}.", *jobs[:5])
+        indexed, _x = ctx.source_total("job_ad", len(jobs))
+        if indexed > len(jobs):
+            lead = (f"NAV's feed holds {indexed} active job ads with its organisation number; the {len(jobs)} re-checked "
+                    f"in this run are shown, and the newest of them")
+        else:
+            lead = f"NAV lists {len(jobs)} active job ad{'s' if len(jobs) != 1 else ''} with its organisation number; the newest"
+        say(f"{lead}, \"{newest.value.get('title')}\", was published {(newest.value.get('published') or '')[:10]}.", *jobs[:5])
 
     careers = ctx.claims_for("hiring_signal")
     if careers and not jobs:
@@ -272,15 +296,20 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
 
     awards = sorted(distinct(ctx.claims_for("public_contract_award"), "notice"), key=lambda c: c.as_of or "", reverse=True)
     if awards:
-        say(f"TED, the EU procurement journal, lists {len(awards)} contract award{'s' if len(awards) != 1 else ''} won with its "
-            f"organisation number, the latest on {awards[0].as_of}.", *awards[:3])
+        n_aw, more = count(ctx, "public_contract_award", len(awards), "contract award", "contract awards")
+        say(f"TED, the EU procurement journal, lists {n_aw} won with its "
+            f"organisation number, the latest on {awards[0].as_of}{more}.", *awards[:3])
     tenders = distinct(ctx.claims_for("procurement_notice"), "notice")
     if tenders:
-        say(f"As a buyer it has published {len(tenders)} procurement notice{'s' if len(tenders) != 1 else ''} on TED.", *tenders[:3])
+        n_t, more = count(ctx, "procurement_notice", len(tenders), "procurement notice", "procurement notices")
+        say(f"As a buyer it has published {n_t} on TED{more}.", *tenders[:3])
     projects = sorted(distinct(ctx.claims_for("research_project"), "scheme", "project_number"), key=lambda c: c.as_of or "", reverse=True)
     if projects:
-        say(f"The Research Council of Norway lists {len(projects)} funded or approved R&D project{'s' if len(projects) != 1 else ''} "
-            f"for it (including SkatteFUNN), the latest \"{clip(str((projects[0].value or {}).get('title', '')), 100)}\".", *projects[:3])
+        n_p, more = count(ctx, "research_project", len(projects), "funded or approved R&D project",
+                          "funded or approved R&D projects")
+        say(f"The Research Council of Norway lists {n_p} "
+            f"for it (including SkatteFUNN), the latest \"{clip(str((projects[0].value or {}).get('title', '')), 100)}\"{more}.",
+            *projects[:3])
     inspections = sorted(ctx.claims_for("food_inspection"), key=lambda c: c.as_of or "", reverse=True)
     if inspections:
         # One claim per inspected place; each carries how many inspections are on file for it.
@@ -289,8 +318,12 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
                       if c is max((x for x in inspections if (x.value or {}).get("place") == (c.value or {}).get("place")),
                                   key=lambda x: x.as_of or ""))
         latest = inspections[0]
+        n_places, _m = ctx.source_total("food_inspection", len(places))
+        where = ("its premises" if len(places) == 1 else str(len(places)) + " of its premises")
+        if n_places > len(places):
+            where = f"the {len(places)} most recently inspected of its {n_places} inspected premises"
         say(f"Mattilsynet's Smilefjes register lists {on_file} food safety inspection{'s' if on_file != 1 else ''} at "
-            f"{'its premises' if len(places) == 1 else str(len(places)) + ' of its premises'}; the latest, on {latest.as_of}, found: {(latest.value or {}).get('result', 'see source')}.",
+            f"{where}; the latest, on {latest.as_of}, found: {(latest.value or {}).get('result', 'see source')}.",
             *inspections[:3])
     approval = first(ctx, "approval_sentral_godkjenning")
     if approval:
@@ -302,8 +335,9 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
     if reg_changes:
         latest = max(reg_changes, key=lambda c: c.value.get("date") or "")
         what = ", ".join(latest.value.get("changed") or []) or latest.value.get("type")
-        say(f"The registry recorded {len(reg_changes)} update{'s' if len(reg_changes) != 1 else ''} in the last 12 months; "
-            f"the latest, on {latest.value.get('date')}, changed: {what}.", *reg_changes[:5])
+        n_ch, more = count(ctx, "registry_change", len(reg_changes), "update", "updates")
+        say(f"The registry recorded {n_ch} in the last 12 months; "
+            f"the latest, on {latest.value.get('date')}, changed: {what}{more}.", *reg_changes[:5])
     if changes:
         material = [c for c in changes if c.get("material")]
         kinds = sorted({c["type"].replace("_", " ") for c in (material or changes)})

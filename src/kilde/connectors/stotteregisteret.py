@@ -110,6 +110,7 @@ def _emit(ctx: CompanyContext, batch: dict | None) -> None:
         if row:
             rows.append((iso(row[COL_DATE]) or "", rid, unit, ln, row))
     rows.sort(key=lambda x: (x[0], x[1]), reverse=True)
+    ctx.set_total(FIELD, len(rows))
     for date, rid, unit, ln, row in rows[:MAX_AWARDS]:
         num = row[COL_ORG]
         url = RECORD.format(nr=row[COL_NR])

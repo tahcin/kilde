@@ -147,6 +147,7 @@ def _emit(ctx: CompanyContext, batch: dict | None) -> None:
             rows.sort(key=lambda x: iso(x[0]["dato"]) or "", reverse=True)
             places.append((num, how, obj, rows))
     places.sort(key=lambda p: iso(p[3][0][0]["dato"]) or "", reverse=True)
+    ctx.set_total("food_inspection", len(places))
     for num, how, obj, rows in places[:MAX_PLACES]:
         row, raw = rows[0]
         date = iso(row["dato"])
@@ -177,5 +178,7 @@ def _emit(ctx: CompanyContext, batch: dict | None) -> None:
                  "detail": f"Smilefjes orgnummer {num} is an Enhetsregisteret underenhet with overordnetEnhet {org}"}
         else:
             m = {"method": "orgnummer_equals_orgnr", "detail": f"Smilefjes orgnummer '{num}' equals {org}"}
-        ctx.add_claim("food_inspection", "activity", value, ev, as_of=date, match=m)
+        ctx.add_claim("food_inspection", "activity", value, ev, as_of=date, match=m,
+                      note=f"{len(places)} inspected places in total; latest {MAX_PLACES} shown"
+                      if len(places) > MAX_PLACES else None)
     ctx.module_states["smilefjes"] = "available"

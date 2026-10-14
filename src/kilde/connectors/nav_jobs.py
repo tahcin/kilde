@@ -307,6 +307,9 @@ async def fetch_jobs(f: Fetcher, ctx: CompanyContext, index: JobIndex) -> None:
         return
     uuids = [u for u in dict.fromkeys(index.by_org.get(ctx.org, [])) if u not in index.stopped]
     uuids.sort(key=lambda u: (index.ads.get(u) or {}).get("published") or "", reverse=True)
+    if uuids:
+        # indexed active ads; the published ones are those re-checked live in this run
+        ctx.set_total("job_ad", len(uuids))
     now = datetime.now(timezone.utc)
     published: list[Evidence] = []
     failures = 0

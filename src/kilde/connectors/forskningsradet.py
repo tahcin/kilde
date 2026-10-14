@@ -228,6 +228,7 @@ def _emit(ctx: CompanyContext, batch: dict | None) -> None:
         return
     items = [(rid, json.loads(batch["records"][rid])) for rid in rids]
     items.sort(key=lambda x: (_sort_key(*x), x[0]), reverse=True)
+    ctx.set_total("research_project", len(items))
     for rid, rec in items[:MAX_PROJECTS]:
         kind = rid.split(":", 1)[0]
         src = batch["sources"].get(kind) or {}
