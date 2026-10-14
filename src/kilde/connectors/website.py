@@ -5110,7 +5110,8 @@ async def network_up(f: Fetcher) -> bool:
 
 TRIED_LIST = 10  # domains named in a website note
 GUESS_BUDGET = 6   # requests name guesses may use while stronger candidates still wait
-STRONG_EXTRA = 4   # extra per-company requests when the registry, its email domain or a seed gives a candidate
+STRONG_EXTRA = 0   # extra per-company requests when the registry, its email domain or a seed gives a candidate
+                   # (0: on batches that use the whole run budget, extra requests for some starve later companies)
 
 
 def _strong_source(src: str) -> bool:
@@ -5145,6 +5146,7 @@ async def fetch_website(f: Fetcher, ctx: CompanyContext) -> None:
     if any(_strong_source(src) for _d, src, _u in cands) and not ctx.facts.get("website_retry"):
         sp.cap += STRONG_EXTRA  # decided from the candidates alone, so two runs give the same cap
     guess_used = 0
+    clean_stop = False
     deferred: list[tuple[str, str, str | None]] = []
     try:
         hosts = [h for d, _s, _u in cands[:24] for h in (d, "www." + d)]
@@ -5156,6 +5158,7 @@ async def fetch_website(f: Fetcher, ctx: CompanyContext) -> None:
             i += 1
             if not sp.can(2):
                 budget_note = "per-company request cap reached"
+                clean_stop = True  # stopped between candidates: every checked candidate has its outcome
                 break
             if src.startswith("guess") and len([v for v in verdicts if v.source.startswith("guess")
                                                 and v.status not in ("no_dns", "duplicate")]) >= 10:
@@ -5245,7 +5248,8 @@ async def fetch_website(f: Fetcher, ctx: CompanyContext) -> None:
     unchecked = [c for c in cands if c[0] not in seen_doms] + \
         [(v.domain, v.source, None) for v in verdicts if v.status == "skipped_budget"]
     weak_left = [d for d, src, _ in unchecked if not _strong_source(src)]
-    if budget_note == "per-company request cap reached" and unchecked and len(weak_left) == len(unchecked):
+    if clean_stop and budget_note == "per-company request cap reached" and unchecked and len(weak_left) == len(unchecked) \
+            and f.budget.remaining_requests() > RESERVE + 2:
         # Only name guesses and bare domain-name matches were left: they are guesses, not declarations, so the
         # result is absence among what was checked, with the unchecked guesses named, not a failure.
         budget_note = None

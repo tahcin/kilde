@@ -3318,3 +3318,13 @@ def test_company_named_after_our_street_is_not_a_near_namesake():
         k.replace("navn=lyng&", "navn=testverk&"): v for k, v in rows.items()}, **rows))
     claims = run(f, ctx)
     assert claims["official_website"].value == "lyngtestverk.no"
+
+
+def test_cap_reached_inside_a_candidate_check_stays_failed(monkeypatch):
+    """The cap running out while a candidate is still being judged is a failure, never absence."""
+    monkeypatch.setattr(W, "MAX_REQUESTS", 3)
+    home = html("<h1>Fjellbekk Trevare</h1><a href='/kontakt'>Kontakt</a><a href='/om-oss'>Om oss</a>")
+    pages = {"https://fjellbekktrevare.no/": (200, home), "https://fjellbekktrevare.no/kontakt": (200, home),
+             "https://fjellbekktrevare.no/om-oss": (200, home)}
+    claims = run(FakeFetcher(pages), ctx_for())
+    assert claims["official_website"].availability in ("failed", "ambiguous")
