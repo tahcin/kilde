@@ -175,3 +175,19 @@ def test_nav_summary_says_when_ads_carry_a_sub_unit_number():
         ctx.add_claim("job_ad", "hiring", {"uuid": str(i), "title": f"Snekker {i}", "published": "2026-10-0%d" % (i + 1),
                                            "employer_orgnr": org}, ev)
     assert "with its organisation number or that of a registered sub-unit" in summarise(ctx, [])["text"]
+
+
+def test_revenue_periods_of_different_length_are_described():
+    from kilde.model import CompanyContext, Snapshot
+    from kilde.synthesis import summarise
+    ctx = CompanyContext("923609016")
+    s = Snapshot(url="https://x", final_url="https://x", status=200, retrieved_at="2026-10-14T00:00:00Z", content=b"x",
+                 content_type="application/json")
+    ev = ctx.add_evidence(s, source_class="official_accounts", span="x", method="t")
+    ctx.add_claim("legal_name", "identity", "FJELLBEKK AS", ev)
+    ctx.add_claim("revenue", "financials", {"amount": 1200.0, "currency": "NOK", "year": "2025", "period_start": "2025-01-01",
+                                            "period_end": "2025-12-31", "account_type": "company"}, ev)
+    ctx.add_claim("revenue", "financials", {"amount": 1500.0, "currency": "NOK", "year": "2024", "period_start": "2023-10-01",
+                                            "period_end": "2024-12-31", "account_type": "company"}, ev)
+    text = summarise(ctx, [])["text"]
+    assert "15-month period" in text and "covers 12 months" in text
