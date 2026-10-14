@@ -1,6 +1,6 @@
 import { motion, useReducedMotion } from "motion/react";
 import { ArrowLeft, ArrowUpRight, Check, ChevronDown, Columns3, Copy } from "lucide-react";
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Link, useParams } from "react-router";
 import { AskLink, useAskScope } from "../components/AskLauncher";
 import { SourceChip, SourcePop } from "../components/Source";
@@ -42,7 +42,7 @@ const PLACED = new Set([...GROUPS.flatMap((g) => g.fields), ...ACCOUNT_FIELDS, "
 function Section({ id, title, note, children, count, fam }: { id: string; title: string; note?: string; children: ReactNode; count?: number; fam?: Fam }) {
   const f = fam ? FAM[fam] : null;
   return (
-    <section id={id} className="surface scroll-mt-24 rounded-[1.3rem] px-4 pb-2 pt-5 sm:px-6" aria-labelledby={`${id}-h`}>
+    <section id={id} className="surface scroll-mt-36 rounded-[1.3rem] lg:scroll-mt-24 px-4 pb-2 pt-5 sm:px-6" aria-labelledby={`${id}-h`}>
       <div className="mb-2 flex items-baseline justify-between gap-3">
         <h2 id={`${id}-h`} className="flex items-center gap-2.5 text-[19px] font-semibold tracking-[-0.02em] text-ink">
           <span className={cn("size-3 shrink-0 rounded-[4px]", f ? f.bg : "bg-paper-2", f && "ring-1 ring-inset ring-current/15", f?.ink)} aria-hidden />{title}
@@ -194,9 +194,11 @@ function Summary({ co }: { co: Company }) {
   const numbers = new Map<string, number>();
   const num = (id: string) => { if (!numbers.has(id)) numbers.set(id, numbers.size + 1); return numbers.get(id)!; };
   return (
-    <section className="surface rounded-[1.3rem] px-5 py-5 sm:px-6" aria-labelledby="sum-h">
+    <section className={cn("surface grid gap-x-8 rounded-[1.3rem] px-5 py-5 sm:px-6", co.unk.length > 0 && "xl:grid-cols-[minmax(0,1fr)_17rem]")} aria-labelledby="sum-h">
+      <div className="min-w-0">
       <h2 id="sum-h" className="text-[19px] font-semibold tracking-[-0.02em] text-ink">In short</h2>
-      <div className="measure mt-3 space-y-2.5 text-[15.5px] leading-[1.7] text-ink">
+      {/* With nothing to list beside it, the summary flows in two columns on wide screens instead of leaving half the card empty. */}
+      <div className={cn("mt-3 text-[16px] leading-[1.7] text-ink [&>p]:mb-2.5 [&>p]:break-inside-avoid", co.unk.length ? "max-w-[78ch]" : "xl:columns-2 xl:gap-10")}>
         {co.sum.map(([text, ids], i) => {
           const claims = ids.map((id) => co.byId[id]).filter(Boolean);
           return (
@@ -208,13 +210,14 @@ function Summary({ co }: { co: Company }) {
                   {num(c.i)}
                 </SourcePop>
               ))}
-              {claims.length > 3 && <span className="ml-1 align-middle text-[11.5px] text-muted">+{claims.length - 3} more below</span>}
+              {claims.length > 3 && <span className="ml-1 whitespace-nowrap align-middle text-[11.5px] text-muted">+{claims.length - 3} more below</span>}
             </p>
           );
         })}
       </div>
+      </div>
       {co.unk.length > 0 && (
-        <div className="measure mt-5 rounded-xl bg-paper px-4 py-3">
+        <div className="mt-5 self-start rounded-xl bg-paper px-4 py-3 xl:mt-1">
           <h3 className="text-[13.5px] font-semibold text-ink">What Kilde could not find</h3>
           <ul className="mt-1.5 space-y-1.5 text-[13.5px] leading-snug text-ink-2">
             {co.unk.map((u, i) => <li key={i} className="relative pl-3.5 before:absolute before:left-0 before:top-[0.55em] before:size-1.5 before:rounded-full before:bg-none/50">{u}</li>)}
@@ -274,13 +277,93 @@ function CompareWith({ o }: { o: string }) {
   );
 }
 
-function OnThisPage({ items }: { items: [string, string][] }) {
+type NavItem = { id: string; title: string; fam?: Fam; count?: number };
+
+/** Which section is being read: the last one whose top has passed just under the sticky header. */
+function useScrollSpy(ids: string[]) {
+  const [active, setActive] = useState(ids[0]);
+  const key = ids.join(",");
+  useEffect(() => {
+    let frame = 0;
+    const update = () => {
+      frame = 0;
+      const line = innerWidth >= 1024 ? 120 : 150;
+      let current = ids[0];
+      for (const id of ids) {
+        const el = document.getElementById(id);
+        if (el && el.getBoundingClientRect().top - line <= 0) current = id;
+      }
+      // At the very bottom the last section counts, even if it is short.
+      if (innerHeight + scrollY >= document.documentElement.scrollHeight - 4) current = ids[ids.length - 1];
+      setActive(current);
+    };
+    const onScroll = () => { if (!frame) frame = requestAnimationFrame(update); };
+    update();
+    addEventListener("scroll", onScroll, { passive: true });
+    addEventListener("resize", onScroll);
+    return () => { removeEventListener("scroll", onScroll); removeEventListener("resize", onScroll); cancelAnimationFrame(frame); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [key]);
+  return active;
+}
+
+function go(e: React.MouseEvent, id: string) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  e.preventDefault();
+  el.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+  history.replaceState(null, "", `#${id}`);
+}
+
+/** Desktop: a sticky card beside the content. */
+function SectionNav({ items, active }: { items: NavItem[]; active: string }) {
   return (
-    <nav aria-label="On this page" className="hidden px-1 lg:block">
-      <p className="text-[12.5px] font-medium text-muted">On this page</p>
-      <ul className="mt-2 space-y-1 text-[13.5px]">
-        {items.map(([id, t]) => <li key={id}><a href={`#${id}`} className="text-ink-2 transition hover:text-brand">{t}</a></li>)}
+    <nav aria-label="On this page" className="surface hidden rounded-[1.3rem] p-3 lg:block">
+      <p className="px-2.5 pb-2 pt-1 text-[13px] font-semibold text-ink">On this page</p>
+      <ul className="space-y-0.5">
+        {items.map((it) => {
+          const on = it.id === active, f = it.fam ? FAM[it.fam] : null;
+          return (
+            <li key={it.id}>
+              <a href={`#${it.id}`} onClick={(e) => go(e, it.id)} aria-current={on ? "location" : undefined}
+                className={cn("relative flex items-center gap-2.5 rounded-xl py-2 pl-3.5 pr-3 text-[13.5px] transition",
+                  on ? cn(f ? f.bg : "bg-wash", "font-semibold text-ink") : "text-ink-2 hover:bg-hover hover:text-ink")}>
+                <span className={cn("absolute inset-y-2 left-1 w-[3px] rounded-full transition", on ? (f ? f.dot : "bg-brand") : "bg-transparent")} aria-hidden />
+                <span className={cn("size-2 shrink-0 rounded-full", f ? f.dot : "bg-faint")} aria-hidden />
+                <span className="min-w-0 flex-1 truncate">{it.title}</span>
+                {it.count != null && <span className={cn("text-[12px] tabular-nums", on && f ? f.ink : "text-muted")}>{it.count}</span>}
+              </a>
+            </li>
+          );
+        })}
       </ul>
+    </nav>
+  );
+}
+
+/** Phones and tablets: a sticky row of chips under the header. */
+function SectionChips({ items, active }: { items: NavItem[]; active: string }) {
+  const bar = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = bar.current?.querySelector<HTMLElement>(`[data-id="${active}"]`);
+    const box = bar.current;
+    if (el && box) box.scrollTo({ left: el.offsetLeft - box.clientWidth / 2 + el.clientWidth / 2, behavior: "smooth" });
+  }, [active]);
+  return (
+    <nav aria-label="On this page" className="sticky top-[4.4rem] z-30 -mx-4 mb-2 border-y border-rule/70 bg-paper/90 backdrop-blur-md md:-mx-8 lg:hidden">
+      <div ref={bar} className="flex gap-1.5 overflow-x-auto px-4 py-2 [scrollbar-width:none] md:px-8">
+        {items.map((it) => {
+          const on = it.id === active, f = it.fam ? FAM[it.fam] : null;
+          return (
+            <a key={it.id} data-id={it.id} href={`#${it.id}`} onClick={(e) => go(e, it.id)} aria-current={on ? "location" : undefined}
+              className={cn("flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] ring-1 transition",
+                on ? cn(f ? cn(f.bg, f.ink) : "bg-brand text-on", "font-semibold ring-transparent") : "bg-card text-ink-2 ring-rule")}>
+              {f && !on && <span className={cn("size-1.5 rounded-full", f.dot)} aria-hidden />}
+              {it.title}{it.count != null && <span className={cn("tabular-nums", on ? "opacity-75" : "text-muted")}>{it.count}</span>}
+            </a>
+          );
+        })}
+      </div>
     </nav>
   );
 }
@@ -306,6 +389,22 @@ export default function CompanyPage() {
     return gs;
   }, [co]);
 
+  const toc = useMemo<NavItem[]>(() => {
+    if (!co) return [];
+    const people = groups.find((g) => g.id === "people");
+  const n = (cs: Claim[]) => cs.filter((c) => c.a === "available").length;
+    const accountsN = n(co.c.filter((c) => ACCOUNT_FIELDS.includes(c.f)));
+    return [
+      { id: "summary", title: "In short" },
+      ...(people && n(people.claims) ? [{ id: "people", title: people.title, fam: "people" as Fam, count: n(people.claims) }] : []),
+      ...(accountsN ? [{ id: "accounts", title: "Accounts", fam: "accounts" as Fam, count: accountsN }] : []),
+      // Sections with nothing found stay on the page (they say what was checked) but are left out of the index.
+      ...groups.filter((g) => g.id !== "people" && n(g.claims) > 0).map((g) => ({ id: g.id, title: g.title, fam: g.fam, count: n(g.claims) })),
+      { id: "about", title: "About this profile" },
+    ];
+  }, [co, groups]);
+  const active = useScrollSpy(toc.map((t) => t.id));
+
   if (error) return (
     <div className="wrap py-24 text-center">
       <h1 className="display text-[2.2rem]">No profile for {orgFmt(org)}</h1>
@@ -315,20 +414,20 @@ export default function CompanyPage() {
   );
   if (!co) return <div className="wrap py-16"><div className="h-14 w-2/3 animate-pulse rounded-xl bg-paper-2" /><div className="mt-6 h-40 animate-pulse rounded-2xl bg-paper-2/60" /></div>;
 
-  const toc: [string, string][] = [["summary", "In short"], ["people", "Who runs it"], ["accounts", "Accounts"], ...groups.filter((g) => g.id !== "people").map((g) => [g.id, g.title] as [string, string]), ["about", "About this profile"]];
   const people = groups.find((g) => g.id === "people");
   return (
     <div className="wrap pb-10 pt-8 sm:pt-12">
       <Header co={co} />
       <div className="mt-8"><KeyFigures co={co} /></div>
-      <div className="mt-6 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_13rem] lg:gap-10">
-        <div id="summary" className="min-w-0 scroll-mt-24 lg:col-start-1">
+      <div className="mt-6"><SectionChips items={toc} active={active} /></div>
+      <div className="grid grid-cols-1 gap-6 lg:mt-0 lg:grid-cols-[minmax(0,1fr)_17rem] lg:gap-6">
+        <div id="summary" className="min-w-0 scroll-mt-36 lg:col-start-1 lg:scroll-mt-24">
           <Summary co={co} />
           <AskLink className="mt-3 ml-1">Ask about this company</AskLink>
         </div>
         <aside className="min-w-0 lg:col-start-2 lg:row-span-2 lg:row-start-1">
-          <div className="space-y-6 lg:sticky lg:top-24">
-            <OnThisPage items={toc} />
+          <div className="lg:sticky lg:top-24">
+            <SectionNav items={toc} active={active} />
           </div>
         </aside>
         <div className="min-w-0 space-y-6 lg:col-start-1">
@@ -339,7 +438,7 @@ export default function CompanyPage() {
               <Rows co={co} claims={g.claims} />
             </Section>
           ))}
-          <section id="about" className="scroll-mt-24 rounded-[1.3rem] border border-dashed border-rule px-5 py-5 text-[13.5px] leading-relaxed text-muted sm:px-6">
+          <section id="about" className="scroll-mt-36 rounded-[1.3rem] lg:scroll-mt-24 border border-dashed border-rule px-5 py-5 text-[13.5px] leading-relaxed text-muted sm:px-6">
             <h2 className="text-[15px] font-semibold text-ink">About this profile</h2>
             <p className="mt-1.5">
               Built by Kilde on {dateTime(co.run.at)}{co.run.requests ? ` with ${plural(co.run.requests, "web request")}` : ""}, code version {co.run.commit}.

@@ -22,10 +22,28 @@ function citeIds(group: string, fallback: string): [string, string][] {
   });
 }
 
+export type Cite = { key: string; n: number; co: Company; claim: import("../lib/data").Claim };
+
+/** The citations of one answer, numbered in order of first appearance; ids not in Kilde's data are dropped. */
+export function citeList(text: string, companies: Company[]): Cite[] {
+  const byOrg = Object.fromEntries(companies.map((c) => [c.o, c]));
+  const out: Cite[] = [];
+  const seen = new Set<string>();
+  let m: RegExpExecArray | null;
+  const re = new RegExp(CITE.source, "g");
+  while ((m = re.exec(text))) {
+    for (const [o, id] of citeIds(m[1], companies[0]?.o ?? "")) {
+      const co = byOrg[o], claim = co?.byId[id], key = `${o}:${id}`;
+      if (co && claim && !seen.has(key)) { seen.add(key); out.push({ key, n: out.length + 1, co, claim }); }
+    }
+  }
+  return out;
+}
+
 /** Clean up what the model wrote for display: house style has no em dashes. */
 const tidy = (s: string) => s.replace(/\s*\u2014\s*/g, ", ").replace(/\*\*(.+?)\*\*/g, "$1");
 
-function AnswerText({ text, companies, streaming }: { text: string; companies: Company[]; streaming: boolean }) {
+function AnswerText({ text, companies, streaming, onCite, lit }: { text: string; companies: Company[]; streaming: boolean; onCite?: (key: string) => void; lit?: string | null }) {
   const byOrg = Object.fromEntries(companies.map((c) => [c.o, c]));
   const numbers = new Map<string, number>();
   // While streaming, hold back a half-written citation at the end.
@@ -45,8 +63,8 @@ function AnswerText({ text, companies, streaming }: { text: string; companies: C
         const k = `${o}:${id}`;
         if (!numbers.has(k)) numbers.set(k, numbers.size + 1);
         return (
-          <SourcePop key={k} co={co} claim={claim} title={`Source ${numbers.get(k)}: ${displayName(co.n)}`}
-            className="mx-[1px] inline-grid h-[18px] min-w-[18px] -translate-y-[1px] place-items-center rounded-[5px] bg-pop-soft px-1 align-middle text-[11px] font-semibold text-ink ring-1 ring-pop/50 transition hover:bg-pop data-[state=open]:bg-pop">
+          <SourcePop key={k} co={co} claim={claim} title={`Source ${numbers.get(k)}: ${displayName(co.n)}`} onOpen={() => onCite?.(k)}
+            className={cn("mx-[1px] inline-grid h-[18px] min-w-[18px] -translate-y-[1px] place-items-center rounded-[5px] bg-pop-soft px-1 align-middle text-[11px] font-semibold text-ink ring-1 ring-pop/50 transition hover:bg-pop data-[state=open]:bg-pop", lit === k && "bg-pop ring-2 ring-brand/50")}>
             {numbers.get(k)}
           </SourcePop>
         );
@@ -80,10 +98,16 @@ function Dots() {
   );
 }
 
-export function AskPanel({ companies, suggestions, title, className, intro, bare }: {
+export function AskPanel({ companies, suggestions, title, className, intro, bare, autoAsk, onAutoAsked, onCitations, onCite, lit, wide }: {
   companies: Company[]; suggestions: string[]; title?: string; className?: string; intro?: ReactNode;
   /** Inside the popup: no card or header of its own, and it fills the height it is given. */
   bare?: boolean;
+  /** A question to send as soon as the panel is ready (from a teaser bubble). */
+  autoAsk?: string | null; onAutoAsked?: () => void;
+  /** The citations of the latest answer, for the expanded view's source list. */
+  onCitations?: (c: Cite[]) => void; onCite?: (key: string) => void; lit?: string | null;
+  /** The expanded reading layout: larger text at a comfortable measure. */
+  wide?: boolean;
 }) {
   const orgs = companies.map((c) => c.o);
   const key = orgs.join(",");
@@ -118,6 +142,8 @@ export function AskPanel({ companies, suggestions, title, className, intro, bare
     }
   };
   const last = turns[turns.length - 1];
+  useEffect(() => { if (autoAsk && orgs.length) { void send(autoAsk); onAutoAsked?.(); } }, [autoAsk, key]);  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { onCitations?.(last?.a ? citeList(last.a, companies) : []); }, [last?.a, key]);  // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (turns.length) end.current?.scrollIntoView({ block: "nearest" }); }, [turns.length, last?.a.length]);
 
   const many = companies.length > 1;
@@ -165,7 +191,7 @@ export function AskPanel({ companies, suggestions, title, className, intro, bare
               {t.status === "error" ? (
                 <p className={cn("rounded-xl px-3.5 py-2.5 text-[14px] leading-snug", ["ip", "day", "budget", "disabled"].includes(t.code ?? "") ? "bg-amber-soft text-amber" : "bg-bad-soft text-bad")}>{t.error}</p>
               ) : t.a ? (
-                <AnswerText text={t.a} companies={companies} streaming={t.status === "streaming"} />
+                <div className={cn(wide && "max-w-[68ch] text-[16px]")}><AnswerText text={t.a} companies={companies} streaming={t.status === "streaming"} onCite={onCite} lit={lit} /></div>
               ) : <Dots />}
             </motion.div>
           ))}

@@ -76,11 +76,11 @@ export function SourceCard({ co, claim, close }: { co: Company; claim: Claim; cl
 }
 
 /** Anything that opens a fact's source. `trigger` is the visible part; it gets the button semantics. */
-export function SourcePop({ co, claim, children, className, title }: {
-  co: Company; claim: Claim; children: ReactNode; className?: string; title?: string;
+export function SourcePop({ co, claim, children, className, title, onOpen }: {
+  co: Company; claim: Claim; children: ReactNode; className?: string; title?: string; onOpen?: () => void;
 }) {
   return (
-    <Popover.Root>
+    <Popover.Root onOpenChange={(v) => { if (v) onOpen?.(); }}>
       <Popover.Trigger className={className} aria-label={title ?? `Source for ${label(claim.f)}`} aria-haspopup="dialog">
         {children}
       </Popover.Trigger>

@@ -63,6 +63,7 @@
 
 html { color-scheme: light; }
 
+
 /* The mark, as in Kilde's report: an accent square with a lighter inset corner. */
 .kilde-mark {
   display: inline-block; width: 22px; height: 22px; border-radius: 6px; background: var(--color-brand); flex: none;
