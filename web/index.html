@@ -19,6 +19,20 @@
     <meta name="twitter:image" content="https://kilde.tahcin.tech/og.png" />
     <meta name="theme-color" content="#faf8f3" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- If a deploy replaced the app's files while this page was open or cached, reload once to get the new ones. -->
+    <script>
+      addEventListener("error", function (e) {
+        var t = e.target;
+        if (!t || !(t.tagName === "SCRIPT" || t.tagName === "LINK") || !/\/assets\//.test(t.src || t.href || "")) return;
+        try { if (sessionStorage.getItem("kilde.reloaded")) return; sessionStorage.setItem("kilde.reloaded", "1"); } catch (_) { return; }
+        location.reload();
+      }, true);
+      addEventListener("unhandledrejection", function (e) {
+        if (!/dynamically imported module|Importing a module script failed/i.test(String(e.reason && e.reason.message))) return;
+        try { if (sessionStorage.getItem("kilde.reloaded")) return; sessionStorage.setItem("kilde.reloaded", "1"); } catch (_) { return; }
+        location.reload();
+      });
+    </script>
   </head>
   <body>
     <div id="root"></div>
