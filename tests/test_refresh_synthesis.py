@@ -144,3 +144,20 @@ def test_smilefjes_total_counts_places_not_a_cap_when_all_are_shown():
     assert "inspected are shown" not in text and "at its premises" in text
     ctx.set_total("food_inspection", 7)
     assert "the register has 7 inspected places for it; the 2 most recently inspected are shown" in summarise(ctx, [])["text"]
+
+
+def test_unspecified_registry_updates_are_not_a_named_change():
+    from kilde.model import CompanyContext, Snapshot
+    from kilde.synthesis import summarise
+    from kilde import report
+    ctx = CompanyContext("923609016")
+    s = Snapshot(url="https://x", final_url="https://x", status=200, retrieved_at="2026-10-14T00:00:00Z", content=b"x",
+                 content_type="application/json")
+    ev = ctx.add_evidence(s, source_class="official_registry", span="x", method="t")
+    ctx.add_claim("legal_name", "identity", "FJELLBEKK AS", ev)
+    ctx.add_claim("registry_change", "activity", {"date": "2026-10-01", "type": "Ukjent", "update_id": 1,
+                                                   "changed": ["unspecified fields (the feed lists no field paths)"]}, ev)
+    text = summarise(ctx, [])["text"]
+    assert "name no changed field" in text and "changed:" not in text
+    assert report._unspecified_change({"changed": ["unspecified fields (the feed lists no field paths)"]})
+    assert not report._unspecified_change({"changed": ["business address"]})

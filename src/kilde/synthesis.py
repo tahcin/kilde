@@ -332,8 +332,14 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
             + (f", valid until {v.get('valid_to')}" if v.get("valid_to") else "") + ".", approval)
 
     reg_changes = distinct(ctx.claims_for("registry_change"), "update_id")
-    if reg_changes:
-        latest = max(reg_changes, key=lambda c: c.value.get("date") or "")
+    named = [c for c in reg_changes if not all(str(x).lower().startswith("unspecified")
+                                               for x in (c.value.get("changed") or ["unspecified"]))]
+    if reg_changes and not named:
+        n_ch, more = count(ctx, "registry_change", len(reg_changes), "entry", "entries")
+        say(f"The registry update feed has {n_ch} for it in the last 12 months that name no changed field{more}.",
+            *reg_changes)
+    elif reg_changes:
+        latest = max(named, key=lambda c: c.value.get("date") or "")
         what = ", ".join(latest.value.get("changed") or []) or latest.value.get("type")
         n_ch, more = count(ctx, "registry_change", len(reg_changes), "update", "updates")
         say(f"The registry recorded {n_ch} in the last 12 months; "

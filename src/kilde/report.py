@@ -59,6 +59,12 @@ LICENCE_LINES = [
 # Data shaping
 # ---------------------------------------------------------------------------
 
+
+def _unspecified_change(v) -> bool:
+    """A registry update whose feed entry names no changed field ('Ukjent'): not shown as a recent change."""
+    ch = (v or {}).get("changed") if isinstance(v, dict) else None
+    return not ch or all(str(x).lower().startswith("unspecified") for x in ch)
+
 def _slim_envelope(env: dict, urls: dict[str, int], span_limit: int | None) -> dict:
     ev_index: dict[str, int] = {}
     evs: list[list] = []
@@ -112,7 +118,9 @@ def _slim_envelope(env: dict, urls: dict[str, int], span_limit: int | None) -> d
         "err": [e.get("message") if isinstance(e, dict) else str(e) for e in env.get("errors") or []][:10],
         "op": env.get("operations") or {},
         "fl": {"web": "official_website" in fields, "jobs": "job_ad" in fields,
-               "chg": bool(env.get("changes")) or "registry_change" in fields},
+               "chg": bool(env.get("changes")) or any(
+                   c.get("field") == "registry_change" and c.get("availability") == "available"
+                   and not _unspecified_change(c.get("value")) for c in env.get("claims") or [])},
         "rev": revenue[0] if revenue else None,
         "nf": len(avail),
     }
@@ -884,7 +892,7 @@ function words(x){var a=Math.abs(Number(x));if(a>=1e9)return (a/1e9).toFixed(1).
 var GEN=Date.parse(META.generated_at||'')||Date.now();
 function daysAgo(d){var t=Date.parse(d);return isFinite(t)?(GEN-t)/864e5:1e9;}
 function regChanges(co){return av(co,'registry_change').slice().sort(function(a,b){return (b.d||'').localeCompare(a.d||'');});}
-function recent(co){var r=regChanges(co)[0];return co.ch.length>0||!!(r&&r.d&&daysAgo(r.d)<=92);}
+function recent(co){var r=regChanges(co).filter(function(c){return !chgUnknown(c.v);})[0];return co.ch.length>0||!!(r&&r.d&&daysAgo(r.d)<=92);}
 function statusWarn(co){var s=one(co,'legal_status');if(!s||!s.v||typeof s.v!=='object')return '';var v=s.v;
   return v.konkurs?'Bankrupt':v.underTvangsavviklingEllerTvangsopplosning?'Being forcibly dissolved':v.underAvvikling?'Being wound up':'';}
 function tags(co){var t=[],w=statusWarn(co);if(w)t.push('<span class="tag warn">'+w+'</span>');if(co.fl.web)t.push('<span class="tag">Website</span>');

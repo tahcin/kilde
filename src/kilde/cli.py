@@ -44,7 +44,7 @@ def read_organisations(path: str) -> list[str]:
     for v in values:
         raw = v.get("organisation_number") or v.get("orgnr") or v.get("organisasjonsnummer") if isinstance(v, dict) else v
         org = "".join(ch for ch in str(raw or "") if ch.isdigit())
-        if len(org) != 9:
+        if len(org) != 9 or not _mod11_ok(org):
             # Never abort the batch: an unusable input still gets its own terminal envelope.
             key = str(raw if raw is not None else v)
             if key not in seen:
@@ -60,7 +60,14 @@ def read_organisations(path: str) -> list[str]:
 INVALID: list[str] = []
 
 
+def _mod11_ok(org: str) -> bool:
+    """The organisation number's last digit is its MOD11 check digit (weights 3 2 7 6 5 4 3 2)."""
+    r = 11 - sum(int(d) * w for d, w in zip(org[:8], (3, 2, 7, 6, 5, 4, 3, 2))) % 11
+    return (0 if r == 11 else r) == int(org[8]) and r != 10
+
+
 def invalid_envelope(raw: str, run_id: str, at: str) -> dict:
+    digits = "".join(ch for ch in str(raw) if ch.isdigit())
     sections = {s: {"state": "failed", "claim_ids": []} for s in
                 ("identity", "financials", "leadership", "locations", "web_presence", "hiring", "activity")}
     return {"organisation_number": raw, "agent": {"name": "Kilde", "version": __version__},
@@ -68,7 +75,8 @@ def invalid_envelope(raw: str, run_id: str, at: str) -> dict:
             "run": {"run_id": run_id, "started_at": at, "completed_at": at, "terminal_status": "failed"},
             "legal_name": None, "sections": sections, "claims": [], "evidence": [],
             "summary": {"text": "", "sentences": [], "unknowns": ["The input is not a valid nine-digit Norwegian organisation number."]},
-            "changes": [], "errors": [{"module": "input", "message": f"invalid organisation number: {raw!r}", "at": at}],
+            "changes": [], "errors": [{"module": "input", "message": f"invalid organisation number: {raw!r}" + (
+                " (nine digits, but the check digit is wrong)" if len(digits) == 9 else ""), "at": at}],
             "operations": {"requests": 0, "third_party_cost_usd": 0.0, "llm_calls": 0}}
 
 
