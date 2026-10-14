@@ -161,3 +161,17 @@ def test_unspecified_registry_updates_are_not_a_named_change():
     assert "name no changed field" in text and "changed:" not in text
     assert report._unspecified_change({"changed": ["unspecified fields (the feed lists no field paths)"]})
     assert not report._unspecified_change({"changed": ["business address"]})
+
+
+def test_nav_summary_says_when_ads_carry_a_sub_unit_number():
+    from kilde.model import CompanyContext, Snapshot
+    from kilde.synthesis import summarise
+    ctx = CompanyContext("923609016")
+    s = Snapshot(url="https://x", final_url="https://x", status=200, retrieved_at="2026-10-14T00:00:00Z", content=b"x",
+                 content_type="application/json")
+    ev = ctx.add_evidence(s, source_class="public_job_feed", span="x", method="t")
+    ctx.add_claim("legal_name", "identity", "FJELLBEKK AS", ev)
+    for i, org in enumerate(("923609016", "999000010")):
+        ctx.add_claim("job_ad", "hiring", {"uuid": str(i), "title": f"Snekker {i}", "published": "2026-10-0%d" % (i + 1),
+                                           "employer_orgnr": org}, ev)
+    assert "with its organisation number or that of a registered sub-unit" in summarise(ctx, [])["text"]

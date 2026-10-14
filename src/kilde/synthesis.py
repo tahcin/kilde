@@ -278,12 +278,15 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
     if jobs:
         newest = max(jobs, key=lambda c: c.value.get("published") or "")
         indexed, _x = ctx.source_total("job_ad", len(jobs))
+        via_unit = any(c.value.get("employer_orgnr") and c.value.get("employer_orgnr") != ctx.org for c in jobs)
+        whose = ("its organisation number or that of a registered sub-unit" if via_unit
+                 else "its organisation number")
         if indexed > len(jobs):
-            lead = (f"NAV's feed holds {indexed} active job ads with its organisation number; the {len(jobs)} re-checked "
+            lead = (f"NAV's feed holds {indexed} active job ads with {whose}; the {len(jobs)} re-checked "
                     f"in this run are shown, and the newest of them")
         else:
-            lead = f"NAV lists {len(jobs)} active job ad{'s' if len(jobs) != 1 else ''} with its organisation number; the newest"
-        say(f"{lead}, \"{newest.value.get('title')}\", was published {(newest.value.get('published') or '')[:10]}.", *jobs[:5])
+            lead = f"NAV lists {len(jobs)} active job ad{'s' if len(jobs) != 1 else ''} with {whose}; the newest"
+        say(f"{lead}, \"{newest.value.get('title')}\", was published {(newest.value.get('published') or '')[:10]}.", *jobs)
 
     careers = ctx.claims_for("hiring_signal")
     if careers and not jobs:
