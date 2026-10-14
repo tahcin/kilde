@@ -2232,14 +2232,8 @@ async def confirm_sisters(sp: "_Spend", ctx: CompanyContext, labels: list[str], 
         if hits is None:
             if not sp.can_registry():
                 break
-            try:
-                snap = await sp.get(f"{BRREG_SEARCH}?navn={lab.replace(' ', '%20')}&size=20", robots=False,
-                                    headers={"Accept": "application/json"})
-                rows = (snap.json().get("_embedded") or {}).get("enheter") or [] if snap.status == 200 else []
-            except (BudgetExhausted, _OutOfRequests):
-                raise
-            except Exception:
-                rows = []
+            # retried; a search that still fails makes the website step a transient failure
+            rows, _cut = await brreg_name_search(sp, "enheter", lab, size=20)
             hits = [(r.get("organisasjonsnummer"), r.get("navn") or "") for r in rows
                     if " ".join(_translit(w) for w in name_words(r.get("navn") or "")) == lab]
             for r in rows:
@@ -2472,9 +2466,54 @@ def _service_line(page: Page, el, written: str) -> bool:
     return False
 
 
+CARD_TAGS = ("li", "tr", "td", "p", "address", "div", "section", "article", "figure", "dd", "dl")
+
+
+def _contact_card(page: Page, el, span: str) -> str:
+    """Text of the smallest block around a contact (its line, list item, table row or staff card), at most a few
+    hundred characters; without an element, the text around the span."""
+    if el is not None:
+        node = el if getattr(el, "name", None) else el.parent
+        while node is not None and getattr(node, "name", None) not in (None, "body", "html"):
+            if node.name in CARD_TAGS:
+                txt = node.get_text(" ", strip=True)
+                if len(txt) > 400:
+                    break
+                if len(txt) >= 25 or node.name in ("li", "tr", "address"):
+                    return txt
+            node = node.parent
+    i = page.text.find(span) if span else -1
+    return page.text[max(0, i - 120):i + len(span) + 120] if i >= 0 else ""
+
+
+def _card_names_other_company(card: str, words: list[str]) -> str | None:
+    """Another legal name (with its legal form) in a contact's own block ('Nestleder Atico Solør AS' beside a
+    phone number): the contact may belong to that company or to a person working there."""
+    ours = [_translit(w) for w in words]
+    for m in ENTITY_ANY.finditer(card):
+        toks = re.split(r"[.!?:;|,()\[\]]\s", m.group(1))[-1].split()
+        run: list[str] = []
+        for t in reversed(toks):
+            if t[:1].isupper() or t[:1].isdigit() or t == "&":
+                run.insert(0, t)
+            else:
+                break
+        ws = _twords(" ".join(run).replace("&", " og "))
+        while ws and ws[0].isdigit():
+            ws.pop(0)
+        if not ws:
+            continue
+        foreign = m.group(2).lower() in FOREIGN_SUFFIX
+        # our own name, or ours after a role word ('Daglig leder Fjellbekk Trevare AS'), is no other company
+        if not foreign and ours and any(ws[i:] == ours for i in range(len(ws))):
+            continue
+        return m.group(0).strip()
+    return None
+
+
 def extract_contacts(pages: list[Page], domain: str, registry_phones: set[str] = frozenset(),
-                     scope: Scope | None = None, email_domains: set[str] = frozenset()
-                     ) -> tuple[list, list, int]:
+                     scope: Scope | None = None, email_domains: set[str] = frozenset(),
+                     registry_emails: set[str] = frozenset()) -> tuple[list, list, int]:
     """(emails, phones, how many were dropped as not provably ours) from the verified site's pages.
 
     Never from privacy, cookie, terms or legal pages. Emails only on the site's own domain or the registry
@@ -2491,6 +2530,11 @@ def extract_contacts(pages: list[Page], domain: str, registry_phones: set[str] =
         if key in store or key in skipped:
             return
         ok = scope.accept(el, page)
+        registry_value = (store is phones and key[-8:] in registry_phones) or (store is emails and key in registry_emails)
+        if ok and not registry_value and scope.words:
+            other = _card_names_other_company(_contact_card(page, el, span), scope.words)
+            if other:
+                ok = False  # the contact sits beside another company's name (its staff or its own line)
         if ok and store is phones and scope.org and key[-8:] not in registry_phones:
             ok = el is not None and scope.owner(el) == "ours"  # a block that names us (legal name or org number)
             if ok and _service_line(page, el, span):
@@ -3303,8 +3347,10 @@ def emit_site(ctx: CompanyContext, v: Verdict, scope: Scope | None = None) -> li
                       _ev(ctx, home, f'lang="{lang["lang"].strip()[:12]}"'), match=site_match)
 
     reg_mail = ((ctx.registry or {}).get("epostadresse") or "@").rsplit("@", 1)[1].lower()
+    reg_email = ((ctx.registry or {}).get("epostadresse") or "").strip().lower()
     emails, phones, skipped = extract_contacts(v.pages, domain, _digits_phones(ctx.registry or {}), scope,
-                                               {reg_mail} if reg_mail and reg_mail not in FREE_MAIL else set())
+                                               {reg_mail} if reg_mail and reg_mail not in FREE_MAIL else set(),
+                                               {reg_email} if "@" in reg_email else set())
     for a, p, s in emails:
         ctx.add_claim("site_contact_email", SECTION, a, _ev(ctx, p, s), match=site_match)
     for n, p, s in phones:

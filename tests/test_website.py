@@ -2336,3 +2336,49 @@ def test_legal_name_proof_only_for_limited_companies():
         W._SEARCH.clear()
         ctx = _legal_run(navn=name, organisasjonsform={"kode": form})
         assert not ctx.claims_for("official_website"), form
+
+
+# ---------------------------------------------------------------- contacts attributable to us
+def _contact_site(cards: str):
+    body = (f"<h1>Fjellbekk Trevare</h1><ul>{cards}</ul>"
+            f"<footer>Fjellbekk Trevare AS · Org.nr {OURS} · <a href='mailto:post@fjellbekk.no'>post@fjellbekk.no</a></footer>")
+    ctx = ctx_for(hjemmeside="fjellbekk.no", telefon="41000001")
+    claims = run(FakeFetcher({"https://fjellbekk.no/": (200, html(body))}), ctx)
+    return claims, ctx
+
+
+def test_contact_beside_another_companys_name_is_withheld():
+    """Atico shape: a staff card 'Nestleder Fjellbekk Bygg AS, tlf 95 20 88 25' on the company's own site."""
+    claims, ctx = _contact_site(
+        "<li>Kari Nordmann, Nestleder Fjellbekk Bygg AS, tlf 952 08 825, "
+        "<a href='mailto:kari@fjellbekk.no'>kari@fjellbekk.no</a></li>"
+        "<li>Daglig leder Fjellbekk Trevare AS, Ola Nordmann, tlf 930 00 001</li>")
+    phones = [c.value for c in ctx.claims if c.field == "site_contact_phone" and c.availability == "available"]
+    emails = [c.value for c in ctx.claims if c.field == "site_contact_email" and c.availability == "available"]
+    assert "+4795208825" not in phones and "kari@fjellbekk.no" not in emails
+    assert "post@fjellbekk.no" in emails
+
+
+def test_registry_phone_is_kept_even_beside_another_name():
+    claims, ctx = _contact_site("<li>Sentralbord for Fjellbekk Bygg AS og oss: tlf 410 00 001</li>")
+    phones = [c.value for c in ctx.claims if c.field == "site_contact_phone" and c.availability == "available"]
+    assert "+4741000001" in phones
+
+
+def test_contact_card_helper_ignores_our_own_name_after_a_role():
+    assert _card_other("Daglig leder Fjellbekk Trevare AS, tlf 930 00 001") is None
+    assert _card_other("Nestleder Fjellbekk Bygg AS, tlf 952 08 825") == "Nestleder Fjellbekk Bygg AS"
+
+
+def _card_other(text):
+    return W._card_names_other_company(text, ["fjellbekk", "trevare"])
+
+
+def test_failed_sister_search_fails_the_step(monkeypatch):
+    monkeypatch.setattr(W, "SEARCH_BACKOFF", (0.0, 0.0))
+    body = f"<h1>Fjellbekk Trevare</h1><footer>Fjellbekk Trevare AS · Org.nr {OURS} · Fjellbekk Bygg AS</footer>"
+    f = FakeFetcher({"https://fjellbekk.no/": (200, html(body))})
+    f.brreg_down = True
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    claims = run(f, ctx)
+    assert claims["official_website"].availability == "failed" and ctx.module_states["website"] == "timeout"
