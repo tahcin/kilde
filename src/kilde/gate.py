@@ -93,6 +93,30 @@ def legal_name_site_problem(ctx: CompanyContext, site) -> str | None:
     return None
 
 
+STRONG_SITE_PROOFS = ("orgnr_on_page", "phone_and_name", "registry_website_and_name")
+
+
+def short_name_domain_proven(ctx: CompanyContext, site, label: str, tokens: list[str]) -> bool:
+    """A domain whose label is exactly one short distinctive word of the legal name (ege.no for 'ING YNGVE EGE
+    AS') is the company's own when the site was proven by the org number, the registry phone or the registry
+    website, and that proof quotes the whole registered name (legal form aside). Only exact equality counts,
+    never a substring, and generic words are not tokens, so a chain, agency or generic domain stays out."""
+    if (site.match or {}).get("method") not in STRONG_SITE_PROOFS:
+        return False
+    if not any(len(t) >= 3 and label == t for t in tokens):
+        return False
+    words = re.findall(r"[\wæøåÆØÅ]+", ((ctx.registry or {}).get("navn") or "").lower())
+    form = (((ctx.registry or {}).get("organisasjonsform") or {}).get("kode") or "").lower()
+    while words and words[-1] in {form, "as", "asa"}:
+        words.pop()
+    full = _alnum(" ".join(words))
+    if len(full) < 6:
+        return False
+    cores = getattr(ctx, "cores", None) or {}
+    spans = [x for e in ctx.evidence if e.id in site.evidence_ids for x in (e.claim_span, cores.get(e.id)) if x]
+    return any(full in _alnum(s) for s in spans)
+
+
 def check(ctx: CompanyContext) -> list[str]:
     """Withhold derived web facts that fail consistency checks. Returns notes for the run report."""
     reg = ctx.registry or {}
@@ -138,6 +162,8 @@ def check(ctx: CompanyContext) -> list[str]:
     owned = (exclusive_brand or site_dom == reg_site or site_dom == reg_mail or
              any(t in label for t in tokens if len(t) >= 4) or
              (tokens and fold("".join(tokens)) in label))
+    if not owned and short_name_domain_proven(ctx, sites[0], label, tokens):
+        owned = True
     if not owned:
         for c in derived:
             withhold(c, f"site domain {site_dom} does not carry the company's name and is not its registry website or email domain")
