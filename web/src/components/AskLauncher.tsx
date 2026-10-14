@@ -63,7 +63,7 @@ function Picker({ orgs, setOrgs }: { orgs: string[]; setOrgs: (o: string[]) => v
   const { data: rows } = useIndex();
   const name = (o: string) => displayName(rows?.find((r) => r.o === o)?.n ?? o);
   return (
-    <div className="border-b border-rule/70 px-4 py-3 sm:px-6">
+    <div className="mx-auto w-full max-w-[44rem] px-4 pt-4 sm:px-6 sm:pt-6">
       {orgs.length > 0 && (
         <div className="mb-2 flex flex-wrap gap-1.5">
           {orgs.map((o) => (
@@ -218,7 +218,7 @@ export function AskLauncher() {
             <span className="grid size-8 shrink-0 place-items-center rounded-full bg-fam-web"><Mark /></span>
             <div className="min-w-0 flex-1">
               <Dialog.Title className="truncate text-[15.5px] font-semibold text-ink">{label}</Dialog.Title>
-              <p className="text-[12px] text-muted">Answers from Kilde's facts, with sources</p>
+              <p className="truncate text-[12px] text-muted">From Kilde's facts, with sources</p>
             </div>
             {turnCount > 0 && (
               <button onClick={() => { setReset((x) => x + 1); setCites([]); setLit(null); }} aria-label="New conversation" title="New conversation"
