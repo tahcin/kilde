@@ -85,7 +85,7 @@ function Hero() {
   return (
     <section className="relative isolate overflow-hidden" aria-labelledby="hero-title">
       <div className="ruled absolute inset-0 -z-10" aria-hidden />
-      <div className="mx-auto grid max-w-6xl gap-12 px-4 pb-16 pt-12 sm:px-6 sm:pt-20 lg:grid-cols-[1.15fr_1fr] lg:items-center lg:gap-14 lg:pb-24">
+      <div className="mx-auto grid max-w-6xl gap-12 px-4 pb-10 pt-12 sm:px-6 sm:pt-20 lg:grid-cols-[1.15fr_1fr] lg:items-center lg:gap-14 lg:pb-14">
         <div>
           <motion.h1 id="hero-title" {...rise(0.05)} className="display max-w-[15ch] text-[2.6rem] text-ink sm:text-[3.6rem] lg:text-[4.1rem]">
             Norwegian companies, with the source of every fact.
@@ -120,7 +120,7 @@ function Numbers() {
     ["$0", "to build a profile: open public sources only, and no language model anywhere in the agent."],
   ];
   return (
-    <section aria-label="Kilde in numbers" className="border-y border-rule bg-card/60">
+    <section aria-label="Kilde in numbers" className="border-b border-rule bg-card/60">
       <div className="mx-auto grid max-w-6xl grid-cols-1 gap-px bg-rule/70 sm:grid-cols-2 lg:grid-cols-4">
         {items.map(([n, t]) => (
           <div key={t} className="bg-paper px-5 py-7 sm:px-6">
@@ -128,6 +128,11 @@ function Numbers() {
             <p className="mt-3 text-[13.5px] leading-snug text-muted">{t}</p>
           </div>
         ))}
+      </div>
+      <div className="mx-auto max-w-6xl px-4 py-6 sm:px-6">
+        <Link to="/how" className="group inline-flex items-center gap-1.5 text-[14.5px] font-medium text-brand">
+          How Kilde finds, proves and sources every fact<ArrowRight className="size-4 transition group-hover:translate-x-0.5" aria-hidden />
+        </Link>
       </div>
     </section>
   );
@@ -139,29 +144,6 @@ export const STEPS = [
   { icon: Fingerprint, title: "Keep the receipt", text: "Every fact keeps the address it came from, when it was read, a fingerprint of the saved page and the exact words, so anyone can check it in one click." },
   { icon: ShieldQuestion, title: "Say what is missing", text: "When something is not there, or cannot be proven, the profile says so and why. A missing website is never shown as no website, and no figure is ever estimated." },
 ];
-
-function HowItWorks() {
-  return (
-    <section className="mx-auto max-w-6xl px-4 py-20 sm:px-6" aria-labelledby="how-title">
-      <div className="flex flex-wrap items-end justify-between gap-4">
-        <h2 id="how-title" className="display max-w-[22ch] text-[2rem] text-ink sm:text-[2.6rem]">Every fact has a source you can open.</h2>
-        <Link to="/how" className="group flex items-center gap-1.5 text-[14.5px] font-medium text-brand">The full method<ArrowRight className="size-4 transition group-hover:translate-x-0.5" aria-hidden /></Link>
-      </div>
-      <ol className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        {STEPS.map((s, i) => (
-          <li key={s.title} className="surface rounded-[1.3rem] p-5">
-            <div className="flex items-center justify-between">
-              <s.icon className="size-5 text-brand" aria-hidden />
-              <span className="tnum text-[12px] font-semibold text-muted">{i + 1}</span>
-            </div>
-            <h3 className="mt-5 text-[16px] font-semibold leading-snug tracking-[-0.01em] text-ink">{s.title}</h3>
-            <p className="mt-2 text-[14px] leading-relaxed text-ink-2">{s.text}</p>
-          </li>
-        ))}
-      </ol>
-    </section>
-  );
-}
 
 function AskHome() {
   const { picked } = useCompare();
@@ -239,7 +221,7 @@ function Explore() {
     return xs;
   }, [rows, filter, sort]);
   return (
-    <section className="mx-auto max-w-6xl px-4 pt-20 sm:px-6" aria-labelledby="explore-title">
+    <section className="mx-auto max-w-6xl px-4 pb-20 pt-2 sm:px-6" aria-labelledby="explore-title">
       <h2 id="explore-title" className="display text-[2rem] text-ink sm:text-[2.6rem]">Browse every company</h2>
       <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap gap-1.5" role="group" aria-label="Show only">
@@ -295,10 +277,9 @@ export default function Home() {
   return (
     <>
       <Hero />
-      <Numbers />
-      <HowItWorks />
-      <AskHome />
       <Explore />
+      <AskHome />
+      <Numbers />
     </>
   );
 }
