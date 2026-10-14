@@ -1308,8 +1308,11 @@ SERVICE_MAIL_DOMAINS = {
     "vipps.no", "vippsmobilepay.com", "stripe.com", "nets.eu", "klarna.com", "paypal.com", "svea.com",
     "timma.no", "bookmyday.no", "simplybook.me", "calendly.com", "bokadirekt.se", "hano.no", "planway.com",
     "easytimer.no", "mailgun.org", "sendgrid.net", "mailchimp.com", "mcsv.net",
+    "compello.com", "compello.no", "unit4.com", "unit4.no", "tietoevry.com", "tieto.com", "autoinvoice.no",
+    "autoinvoice.com", "visma-autoinvoice.com", "efaktura.no", "invoicecloud.no", "evry.com",
 }
-SERVICE_MAIL_LABEL = re.compile(r"(?i)^(ebilag|bilag|e-?faktura|faktura|invoice|invoices|inbox|scan|ehf|peppol)$")
+SERVICE_MAIL_LABEL = re.compile(r"(?i)^(ebilag|bilag|e-?faktura|faktura|invoice|invoices|e-?invoice|inbox|scan|ehf|peppol|"
+                                r"autoinvoice)$")
 
 
 def service_mail_domain(dom: str) -> bool:
@@ -2615,12 +2618,18 @@ def _owns_us(before: str, our_rx: re.Pattern | None) -> bool:
     return bool(our_rx and OWNS_US.search(sent) and our_rx.search(sent))
 
 
+CLIENT_BEFORE = re.compile(r"(?i)(?:leverandør|leverandor|tjenesteleverandør|underleverandør|supplier|provider|"
+                           r"leverer\s+\w+(?:\s+\w+)?|jobber|arbeider)\s+(?:til|for|to|på vegne av|on behalf of)\s+"
+                           r"(?:\w+\s+){0,2}$|(?:våre|vare|our)\s+(?:kunder|kunde|clients?|customers?|oppdragsgivere)\b[^.!?]{0,40}$|"
+                           r"(?:kunde|client|customer|oppdragsgiver)\s*:\s*$")
+
+
 def _supplier_or_bio(before: str, after: str) -> bool:
     """A company named as the site's supplier or data processor ('Adjoy AS er leverandør', 'servere som driftes av
     X AS'), as a person's employer in a bio ('CEO of Norway King Crab AS and Troika Seafood AS'), or as the maker
     of a product in a shop listing ('Zaptec Charger AS Zaptec GO 13 999 kr')."""
     return bool(SUPPLIER_AFTER.search(after) or SUPPLIER_BEFORE.search(before) or BIO_BEFORE.search(before)
-                or PRODUCT_AFTER.search(after))
+                or PRODUCT_AFTER.search(after) or CLIENT_BEFORE.search(before))
 
 
 def _owner_statement(before: str, at: str) -> bool:

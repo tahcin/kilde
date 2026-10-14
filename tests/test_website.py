@@ -3420,3 +3420,12 @@ def test_published_page_url_drops_error_and_tracking_parameters():
     v = W.Verdict("vibbotest.no", "registry")
     assert W.public_url(v, "https://vibbotest.no/x?error=true&message=login_required&status=500") == "https://vibbotest.no/"
     assert W.public_url(v, "https://vibbotest.no/side?page_id=12&utm_source=fb#top") == "https://vibbotest.no/side?page_id=12"
+
+
+def test_invoice_scanning_inboxes_and_clients_are_not_other_presenters():
+    assert W.service_mail_domain("compello.com") and W.service_mail_domain("einvoice.kvist.no")
+    page = W.parse_page(Snapshot("https://fjellbekk.no/", "https://fjellbekk.no/", 200, "x",
+                                 html("<p>Fjellbekk er et faktureringsselskap og en tjenesteleverandør til Kvist Strøm AS.</p>"
+                                      "<footer>© 2026 Fjellbekk Trevare AS</footer>").encode(), "text/html"))
+    n = {x[0]: x for x in W.other_company_names([page], ["fjellbekk", "trevare"])}
+    assert not n["kvist strom"][2] and not n["kvist strom"][4]
