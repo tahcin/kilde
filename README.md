@@ -153,7 +153,7 @@ To rebuild without the crawler, run `scripts/build_website_seeds.py` and `script
 ## Tests and evaluation
 
 ```bash
-uv run --extra dev pytest -q   # 512 tests
+uv run --extra dev pytest -q   # 513 tests
 uv run python scorer/score.py --envelopes out/envelopes.jsonl --expected-count 100 --report-html out/report.html --out out/score.json
 ```
 
