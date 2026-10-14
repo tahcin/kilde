@@ -765,15 +765,20 @@ def judge(v: Verdict, org: str, e: dict, registry_host: str | None) -> None:
     if not name_span:
         v.status = "no_match"
         return
-    if conflict:
+    final = bare(pages[0].host)
+    declared = bool(registry_host and v.source == "registry" and same_site(final, registry_host))
+    if conflict and not (declared and not _related_name_operates(pages, full)):
         v.status = "name_only"
         v.detail = f"page names a different entity sharing our name: '{conflict[:80]}'"
         return
-    final = bare(pages[0].host)
     # (b) registry website and name, same domain only (a cross-domain redirect is not enough)
-    if registry_host and v.source == "registry" and same_site(final, registry_host):
+    if declared:
         v.status, v.method = "proven", "registry_website_and_name"
         v.detail = f"registry lists {registry_host}; legal name shown on the site"
+        if conflict:
+            # The registry declares this site for us; a related name on it ('ALL10 Bemanning AS' on all10.no) is
+            # only mentioned, never the operator. The shared-site and group checks still decide what is derived.
+            v.detail += f"; the site also names '{conflict[:80]}'"
         v.proof = [(name_page, name_span, name_core)]
         return
     # (c) phone and name; address and name
@@ -1111,6 +1116,14 @@ async def check_candidate(f: Fetcher, sp: _Spend, ctx: CompanyContext, v: Verdic
     await _check_legal_name_unique(sp, ctx, v)
 
 
+def _related_name_operates(pages: list[Page], words: list[str]) -> bool:
+    """Another legal name sharing our distinctive words stands in an operator position on the site (page title,
+    owner or controller sentence, copyright or imprint block)."""
+    ours = {_translit(w) for w in words}
+    distinct = {w for w in ours if len(w) >= 3 and w not in GENERIC_WORDS and not w.isdigit()} or ours
+    return any(op and set(n.split()) & distinct for n, _sfx, _pos, op, _strong in other_company_names(pages, words))
+
+
 def _declared_host(e: dict, host: str) -> bool:
     """The host is the registry website's or the registry email address's own domain (not a free-mail or
     invoicing provider)."""
@@ -1189,6 +1202,104 @@ def _full_name_rx(name: str) -> re.Pattern | None:
     return name_regex(ws) if ws else None
 
 
+BRREG_API = "https://data.brreg.no/enhetsregisteret/api"
+SEARCH_TRIES = 3            # attempts per Brreg name search (each attempt is itself retried once by the fetcher)
+SEARCH_BACKOFF = (1.0, 3.0)  # seconds to wait before the second and third attempts
+PHRASE_PAGE = 100           # rows per page of a phrase search
+PHRASE_PAGES = 5            # pages read at most; more matches than that count as "truncated"
+_SEARCH: dict[str, tuple[list[dict], bool]] = {}
+
+
+class _RegistrySearchFailed(Exception):
+    """A Brreg name search could not be read after its retries: the website step is a transient failure."""
+
+
+async def _search_json(sp: "_Spend", url: str) -> dict:
+    last = "no answer"
+    for attempt in range(SEARCH_TRIES):
+        if attempt:
+            await asyncio.sleep(SEARCH_BACKOFF[min(attempt, len(SEARCH_BACKOFF)) - 1])
+        if not sp.can_registry():
+            raise _OutOfRequests()
+        try:
+            snap = await sp.get(url, robots=False, headers={"Accept": "application/json"})
+        except (BudgetExhausted, _OutOfRequests):
+            raise
+        except Exception as exc:  # noqa: BLE001 - network trouble: try again
+            last = type(exc).__name__
+            continue
+        if snap.status == 200:
+            try:
+                return snap.json()
+            except Exception:  # noqa: BLE001
+                last = "unreadable JSON"
+                continue
+        last = f"HTTP {snap.status}"
+    raise _RegistrySearchFailed(f"Brreg name search failed ({last}): {url}")
+
+
+async def brreg_name_search(sp: "_Spend", path: str, query: str, *, phrase: bool = False,
+                            extra: str = "", size: int = 50) -> tuple[list[dict], bool]:
+    """Rows of a Brreg name search on enheter or underenheter, with retries; raises _RegistrySearchFailed.
+    The default search is fuzzy and ranked (one page). phrase=True uses navnMetodeForSoek=FORTLOEPENDE (names
+    containing the words in order, also hyphenated or inflected) and pages through every match, up to
+    PHRASE_PAGES pages; the flag says whether matches were left unread. Results are cached for the run."""
+    q = quote(query)
+    if phrase:
+        base = f"{BRREG_API}/{path}?navn={q}&navnMetodeForSoek=FORTLOEPENDE{extra}&size={PHRASE_PAGE}"
+    else:
+        base = f"{BRREG_API}/{path}?navn={q}{extra}&size={size}"
+    if base in _SEARCH:
+        return _SEARCH[base]
+    rows: list[dict] = []
+    truncated = False
+    if not phrase:
+        rows = ((await _search_json(sp, base)).get("_embedded") or {}).get(path) or []
+    else:
+        page = 0
+        while True:
+            data = await _search_json(sp, f"{base}&page={page}")
+            rows += (data.get("_embedded") or {}).get(path) or []
+            pages = int((data.get("page") or {}).get("totalPages") or 0)
+            page += 1
+            if page >= pages:
+                break
+            if page >= PHRASE_PAGES:
+                truncated = True
+                break
+    _SEARCH[base] = (rows, truncated)
+    return rows, truncated
+
+
+def _search_queries(words: list[str]) -> list[str]:
+    """The name as registered (with æ, ø, å) and, when different, as transliterated (a site may write
+    'Flotre' for 'Fløtre')."""
+    out = []
+    for q in (" ".join(words), " ".join(_translit(w) for w in words)):
+        if q.strip() and q not in out:
+            out.append(q)
+    return out
+
+
+async def registry_rows(sp: "_Spend", words: list[str], *, postcode: str | None = None) -> tuple[list[dict], bool]:
+    """Main units and sub-units whose names match ours: a ranked fuzzy search and a complete phrase search, for
+    the original and the transliterated spelling. Deduplicated by org number, in a fixed order."""
+    rows: list[dict] = []
+    seen: set[str] = set()
+    truncated = False
+    for q in _search_queries(words):
+        for path in ("enheter", "underenheter"):
+            for phrase in (False, True):
+                got, cut = await brreg_name_search(sp, path, q, phrase=phrase)
+                truncated = truncated or cut
+                for r in got:
+                    k = f"{path}:{r.get('organisasjonsnummer')}"
+                    if k not in seen:
+                        seen.add(k)
+                        rows.append(r)
+    return rows, truncated
+
+
 async def _check_collision(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> None:
     """For proofs other than our org number: reject the site when another active registered entity (or another
     company's workplace) carries the same distinctive name, unless the site names our full legal name (with its
@@ -1209,45 +1320,17 @@ async def _check_collision(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> Non
     ours = _core_tokens(e.get("navn") or "")
     if not ours:
         return
-    query = " ".join(sorted(ours))
-    rows = _NAME_SEARCH.get(query)
-    if rows is None:
-        rows = []
-        for path in ("enheter", "underenheter"):
-            if not sp.can_registry():
-                break
-            try:
-                snap = await sp.get(f"https://data.brreg.no/enhetsregisteret/api/{path}?navn={query.replace(' ', '%20')}"
-                                    f"&size=20", robots=False, headers={"Accept": "application/json"})
-                if snap.status == 200:
-                    rows += (snap.json().get("_embedded") or {}).get(path) or []
-            except (BudgetExhausted, _OutOfRequests):
-                raise
-            except Exception:
-                pass
-        _NAME_SEARCH[query] = rows
+    words = [w for w in name_words(e.get("navn") or "") if w not in FORM_NAME_WORDS and _translit(w) not in FORM_WORDS
+             and not w.isdigit() and len(w) >= 2]
+    rows, _cut = await registry_rows(sp, words)
     # Near-namesakes at our own postcode ('Advisors AS' beside 'Advisor AS') rank too low in a plain name
-    # search, so ask once more with the postcode filter.
+    # search, so ask once more with the postcode filter (original and transliterated spelling).
     pn = ((e.get("forretningsadresse") or e.get("beliggenhetsadresse") or {}).get("postnummer") or "")
-    longest = max(ours, key=len)
-    key2 = f"{longest}@{pn}"
-    if pn and len(longest) >= 3:
-        extra = _NAME_SEARCH.get(key2)
-        if extra is None:
-            extra = []
-            if sp.can_registry():
-                try:
-                    snap = await sp.get(f"https://data.brreg.no/enhetsregisteret/api/enheter?navn={longest}"
-                                        f"&forretningsadresse.postnummer={pn}&size=50", robots=False,
-                                        headers={"Accept": "application/json"})
-                    if snap.status == 200:
-                        extra = (snap.json().get("_embedded") or {}).get("enheter") or []
-                except (BudgetExhausted, _OutOfRequests):
-                    raise
-                except Exception:
-                    pass
-            _NAME_SEARCH[key2] = extra
-        rows = rows + [r for r in extra if r.get("organisasjonsnummer") not in {x.get("organisasjonsnummer") for x in rows}]
+    longest = max(words, key=lambda w: (len(_translit(w)), w)) if words else ""
+    if pn and len(_translit(longest)) >= 3:
+        for q in _search_queries([longest]):
+            extra, _c = await brreg_name_search(sp, "enheter", q, extra=f"&forretningsadresse.postnummer={pn}")
+            rows = rows + [r for r in extra if r.get("organisasjonsnummer") not in {x.get("organisasjonsnummer") for x in rows}]
     our_phones = _digits_phones(e)
     our_addr = _addr_key(e)
     for r in rows:
@@ -1339,7 +1422,6 @@ async def _check_variant(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> None:
 # name contains all of ours ('Fishlab Holding AS', a second 'Fishlab AS' elsewhere, another company's workplace).
 LEGAL_UNIQUE_FORMS = {"AS": "AS", "ASA": "ASA"}
 LEGAL_UNIQUE_TLDS = {"no", "com", "net", "org", "io", "as", "eu", "biz", "info"}
-_LEGAL_SEARCH: dict[str, list[dict] | None] = {}
 _CREDIT_LEAD = re.compile(r"^(nettside|nettsted|nettbutikk|hjemmeside|utviklet|levert|laget|designet|design|webdesign|"
                           r"drevet|driftet|powered|made|built|hosted|hosting|produsert|publisert|tema|theme)\s+(av|by|med|with|fra)\b")
 
@@ -1451,42 +1533,27 @@ def legal_name_unique_page(v: Verdict, ctx: CompanyContext) -> tuple[tuple, tupl
     return (legal, corr) if corr else None
 
 
-async def _legal_namesakes(sp: "_Spend", ctx: CompanyContext) -> list[str] | None:
+async def _legal_namesakes(sp: "_Spend", ctx: CompanyContext) -> list[str]:
     """Other registered entities (main units and other companies' sub-units, deleted ones included) whose name
-    contains every word of our legal name. None when the registry search could not be read (never a pass)."""
+    contains every word of our legal name, from the ranked and the complete phrase search in both spellings.
+    More phrase matches than can be read count as a namesake. A search that fails after its retries raises
+    _RegistrySearchFailed (the website step then fails as transient), so a flaky search never flips the outcome."""
     e = ctx.registry or {}
     words = [w for w in name_words(e.get("navn") or "") if w not in FORM_NAME_WORDS]
     if not words:
-        return None
-    query = " ".join(words)
+        return ["(no name words to search)"]
+    rows, truncated = await registry_rows(sp, words)
     ours = {_translit(w) for w in words}
     found: list[str] = []
-    for path in ("enheter", "underenheter"):
-        key = f"{path}:{query}"
-        rows = _LEGAL_SEARCH.get(key)
-        if key not in _LEGAL_SEARCH:
-            rows = None
-            if sp.can_registry():
-                try:
-                    snap = await sp.get(f"https://data.brreg.no/enhetsregisteret/api/{path}?navn="
-                                        f"{quote(query)}&size=50", robots=False, headers={"Accept": "application/json"})
-                    if snap.status == 200:
-                        rows = (snap.json().get("_embedded") or {}).get(path) or []
-                except (BudgetExhausted, _OutOfRequests):
-                    raise
-                except Exception:
-                    rows = None
-            if rows is not None:
-                _LEGAL_SEARCH[key] = rows  # a failed search is not remembered, so the retry pass asks again
-        if rows is None:
-            return None
-        for r in rows:
-            org = r.get("organisasjonsnummer")
-            if org == ctx.org or r.get("overordnetEnhet") == ctx.org:
-                continue
-            theirs = {_translit(w) for w in name_words(r.get("navn") or "") if w not in FORM_NAME_WORDS}
-            if ours <= theirs:
-                found.append(f"{r.get('navn')} ({org})")
+    for r in rows:
+        org = r.get("organisasjonsnummer")
+        if org == ctx.org or r.get("overordnetEnhet") == ctx.org:
+            continue
+        theirs = {_translit(w) for w in name_words(r.get("navn") or "") if w not in FORM_NAME_WORDS}
+        if ours <= theirs:
+            found.append(f"{r.get('navn')} ({org})")
+    if truncated:
+        found.append("(more registry matches than could be read)")
     return found
 
 
@@ -1496,8 +1563,6 @@ async def _check_legal_name_unique(sp: "_Spend", ctx: CompanyContext, v: Verdict
     if not got:
         return
     namesakes = await _legal_namesakes(sp, ctx)
-    if namesakes is None:
-        return
     if namesakes:
         v.detail = f"{v.detail}; another registered entity carries our whole name: {namesakes[0]}"
         return
@@ -3994,6 +4059,7 @@ async def fetch_website(f: Fetcher, ctx: CompanyContext) -> None:
     done: set[str] = set()
     proven: Verdict | None = None
     budget_note = None
+    search_failed = None
     try:
         hosts = [h for d, _s, _u in cands[:24] for h in (d, "www." + d)]
         await asyncio.gather(*[_resolve(sp, f, h) for h in hosts])
@@ -4047,11 +4113,20 @@ async def fetch_website(f: Fetcher, ctx: CompanyContext) -> None:
         budget_note = "budget_exhausted"
     except _OutOfRequests:
         budget_note = "per-company request cap reached"
+    except _RegistrySearchFailed as exc:
+        search_failed = str(exc)
     finally:
         ctx.facts["website_candidates"] = [v.summary() for v in verdicts] + \
             [{"domain": d, "source": s, "status": "not_checked"} for d, s, _ in cands[len(verdicts):]]
         ctx.facts["website_requests"] = sp.used
 
+    if search_failed:
+        # A registry name search that decides a candidate could not be read: the outcome is unknown, not
+        # ambiguous, so it is a transient failure that the pipeline's retry pass runs again (the search runs
+        # before any site is emitted, so nothing was published by this attempt).
+        ctx.mark("official_website", SECTION, "failed", note=f"transient: {search_failed}")
+        ctx.module_states["website"] = "timeout"
+        return
     if proven:
         ctx.module_states["website"] = "available"
         return

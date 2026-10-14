@@ -30,6 +30,7 @@ class FakeFetcher:
         self.disallow = set(disallow)
         self.redirects = redirects or {}
         self.calls: list[str] = []
+        self.brreg_down = False  # True: every Brreg name search fails (network trouble)
         self.known_hosts = {W.bare(urlsplit(u).hostname or "") for u in list(pages) + list(self.redirects)} | {
             W.bare(urlsplit(u).hostname or "") for u in list(self.redirects.values()) + list(self.disallow)}
 
@@ -45,6 +46,12 @@ class FakeFetcher:
         self.calls.append(url)
         final = self.redirects.get(url, url)
         hit = self.pages.get(final)
+        search = final.startswith(("https://data.brreg.no/enhetsregisteret/api/enheter?",
+                                   "https://data.brreg.no/enhetsregisteret/api/underenheter?")) and "navn=" in final
+        if search and self.brreg_down:
+            raise ConnectionError("registry search unavailable")
+        if hit is None and search:
+            hit = (200, json.dumps({"page": {"totalPages": 0}}), "application/json")  # no namesakes
         if hit is None:
             raise ConnectionError("no such host")
         status, body = hit[0], hit[1]
@@ -69,7 +76,7 @@ def offline_dns(monkeypatch):
     monkeypatch.setattr(W, "reachable", tls_only)
     W._SISTER_CACHE.clear()
     W._NAME_SEARCH.clear()
-    W._LEGAL_SEARCH.clear()
+    W._SEARCH.clear()
     W._ROW_CACHE.clear()
     W._HJEM_CACHE.clear()
     W._GROUP_CACHE.clear()
@@ -732,7 +739,7 @@ def test_dns_timeout_is_retried_not_treated_as_missing(monkeypatch):
 
 # ---------------------------------------------------------------- round 3 audit fixes
 def _brreg(path, query, rows):
-    return {f"https://data.brreg.no/enhetsregisteret/api/{path}?navn={query}&size=20":
+    return {f"https://data.brreg.no/enhetsregisteret/api/{path}?navn={query}&size=50":
             (200, json.dumps({"_embedded": {path: rows}}), "application/json")}
 
 
@@ -764,6 +771,7 @@ def test_longer_namesake_collides_only_when_the_site_shows_its_name():
     rows = [{"organisasjonsnummer": SISTER, "navn": "FJELLBEKK TREVARE HOTELL AS"}]
     for body, proven in ((shown, False), (plain, True)):
         W._NAME_SEARCH.clear()
+        W._SEARCH.clear()
         pages = {"https://fjellbekktrevare.no/": (200, html(body))}
         pages.update(_brreg("enheter", "fjellbekk%20trevare", rows))
         ctx = ctx_for(telefon="41000001")
@@ -1034,6 +1042,7 @@ def test_same_inputs_give_identical_claims():
     outs = []
     for _ in range(2):
         W._NAME_SEARCH.clear()
+        W._SEARCH.clear()
         ctx = ctx_for(hjemmeside="fjellbekk.no")
         run(_site({"https://fjellbekk.no/feed/": (200, rss, "application/rss+xml")}, body=body, head=head), ctx)
         outs.append([(c.field, str(c.value), c.availability) for c in ctx.claims])
@@ -1919,6 +1928,7 @@ def test_staff_union_club_sharing_our_address_is_no_namesake():
                            (_near_row("FJELLBEKK IDRETTSLAG", "FLI", "93.120"), False),  # a club, not staff
                            (_near_row("FJELLBEKKS AS", "AS", "41.000"), False)):
         W._NAME_SEARCH.clear()
+        W._SEARCH.clear()
         pages = {"https://fjellbekk.com/": (200, html(body)),
                  q: (200, json.dumps({"_embedded": {"enheter": [row]}}), "application/json")}
         ctx = ctx_for(navn="FJELLBEKK AS")
@@ -1937,6 +1947,7 @@ def test_namesake_seen_only_inside_our_own_name_does_not_collide():
     assert claims["site_contact_email"].value == "post@thewell.no"
     # the namesake written on its own still collides
     W._NAME_SEARCH.clear()
+    W._SEARCH.clear()
     body2 = body.replace("</footer>", " Samarbeid med Well AS</footer>")
     pages["https://thewell.no/"] = (200, html(body2, title="The Well"))
     claims = run(FakeFetcher(pages), ctx_for(navn="THE WELL AS", hjemmeside="thewell.no"))
@@ -2170,8 +2181,9 @@ def test_legal_name_proof_rejected_when_another_entity_carries_the_whole_name():
             ([{"organisasjonsnummer": OTHER, "navn": "FJELLBEKK TREVARE", "slettedato": "2019-01-01"}], []),  # deleted
             ([], [{"organisasjonsnummer": "999000061", "navn": "BYGG AS AVD FJELLBEKK TREVARE",
                    "overordnetEnhet": THIRD}])):                                          # another company's workplace
-        W._LEGAL_SEARCH.clear()
+        W._SEARCH.clear()
         W._NAME_SEARCH.clear()
+        W._SEARCH.clear()
         ctx = _legal_run(search=_legal_search(rows_main, rows_sub))
         assert not ctx.claims_for("official_website"), rows_main or rows_sub
 
@@ -2183,8 +2195,85 @@ def test_legal_name_proof_ignores_our_own_workplaces_and_shorter_names():
     assert ctx.claims_for("official_website")[0].match["method"] == "legal_name_unique"
 
 
-def test_legal_name_proof_fails_closed_without_a_registry_search():
-    ctx = _legal_run(search={})
+def test_failed_registry_search_marks_the_website_step_failed_not_ambiguous(monkeypatch):
+    """Builderr compares two runs: a search that cannot be read must not decide the outcome either way."""
+    monkeypatch.setattr(W, "SEARCH_BACKOFF", (0.0, 0.0))
+    pages = {"https://fjellbekktrevare.no/": (200, LEGAL_SITE)}
+    f = FakeFetcher(pages)
+    f.brreg_down = True
+    ctx = ctx_for()
+    claims = run(f, ctx)
+    assert not ctx.claims_for("official_website")
+    assert claims["official_website"].availability == "failed"
+    assert claims["official_website"].note.startswith("transient: Brreg name search failed")
+    assert ctx.module_states["website"] == "timeout"  # the pipeline's retry pass runs it again
+    searches = [u for u in f.calls if "navn=" in u]
+    assert len(searches) == W.SEARCH_TRIES  # bounded retries, then stop
+
+
+def test_failed_search_in_the_collision_check_also_fails_the_step(monkeypatch):
+    monkeypatch.setattr(W, "SEARCH_BACKOFF", (0.0, 0.0))
+    body = "<footer>Fjellbekk Trevare AS, Lyngveien 12 B, 9999 Testby</footer>"
+    f = FakeFetcher({"https://fjellbekktrevare.no/": (200, html(body))})
+    f.brreg_down = True
+    ctx = ctx_for()
+    claims = run(f, ctx)
+    assert claims["official_website"].availability == "failed" and ctx.module_states["website"] == "timeout"
+
+
+def test_namesake_found_only_on_a_later_page_of_the_phrase_search():
+    """The ranked search shows 50 rows; the phrase search is read to its last page, so a namesake cannot hide."""
+    base = "https://data.brreg.no/enhetsregisteret/api/enheter?navn=fjellbekk%20trevare&navnMetodeForSoek=FORTLOEPENDE&size=100"
+    filler = [{"organisasjonsnummer": f"9{i:08d}", "navn": f"FJELLBEKK TREVARESENTER {i}"} for i in range(100)]
+    search = {base + "&page=0": (200, json.dumps({"_embedded": {"enheter": filler}, "page": {"totalPages": 2}}), "application/json"),
+              base + "&page=1": (200, json.dumps({"_embedded": {"enheter": [
+                  {"organisasjonsnummer": OTHER, "navn": "FJELLBEKK TREVARE HOLDING AS"}]}, "page": {"totalPages": 2}}),
+                  "application/json")}
+    ctx = _legal_run(search=search)
+    assert not ctx.claims_for("official_website")
+
+
+def test_too_many_phrase_matches_count_as_a_namesake(monkeypatch):
+    monkeypatch.setattr(W, "PHRASE_PAGES", 1)
+    base = "https://data.brreg.no/enhetsregisteret/api/enheter?navn=fjellbekk%20trevare&navnMetodeForSoek=FORTLOEPENDE&size=100"
+    search = {base + "&page=0": (200, json.dumps({"_embedded": {"enheter": []}, "page": {"totalPages": 3}}), "application/json")}
+    ctx = _legal_run(search=search)
+    assert not ctx.claims_for("official_website")
+
+
+def test_collision_search_uses_the_registered_spelling_with_ae_o_a():
+    """'FLØTRE' is not found by a search for 'flotre': both spellings are searched."""
+    body = "<footer>Fløtre Bygg · Lyngveien 12 B, 9999 Testby</footer>"
+    q = "https://data.brreg.no/enhetsregisteret/api/enheter?navn=fl%C3%B8tre%20bygg&size=50"
+    pages = {"https://flotrebygg.no/": (200, html(body, title="Fløtre Bygg")),
+             q: (200, json.dumps({"_embedded": {"enheter": [{"organisasjonsnummer": OTHER, "navn": "FLØTRE BYGG SA"}]}}),
+                 "application/json")}
+    ctx = ctx_for(navn="FLØTRE BYGG AS")
+    run(FakeFetcher(pages), ctx)
+    assert not ctx.claims_for("official_website")
+    W._SEARCH.clear()
+    pages.pop(q)
+    ctx = ctx_for(navn="FLØTRE BYGG AS")
+    run(FakeFetcher(pages), ctx)
+    assert ctx.claims_for("official_website")[0].match["method"] == "address_and_name"
+
+
+def test_registry_declared_site_naming_a_related_legal_name_is_proven():
+    """all10.no shape: the registry declares the site; it also names 'Fjellbekk Trevare Bemanning AS' in text."""
+    body = ("<h1>Fjellbekk Trevare</h1><p>Ny rekrutterer i Fjellbekk Trevare Bemanning AS.</p>"
+            "<footer>Fjellbekk Trevare</footer>")
+    ctx = ctx_for(hjemmeside="fjellbekktrevare.no")
+    run(FakeFetcher({"https://fjellbekktrevare.no/": (200, html(body))}), ctx)
+    site = ctx.claims_for("official_website")
+    assert site and site[0].match["method"] == "registry_website_and_name"
+    # not when the related name runs the site, and never for a guessed domain
+    owned = body.replace("<footer>Fjellbekk Trevare</footer>",
+                         "<footer>© 2026 Fjellbekk Trevare Bemanning AS</footer>")
+    ctx = ctx_for(hjemmeside="fjellbekktrevare.no")
+    run(FakeFetcher({"https://fjellbekktrevare.no/": (200, html(owned))}), ctx)
+    assert not ctx.claims_for("official_website")
+    ctx = ctx_for(telefon="41000001")
+    run(FakeFetcher({"https://fjellbekktrevare.no/": (200, html(body.replace("</footer>", " · Tlf 41 00 00 01</footer>")))}), ctx)
     assert not ctx.claims_for("official_website")
 
 
@@ -2192,7 +2281,7 @@ def test_legal_name_proof_needs_the_town_or_a_role_holder():
     body = html("<h1>Snekkerverksted</h1><footer>© 2025 Fjellbekk Trevare AS · Daglig leder Kari Nordmann</footer>")
     ctx = _legal_run(body=body)
     assert not ctx.claims_for("official_website")
-    W._LEGAL_SEARCH.clear()
+    W._SEARCH.clear()
     pages = {"https://fjellbekktrevare.no/": (200, body)}
     pages.update(_legal_search())
     ctx = ctx_for()
@@ -2209,7 +2298,7 @@ def test_short_town_name_counts_only_after_a_post_code():
     ctx = _legal_run(body=html("<footer>Fjellbekk Trevare AS. Vi har kunder i Moss.</footer>"),
                      forretningsadresse={"adresse": ["Lyngveien 12B"], "postnummer": "1599", "poststed": "MOSS"})
     assert not ctx.claims_for("official_website")
-    W._LEGAL_SEARCH.clear()
+    W._SEARCH.clear()
     ctx = _legal_run(body=html("<footer>Fjellbekk Trevare AS, Postboks 4, 1501 Moss</footer>"),
                      forretningsadresse={"adresse": ["Lyngveien 12B"], "postnummer": "1599", "poststed": "MOSS"})
     assert ctx.claims_for("official_website")[0].match["method"] == "legal_name_unique"
@@ -2217,7 +2306,7 @@ def test_short_town_name_counts_only_after_a_post_code():
 
 def test_legal_name_proof_needs_the_whole_name_as_the_domain():
     for host in ("https://fjellbekk.no/", "https://fjellbekktrevare.se/", "https://trevare.fjellbekk.no/"):
-        W._LEGAL_SEARCH.clear()
+        W._SEARCH.clear()
         ctx = _legal_run(host=host)
         assert not ctx.claims_for("official_website"), host
 
@@ -2226,7 +2315,7 @@ def test_legal_name_proof_needs_the_legal_form_in_capitals():
     for footer in ("Kjøkken fra Fjellbekk Trevare as part of our range. 9999 Testby",   # English 'as'
                    "Fjellbekk Trevare A/S · 9999 Testby",                               # Danish form
                    "Fjellbekk Trevare · 9999 Testby"):                                  # trade name only
-        W._LEGAL_SEARCH.clear()
+        W._SEARCH.clear()
         ctx = _legal_run(body=html(f"<footer>{footer}</footer>"))
         assert not ctx.claims_for("official_website"), footer
 
@@ -2234,16 +2323,16 @@ def test_legal_name_proof_needs_the_legal_form_in_capitals():
 def test_legal_name_proof_rejects_sister_names_and_other_operators():
     for footer in ("Fjellbekk Trevare AS er eid av Fjellbekk Gruppen AS · 9999 Testby",
                    "Fjellbekk Trevare AS · 9999 Testby · Nettstedet eies av Testby Bygg AS"):
-        W._LEGAL_SEARCH.clear()
+        W._SEARCH.clear()
         ctx = _legal_run(body=html(f"<footer>{footer}</footer>"))
         assert not ctx.claims_for("official_website"), footer
-    W._LEGAL_SEARCH.clear()
+    W._SEARCH.clear()
     ctx = _legal_run(body=html("<footer>© Fjellbekk Trevare AS · 9999 Testby · Nettside levert av Webby AS</footer>"))
     assert ctx.claims_for("official_website")[0].match["method"] == "legal_name_unique"  # an agency credit is fine
 
 
 def test_legal_name_proof_only_for_limited_companies():
     for form, name in (("NUF", "FJELLBEKK TREVARE AS"), ("SAM", "FJELLBEKK TREVARE AS"), ("ENK", "FJELLBEKK TREVARE AS")):
-        W._LEGAL_SEARCH.clear()
+        W._SEARCH.clear()
         ctx = _legal_run(navn=name, organisasjonsform={"kode": form})
         assert not ctx.claims_for("official_website"), form
