@@ -3368,3 +3368,30 @@ def test_product_maker_in_a_shop_listing_is_not_a_presenter():
                                       "<footer>Drives av Lyng Drift AS</footer>").encode(), "text/html"))
     names = {n[0]: n for n in W.other_company_names([page], ["fjellbekk", "trevare"])}
     assert not names["kvist lader"][2] and names["drives av lyng drift"][4]
+
+
+def test_our_own_shareholder_named_on_our_site_is_not_its_operator():
+    """Noralg shape: 'Noralg AS er et norsk selskap eid av H-D-B Holding AS' beside our printed org number."""
+    owners = set()
+    page = W.parse_page(Snapshot("https://fjellbekk.no/", "https://fjellbekk.no/", 200, "x",
+                                 html("<p>Fjellbekk Trevare AS er et norsk selskap eid av Kvist Holding AS.</p>").encode(),
+                                 "text/html"))
+    W.other_company_names([page], ["fjellbekk", "trevare"], owners)
+    assert owners == {"kvist holding as"}
+    body = (f"<p>Fjellbekk Trevare AS er et norsk selskap eid av Kvist Holding AS.</p>"
+            f"<footer>Fjellbekk Trevare AS · Org.nr {OURS}<a href='https://www.instagram.com/fjellbekktrevare'>ig</a></footer>")
+    rows = {W.BRREG_SEARCH + "?navn=kvist%20holding&size=20":
+            (200, json.dumps({"_embedded": {"enheter": [{"organisasjonsnummer": OTHER, "navn": "KVIST HOLDING AS"}]}}),
+             "application/json")}
+    claims = run(_site(rows, body=body), ctx_for(hjemmeside="fjellbekk.no"))
+    assert claims["official_website"].value == "fjellbekk.no"
+    assert claims["social_profile"].availability == "available"
+
+
+def test_site_served_from_a_builder_host_is_published_on_our_domain():
+    body = f"<footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>"
+    f = FakeFetcher({"https://r1293376.website.abc.service.one/": (200, html(body))},
+                    redirects={"https://fjellbekk.no/": "https://r1293376.website.abc.service.one/"})
+    claims = run(f, ctx_for(hjemmeside="fjellbekk.no"))
+    assert claims["official_website"].value == "fjellbekk.no"
+    assert claims["official_website_url"].value == "https://fjellbekk.no/"

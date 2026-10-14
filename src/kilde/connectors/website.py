@@ -813,6 +813,7 @@ class Verdict:
     cross: bool = False         # redirected to another registered domain
     path_scoped: bool = False   # the site is one section of a host that serves others (chain or portal)
     transient: list[str] = field(default_factory=list)  # pages of this site that failed transiently (timeout, 429, 5xx)
+    alias_host: str | None = None  # the company's own domain when it is served from a site builder's technical host
 
     def summary(self) -> dict[str, Any]:
         return {"domain": self.domain, "source": self.source, "status": self.status, "method": self.method,
@@ -1157,6 +1158,10 @@ async def check_candidate(f: Fetcher, sp: _Spend, ctx: CompanyContext, v: Verdic
         return
     v.pages = [home]
     v.cross = not same_site(final, bare(v.domain))
+    if v.cross and BUILDER_TECH_HOST.search(final) and urlsplit(home.url).path in ("", "/"):
+        # the company's own domain redirects to its site builder's technical host (r123.website.x.service.one):
+        # the site is still the requested domain, and that domain is what gets published
+        v.cross, v.alias_host = False, bare(v.domain)
     e = ctx.registry or {}
     if v.cross and _declared_host(e, final) and urlsplit(home.url).path in ("", "/"):
         # a redirect to the front page of the registry's own website or email domain stays within the company
@@ -2593,6 +2598,16 @@ OWNER_AFTER = re.compile(r"(?i)^\W{0,3}(?:sin|sitt|sine)\s+(?:avdeling|filial|da
 PRODUCT_AFTER = re.compile(r"(?i)^[^.!?|]{0,40}?(?<![\d.,])\d{1,3}(?:[ \u00a0.]?\d{3})*(?:,\d{2}|,-)?\s?(?:kr|nok|,-)(?![a-zæøå])")
 
 
+OWNS_US = re.compile(r"(?i)\b(?:hel|del)?(?:eid|eies|eiet|owned)\s+(?:av|by)\s*$")
+
+
+def _owns_us(before: str, our_rx: re.Pattern | None) -> bool:
+    """The sentence says our company is owned by this one ('Noralg AS er et norsk selskap eid av H-D-B Holding
+    AS'): a shareholder of ours, which says nothing about who runs the site."""
+    sent = re.split(r"[.!?]\s", before)[-1]
+    return bool(our_rx and OWNS_US.search(sent) and our_rx.search(sent))
+
+
 def _supplier_or_bio(before: str, after: str) -> bool:
     """A company named as the site's supplier or data processor ('Adjoy AS er leverandør', 'servere som driftes av
     X AS'), as a person's employer in a bio ('CEO of Norway King Crab AS and Troika Seafood AS'), or as the maker
@@ -2668,7 +2683,8 @@ def _operator_text(p: Page) -> str:
     return " | ".join(parts)
 
 
-def other_company_names(pages: list[Page], words: list[str]) -> list[tuple[str, str, bool]]:
+def other_company_names(pages: list[Page], words: list[str],
+                        owners: set[str] | None = None) -> list[tuple[str, str, bool]]:
     """Other legal names (with a legal-form suffix) on the site, as (name words, suffix, positional).
     Positional means an operator position: page title, header, footer, contact or imprint block, an about,
     contact or privacy page, a copyright line or an ownership or controller sentence. Names inside links to
@@ -2677,6 +2693,7 @@ def other_company_names(pages: list[Page], words: list[str]) -> list[tuple[str, 
     best: dict[tuple[str, str], int] = {}
     side: set[tuple[str, str]] = set()
     owned: set[tuple[str, str]] = set()
+    our_rx = name_regex(words) if words else None
     for p in pages:
         optext = _operator_text(p)
         ownertext = _owner_text(p)
@@ -2720,6 +2737,8 @@ def other_company_names(pages: list[Page], words: list[str]) -> list[tuple[str, 
                 mention = m.group(0).strip()
                 g1 = m.group(1)
                 lead = g1[:g1.rfind(run[0])] if run and run[0] in g1 else ""
+                if owners is not None and _owns_us(txt[max(0, m.start() - 120):m.start()] + lead, our_rx):
+                    owners.add(f"{key[0]} {key[1]}")
                 if _supplier_or_bio(txt[max(0, m.start() - 60):m.start()] + lead, txt[m.end():m.end() + 40]):
                     side.add(key)
                 elif ctx_hit or is_title:
@@ -3789,7 +3808,8 @@ async def prepare_scope(sp: _Spend, ctx: CompanyContext, v: Verdict) -> Scope:
     others = {k: (x[1] if isinstance(x, tuple) else x) for k, x in others.items()}
     sisters = await confirm_sisters(sp, ctx, sister_labels(v.pages, words))
     kinds: dict[str, str] = {}
-    named = [n for n in other_company_names(v.pages, words) if n[0] not in sisters][:6]
+    our_owners: set[str] = set()
+    named = [n for n in other_company_names(v.pages, words, our_owners) if n[0] not in sisters][:6]
     dominant = await confirm_dominant(sp, ctx, named, limit=3, site_host=home.host, kinds=kinds)
     positional_names = {f"{n[0]} {n[1]}" for n in named if n[2]}
     if v.namesake:
@@ -3883,6 +3903,11 @@ async def prepare_scope(sp: _Spend, ctx: CompanyContext, v: Verdict) -> Scope:
         if len(full) >= 6 and full in re.sub(r"[^a-z0-9]", "", bare(home.host).split(".")[0]):
             # on a domain named after us, a registry-confirmed sister's number beside ours is a group footer
             op_others -= {str(x) for x in sisters.values()}
+        # a company stated to own us ('Noralg AS er ... eid av H-D-B Holding AS') is our shareholder, not the
+        # site's operator, when the site prints our org number in an operator position
+        for k in dominant:
+            if k in our_owners and kinds.get(k) == "stated":
+                kinds[k] = "owner"
         stated = [k for k in dominant if kinds.get(k) == "stated"]
         if not op_others and not stated and not codeclared:
             ours_printed = True
@@ -3897,7 +3922,7 @@ async def prepare_scope(sp: _Spend, ctx: CompanyContext, v: Verdict) -> Scope:
                 kinds[f"contact on {d}"] = "mention"
             # companies only named in passing (suppliers, clients, partners, a person's other employer) are not
             # presenters on a site that prints our org number as its operator: they no longer block derived facts
-            dominant = {k: x for k, x in dominant.items() if kinds.get(k) != "mention" or k in sisters
+            dominant = {k: x for k, x in dominant.items() if kinds.get(k) not in ("mention", "owner") or k in sisters
                         or k.startswith(("org number ", "contact on ", "foreign group number "))}
             for k in dominant:
                 kinds[k] = "mention"
@@ -4169,8 +4194,9 @@ DERIVED_FIELDS = (("website_description", SECTION), ("site_contact_email", SECTI
 def emit_site(ctx: CompanyContext, v: Verdict, scope: Scope | None = None) -> list[Page]:
     home = v.pages[0]
     domain = bare(home.host)
+    pub_host = v.alias_host or home.host  # the company's own domain, never a site builder's technical host
     scope = scope or Scope(ctx.org, name_words((ctx.registry or {}).get("navn") or ""))
-    url = canonical_url(home)
+    url = public_url(v, canonical_url(home))
     proof_evs = [ctx.add_evidence(p.snap, source_class=COMPANY_OWNED, span=bytes_exact(p.snap, s, core or ctx.org),
                                   method=METHOD, licence=LICENCE, core=core)
                  for p, s, core in v.proof]
@@ -4179,11 +4205,11 @@ def emit_site(ctx: CompanyContext, v: Verdict, scope: Scope | None = None) -> li
     if scope.shared:
         path = urlsplit(home.url).path
         if path not in ("", "/") and scope.slug and scope.slug in _translit(unquote(path)).replace("_", "-"):
-            url = home.url.split("?")[0].split("#")[0]  # our own section of the shared site
+            url = public_url(v, home.url.split("?")[0].split("#")[0])  # our own section of the shared site
         m["detail"] = f"{m['detail']}; {scope.describe()}"
         ctx.facts["website_shared"] = {"others": sorted(scope.others), "sisters": scope.sisters}
     if v.cross or v.path_scoped:
-        url = home.url.split("#")[0]  # the exact page that proves us, not the host's front page
+        url = public_url(v, home.url.split("#")[0])  # the exact page that proves us, not the host's front page
     # A company's own domain stays official only when other companies are merely mentioned there (clients,
     # partners, projects, staff clubs). An operator, a namesake, contacts on another organisation's domain,
     # a redirect, a section page, a co-declaring company or another org number make it a related website.
@@ -4195,7 +4221,7 @@ def emit_site(ctx: CompanyContext, v: Verdict, scope: Scope | None = None) -> li
         # company's, but nothing is derived from it
         m["detail"] = f"{m['detail']}; not exclusive: {scope.reasons()}"
         m["url"] = url
-        ctx.add_claim("official_website", SECTION, site_domain(home.host), proof_evs, confidence=conf, match=m,
+        ctx.add_claim("official_website", SECTION, site_domain(pub_host), proof_evs, confidence=conf, match=m,
                       note="Only the website itself is published; facts from this site are withheld because "
                            + scope.reasons())
         for fld, sec in DERIVED_FIELDS:
@@ -4211,7 +4237,7 @@ def emit_site(ctx: CompanyContext, v: Verdict, scope: Scope | None = None) -> li
         m["detail"] = f"{m['detail']}; not exclusive: {scope.reasons()}"
         m["url"] = url
         ctx.add_claim("related_website", SECTION,
-                      {"url": url, "domain": site_domain(home.host),
+                      {"url": url, "domain": site_domain(pub_host),
                        "relationship": "page on a shared or group site", "other_organisation_numbers": others},
                       proof_evs, confidence=conf, match=m,
                       note="The page is proven to name this company, but the site also serves others: " + scope.reasons())
@@ -4223,7 +4249,7 @@ def emit_site(ctx: CompanyContext, v: Verdict, scope: Scope | None = None) -> li
             ctx.mark(fld, sec, "ambiguous", note=why)
         return v.pages
     m["url"] = url
-    ctx.add_claim("official_website", SECTION, site_domain(home.host), proof_evs, confidence=conf, match=m)
+    ctx.add_claim("official_website", SECTION, site_domain(pub_host), proof_evs, confidence=conf, match=m)
     ctx.add_claim("official_website_url", SECTION, url, proof_evs, confidence=conf, match=dict(m))
     site_match = {"method": "verified_site", "detail": f"from {domain}, proven by {v.method}"}
     for p in v.pages:
@@ -4330,6 +4356,20 @@ def canonical_social(platform: str, url: str) -> CanonicalSocial:
     if p.path.endswith("profile.php") and ids:
         value = f"facebook.com/profile.php?id={ids[0]}"
     return CanonicalSocial(value, platform, url)
+
+
+BUILDER_TECH_HOST = re.compile(r"(?i)(^|\.)(service\.one|webhosting\.one|wixsite\.com|webnode\.(page|no|com)|"
+                               r"squarespace\.com|weebly\.com|jimdofree\.com|jimdosite\.com|godaddysites\.com|"
+                               r"mozello\.com|site123\.me|strikingly(site)?\.com|webflow\.io|netlify\.app|vercel\.app|"
+                               r"github\.io|business\.site|my\.canva\.site|framer\.(website|app)|carrd\.co)$")
+
+
+def public_url(v: "Verdict", url: str) -> str:
+    """The URL to publish: on the company's own domain when the site is served from a builder's technical host."""
+    if not v.alias_host:
+        return url
+    p = urlsplit(url)
+    return urlunsplit(("https", v.alias_host, p.path or "/", "", ""))
 
 
 def site_domain(host: str) -> str:
