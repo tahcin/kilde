@@ -2943,3 +2943,23 @@ def test_service_mail_domains_do_not_make_a_site_shared(inbox, exclusive):
 def test_service_mail_domain():
     assert W.service_mail_domain("ebilag.toko.no") and W.service_mail_domain("vipps.no")
     assert not W.service_mail_domain("nabosnekker.no") and not W.service_mail_domain("ebilag-snekker.no")
+
+
+def test_website_note_lists_every_domain_tried():
+    f = FakeFetcher({"https://fjellbekk.no/": (200, html("<h1>Velkommen</h1><p>Noe helt annet.</p>", title="Velkommen")),
+                     "https://fjellbekktrevare.no/": (200, html("<h1>Hei</h1>", title="Hei"))})
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    claims = run(f, ctx)
+    note = claims["official_website"].note
+    assert "domains tried: fjellbekk.no (no_match), fjellbekktrevare.no (no_match)" in note
+    assert "fjellbekktrevare.com (no_dns)" in note
+
+
+def test_budget_note_lists_domains_tried(monkeypatch):
+    monkeypatch.setattr(W, "MAX_REQUESTS", 4)
+    page = html("<h1>Hei</h1>", title="Hei")
+    f = FakeFetcher({"https://fjellbekk.no/": (200, page), "https://fjellbekktrevare.no/": (200, page),
+                     "https://fjellbekktrevare.com/": (200, page), "https://fjellbekk-trevare.no/": (200, page)})
+    claims = run(f, ctx_for(hjemmeside="fjellbekk.no"))
+    note = claims["official_website"].note
+    assert note.startswith("budget_exhausted: not checked") and "domains tried: fjellbekk.no (no_match)" in note

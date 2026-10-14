@@ -4698,6 +4698,18 @@ async def network_up(f: Fetcher) -> bool:
     return up
 
 
+TRIED_LIST = 10  # domains named in a website note
+
+
+def _tried_note(verdicts: list["Verdict"]) -> str:
+    """Every candidate domain the step looked up or fetched, in the order tried, with its outcome."""
+    seen = [v for v in verdicts if v.status not in ("duplicate", "unchecked", "not_checked", "skipped_budget")]
+    if not seen:
+        return ""
+    out = ", ".join(f"{v.domain} ({v.status})" for v in seen[:TRIED_LIST])
+    return "domains tried: " + out + (f" and {len(seen) - TRIED_LIST} more" if len(seen) > TRIED_LIST else "")
+
+
 async def fetch_website(f: Fetcher, ctx: CompanyContext) -> None:
     e = ctx.registry or {}
     if not e or e.get("_gone") or ctx.facts.get("deleted"):
@@ -4795,9 +4807,11 @@ async def fetch_website(f: Fetcher, ctx: CompanyContext) -> None:
     # leaving them unchecked does not turn the result into a failure.
     declared_left = [d for d, src, _ in unchecked if src in ("registry", "email")
                      or (src.startswith("seed:") and src != "seed:commoncrawl_domain")]
+    tried = _tried_note(verdicts)
     if budget_note == "budget_exhausted" or (budget_note and unchecked) or any(v.status == "skipped_budget" for v in verdicts):
         ctx.mark("official_website", SECTION, "failed",
-                 note="budget_exhausted: not checked " + ", ".join(d for d, _s, _u in unchecked[:5]))
+                 note="budget_exhausted: not checked " + ", ".join(d for d, _s, _u in unchecked[:5]) +
+                      (f"; {tried}" if tried else ""))
         ctx.module_states["website"] = "failed"
         return
 
@@ -4860,6 +4874,8 @@ async def fetch_website(f: Fetcher, ctx: CompanyContext) -> None:
         "; none showed our org number, or the registry phone or address together with the legal name"
     if budget_note:
         note += f"; stopped early: {budget_note}"
+    if tried:
+        note += f"; {tried}"
     ambiguous = [v for v in verdicts if v.status in ("name_only", "related", "ambiguous")]
     looked = [v for v in verdicts if v.status not in ("no_dns", "duplicate")]
     blocked = [v for v in verdicts if v.status == "blocked" and (v.source == "registry" or looked == [v])]
