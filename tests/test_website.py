@@ -2989,7 +2989,8 @@ def test_reused_post_with_a_later_year_or_wrong_weekday_is_withheld():
         _wp_row("Årsmøte i foreningen", "arsmote-2026", "2024-04-03", "<p>Velkommen til årsmøte torsdag 16. april kl 18.</p>"),
         _wp_row("Innkalling til dugnad", "dugnad", "2024-05-02", "<p>Dugnad torsdag 16. april, ta med hansker.</p>"),
         _wp_row("Ny brygge ferdig", "ny-brygge", "2024-06-12", "<p>Brygga sto ferdig tirsdag 11. juni 2024.</p>"),
-        _wp_row("Planer for neste år", "planer", "2024-11-12", "<p>I 2025 bygger vi nytt naust.</p>")])
+        _wp_row("Planer for neste år", "planer", "2024-11-12", "<p>I 2025 bygger vi nytt naust.</p>"),
+        _wp_row("Påsken 2025 i Florida", "pasken-2025", "2024-08-30", "<p>Bli med på tur.</p>")])
     body = f'<link href="/wp-content/a.css"><footer>Fjellbekk Trevare AS · Org.nr {OURS}</footer>'
     f = _site({"https://fjellbekk.no/wp-json/wp/v2/posts?per_page=20&_fields=title,link,date,date_gmt,excerpt":
                (200, wp, "application/json")}, body=body)
@@ -2998,15 +2999,19 @@ def test_reused_post_with_a_later_year_or_wrong_weekday_is_withheld():
     titles = sorted(str(c.value).rsplit(" (", 1)[0] for c in ctx.claims if c.field == "dated_news" and c.availability == "available")
     # the slug naming 2026 and a 'torsdag 16. april' that is no Thursday in 2024 or 2025 are withheld;
     # a weekday that matches the year, and next year's plans in the body, stay
-    assert titles == ["Ny brygge ferdig", "Planer for neste år"]
+    assert titles == ["Ny brygge ferdig", "Planer for neste år", "Påsken 2025 i Florida"]
 
 
 def test_date_contradicted_rules():
     item = {"title": "Sommerfest", "url": "https://x.no/sommerfest/", "datetime": "2023-06-01T10:00:00+02:00",
-            "text": "Fest lørdag 16. juni"}
-    assert W.date_contradicted(item, "2026-10-14")  # 16 June is a Friday in 2023 and a Sunday in 2024
+            "text": "Fest mandag 16. juni"}
+    assert W.date_contradicted(item, "2026-10-14")  # 16 June: Thursday 2022, Friday 2023, Sunday 2024
     item["text"] = "Fest lørdag 17. juni"
     assert W.date_contradicted(item, "2026-10-14") is None  # Saturday 17 June 2023
+    item["text"] = "Fest fredag 17. juni"
+    assert W.date_contradicted(item, "2026-10-14") is None  # Friday 17 June 2022: a one-year slip is tolerated
+    item["title"] = "Sommerfest 2024"
+    assert W.date_contradicted(item, "2026-10-14") is None  # next year's plans are common
     item["title"] = "Sommerfest 2025"
     assert W.date_contradicted(item, "2026-10-14")
     assert W.date_contradicted(item, "2024-10-14") is None  # 2025 had not come yet: a plan, not a reuse

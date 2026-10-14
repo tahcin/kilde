@@ -4294,25 +4294,24 @@ def _plain(html_text: str | None) -> str:
 
 def date_contradicted(item: dict, today: str) -> str | None:
     """Why a post's publish date cannot be its real date, or None. A reused post (an annual meeting notice
-    edited every year) keeps its first publish date: its slug, title or text then names a later year that has
-    already come (a year after the publish year, up to this year), or a weekday and date that fall on that
-    weekday neither in the publish year nor the next (the body counts a year only two or more years on).
-    Precision first: such an item is withheld, never re-dated."""
+    edited every year) keeps its first publish date: its slug, title or text then names a year two or more
+    years after the publish year that has already come, or a weekday and date that fall on that weekday in
+    none of the year before, the publish year and the year after. Precision first: such an item is withheld, never re-dated."""
     from datetime import date as _date
     pub = int(item["datetime"][:4])
     slug = unquote(urlsplit(item["url"]).path)
     hay = " ".join((item.get("title") or "", item.get("text") or ""))
     own = slug.replace("-", " ").replace("/", " ").replace("_", " ") + " " + (item.get("title") or "")
     body = item.get("text") or ""
-    # the slug or title naming a later year; the body two or more years on (next year's plans are common)
-    for y, lead in [(int(x), 0) for x in YEAR_WORD.findall(own)] + [(int(x), 1) for x in YEAR_WORD.findall(body)]:
-        if pub + lead < y <= int(today[:4]):
+    # a year two or more years after the publish year (next year's plans, 'Påsken 2025' written in 2024, are common)
+    for y in [int(x) for x in YEAR_WORD.findall(own + " " + body)]:
+        if pub + 1 < y <= int(today[:4]):
             return f"names the year {y}, after its publish date"
     for m in WEEKDAY_DATE.finditer(hay):
         wd, d, mon = WEEKDAYS[m.group(1).lower()], int(m.group(2)), MONTHS.get(m.group(3).lower().rstrip("."))
         if not mon:
             continue
-        years = [int(m.group(4))] if m.group(4) else [pub, pub + 1]
+        years = [int(m.group(4))] if m.group(4) else [pub - 1, pub, pub + 1]  # a slip of one year is tolerated
         ok = False
         for y in years:
             try:
