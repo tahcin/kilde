@@ -1342,6 +1342,37 @@ def service_mail_domain(dom: str) -> bool:
     return d.count(".") >= 2 and bool(SERVICE_MAIL_LABEL.match(d.split(".")[0]))
 
 
+INVOICE_LOCAL = {"faktura", "fakturaer", "efaktura", "fakturamottak", "fakturapost", "invoice", "invoices", "einvoice",
+                 "ebilag", "bilag", "bilagsmottak", "regnskap", "ehf", "peppol", "kreditor", "leverandorfaktura"}
+INVOICE_DOMAIN_LABEL = re.compile(r"(?i)^(?:e-?)?(?:faktura|invoice|bilag)(?:post|mottak|inbox|scan|service|s)?$")
+ACCOUNTANT_LABEL = re.compile(r"(?i)regnskap|accounting|bokforing|bokføring|bokholderi")
+INVOICE_CONTEXT = re.compile(r"(?i)(?:faktura|invoice|\behf\b|e-?bilag|\bbilag|peppol)"
+                             r"(?:(?!kontakt|contact|e-?post|e-?mail|tlf|telefon|@).){0,40}$")
+
+
+def invoice_mailbox(addr: str, a=None, org: str = "") -> bool:
+    """The address is an invoice or bookkeeping inbox (faktura@..., 913289951@fakturapost.no, 'Fakturaadresse:
+    x@ebilag.com'): where the company receives bills, not another organisation presenting the site."""
+    if "@" not in (addr or ""):
+        return False
+    local, dom = addr.lower().rsplit("@", 1)
+    if org and local == org:
+        return True
+    if any(t in INVOICE_LOCAL for t in re.split(r"[._+\-]", local)):
+        return True
+    labels = dom.split(".")
+    if len(labels) >= 2 and INVOICE_DOMAIN_LABEL.match(labels[-2]):
+        return True
+    if a is not None and a.parent is not None:
+        text = re.sub(r"\s+", " ", a.parent.get_text(" "))
+        at = text.lower().find(addr)
+        if at < 0:
+            at = text.lower().find(a.get_text(" ").strip().lower() or "\0")
+        if at > 0 and INVOICE_CONTEXT.search(text[max(0, at - 60):at]) and ACCOUNTANT_LABEL.search(labels[-2]):
+            return True  # 'Faktura: kunde@fjordregnskap.no': our accountant's inbox for our bills
+    return False
+
+
 NON_OPERATING = {"ESEK", "SAM", "BRL"}  # owners' sections, co-owned properties, housing co-ops
 _NAME_SEARCH: dict[str, list[dict]] = {}
 
@@ -3375,6 +3406,9 @@ def _card_other_domain(card: str, ours: set[str]) -> str | None:
             continue  # our domain, or our name under another top-level domain (fjellbekk.com beside fjellbekk.no)
         if CREDIT.search(card[max(0, m.start() - 40):m.start()]):
             continue
+        if "@" in m.group(0) and (invoice_mailbox(m.group(0)) or (INVOICE_CONTEXT.search(card[max(0, m.start() - 60):m.start()])
+                                                                and ACCOUNTANT_LABEL.search(dom.split(".")[0]))):
+            continue  # the company's invoice or bookkeeping inbox ('Fakturaadresse: x@ebilag.com')
         return dom
     return None
 
@@ -4091,10 +4125,13 @@ async def prepare_scope(sp: _Spend, ctx: CompanyContext, v: Verdict) -> Scope:
         if LEGAL_PAGE.search(unquote(urlsplit(p.url).path)):
             continue
         for a in p.soup.find_all("a", href=re.compile(r"^mailto:", re.I)):
-            dom = unquote(a["href"][7:]).split("?")[0].strip().lower().rsplit("@", 1)[-1]
+            addr = unquote(a["href"][7:]).split("?")[0].strip().lower()
+            dom = addr.rsplit("@", 1)[-1]
             if not re.fullmatch(r"[a-z0-9.\-]+\.[a-z]{2,}", dom) or dom in FREE_MAIL or same_site(dom, home.host) \
                     or (reg_mail and same_site(dom, reg_mail)) or service_mail_domain(dom):
                 continue
+            if invoice_mailbox(addr, a, ctx.org):
+                continue  # an invoice or bookkeeping inbox; an operator there is still caught by org number or name
             label = re.sub(r"[^a-z0-9]", "", dom.split(".")[-2] if dom.count(".") >= 1 else dom)
             site_label = re.sub(r"[^a-z0-9]", "", bare(home.host).split(".")[0])
             if label == site_label or any(t in label for t in own_tokens):

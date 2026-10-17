@@ -3014,6 +3014,11 @@ def test_one_word_name_in_lower_case_with_legal_form():
     ("faktura.fjellbekk@tripletex.no", True),  # accounting platform
     ("kvittering@faktura.example-regnskap.no", True),  # a 'faktura' inbox subdomain
     ("post@nabosnekker.no", False),            # a genuine other company's address still counts
+    (f"{OURS}@fakturapost.no", True),          # Systemblokk shape: our org number at an e-invoice inbox
+    ("fjellbekk@ebilag.com", True),            # an e-invoice scan domain without a subdomain
+    ("faktura@nabosnekker.no", True),          # an invoice mailbox, whatever the domain
+    ("kunde@fjordregnskap.no", True),          # our accountant's inbox, labelled as the invoice address
+    ("post@bilagenturen.no", False),           # 'bil' + 'agenturen' is a car agency, not an invoice service
 ])
 def test_service_mail_domains_do_not_make_a_site_shared(inbox, exclusive):
     body = (f'<h1>Fjellbekk Trevare</h1><footer>Fjellbekk Trevare AS, org.nr. {OURS} '
@@ -3022,6 +3027,23 @@ def test_service_mail_domains_do_not_make_a_site_shared(inbox, exclusive):
     ctx = ctx_for(hjemmeside="fjellbekktrevare.no")
     run(f, ctx)
     assert ctx.facts["website_exclusive"] is exclusive
+
+
+def test_invoice_domain_owner_named_as_operator_still_blocks():
+    """An invoice inbox does not hide the inbox owner when its org number is printed on the site."""
+    body = (f'<h1>Fjellbekk Trevare</h1><footer>Nettstedet driftes av Ebilag Tjenester AS, org.nr. {OTHER} '
+            f'Faktura: <a href="mailto:fjellbekk@ebilag.com">fjellbekk@ebilag.com</a></footer>')
+    f = FakeFetcher({"https://fjellbekktrevare.no/": (200, html(body))})
+    ctx = ctx_for(hjemmeside="fjellbekktrevare.no")
+    run(f, ctx)
+    assert ctx.facts["website_exclusive"] is False
+
+
+def test_invoice_mailbox():
+    assert W.invoice_mailbox("999000002@fakturapost.no", None, "999000002")
+    assert W.invoice_mailbox("emmto@ebilag.com") and W.invoice_mailbox("ehf.fjellbekk@nabo.no")
+    assert not W.invoice_mailbox("frida@vaager.com") and not W.invoice_mailbox("post@kvistmaison.no")
+    assert not W.invoice_mailbox("post@fakturafabrikken-snekker.no")
 
 
 def test_service_mail_domain():
