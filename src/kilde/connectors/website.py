@@ -5607,6 +5607,8 @@ def _tried_note(verdicts: list["Verdict"]) -> str:
 
 FOREIGN_CC_TLDS = {"se", "dk", "fi", "de", "ee", "lt", "lv", "pl", "uk", "nl", "fr", "es", "it", "ch", "at", "be", "ru",
                    "is", "us", "ca", "au", "cn", "jp", "in", "br"}
+DECLARING_HOLDINGS = {"holding", "holdings", "invest", "investment", "investments", "investering", "eiendom",
+                      "eiendommer", "capital", "kapital"}
 DECLARED_CROWD = 5  # a domain declared as hjemmeside by this many registry entities is a manager's or chain's site
 
 
@@ -5648,9 +5650,10 @@ def _copyright_other(text: str, our_name: str) -> str | None:
 
 
 async def _presenting_entity(sp: "_Spend", ctx: CompanyContext, v: "Verdict") -> tuple[str, str, str] | None:
-    """Another registered entity whose full legal name the declared site shows in its title, a top heading or
-    its copyright line, while our own full current legal name appears nowhere on the site: (org number, name,
-    the text that names it). Uses the cached Brreg name search; at most four lookups."""
+    """Another registered entity whose full legal name the declared site shows anywhere (title, headings,
+    copyright line or any visible text), while our own full current legal name appears nowhere on the site:
+    (org number, name, the text that names it). Uses the cached Brreg name search, at most ten lookups; when
+    more names are left unchecked, or a lookup fails, the answer is unknown ('', '', '')."""
     e = ctx.registry or {}
     our_rx = _full_name_rx(e.get("navn") or "")
     if our_rx and any(_visible(our_rx, p.text) or (p.soup.title and our_rx.search(p.soup.title.get_text(" ")))
@@ -5660,18 +5663,24 @@ async def _presenting_entity(sp: "_Spend", ctx: CompanyContext, v: "Verdict") ->
     spots = [home.soup.title.get_text(" ", strip=True)] if home.soup.title else []
     spots += [h.get_text(" ", strip=True) for p in v.pages for h in p.soup.find_all("h1")][:6]
     spots += [m.group(0) for p in v.pages for m in COPYRIGHT_OWNER.finditer(p.text)][:4]
+    spots += [p.text for p in v.pages]  # any visible text ('Saga Seafood AS - Røysegata 15, 6003 Aalesund')
     ours = re.sub(r"[^a-z0-9]", "", _translit(e.get("navn") or ""))
     tried = 0
+    done: set[str] = set()
     for spot in spots:
         for m in ENTITY.finditer(spot or ""):
             words = m.group(1).split()
             for k in range(min(len(words), 4), 0, -1):  # 'Hjem - Strand Shipping AS': longest real name first
                 cand = " ".join(words[-k:] + [m.group(2)])
                 key = re.sub(r"[^a-z0-9]", "", _translit(cand))
-                if not re.search(r"[A-Za-zÆØÅæøå]", words[-k]) or key == ours or len(key) < 5:
+                if any(not (w[:1].isupper() or w[:1].isdigit() and re.search(r"[A-Za-zÆØÅæøå]", w))
+                       for w in words[-k:] if w.lower() not in ("og", "&", "i", "av", "for")) \
+                        or not re.search(r"[A-Za-zÆØÅæøå]", words[-k]) or words[-k].lower() in ("og", "&", "i", "av", "for") \
+                        or key == ours or len(key) < 5 or key in done:
                     continue
-                if tried >= 4:
-                    return None
+                done.add(key)
+                if tried >= 10:
+                    return "", "", ""  # more names than we check: unknown, so the caller does not publish
                 tried += 1
                 try:
                     rows, _cut = await brreg_name_search(sp, "enheter", " ".join(words[-k:]))
@@ -5691,11 +5700,16 @@ async def declared_live_site(sp: "_Spend", ctx: CompanyContext, verdicts: list["
     prints other org numbers outside any operator position. Never when another org number sits in the footer,
     header, contact or imprint block or on an operator page, when the site redirects to another domain, when it
     names a different entity sharing our name, or when 5 or more registry entities declare the domain (housing
-    managers, chains). The page must show a distinctive word of our name. Nothing is derived from the site."""
+    managers, chains), or for holding and investment companies. The page must show our registry phone or email
+    (not an email on the site's own domain) or the whole name. Nothing is derived from the site."""
     e = ctx.registry or {}
     raw = (e.get("hjemmeside") or "").strip()
     if not registry_host or not raw or urlsplit(raw if "//" in raw else "https://" + raw).path.strip("/"):
         return False
+    words = {_translit(w) for w in name_words(e.get("navn") or "")}
+    core = [w for w in words if w not in LEGAL_SUFFIX and w not in FORM_NAME_WORDS]
+    if not core or words & DECLARING_HOLDINGS:
+        return False  # holding and investment companies declare their operating company's site
     v = next((x for x in verdicts if x.source == "registry" and x.status in ("no_match", "related") and x.pages
               and not (x.cross or x.path_scoped) and same_site(bare(x.pages[0].host), registry_host)), None)
     if v is None or is_parked(v.pages[0]):
@@ -5709,26 +5723,25 @@ async def declared_live_site(sp: "_Spend", ctx: CompanyContext, verdicts: list["
     for p in v.pages:
         if any(n not in v.ignore_orgs for n in other_orgnrs(p, ctx.org)) and v.status != "related":
             return False
-    toks = [t for t in _core_tokens(e.get("navn") or "") if len(t) >= 4 and t not in GENERIC_WORDS
-            and t not in REGIONS and t not in COMMON_LABELS and t not in COMMON_NOUNS and not generic_word(t)]
     home = v.pages[0]
     title = home.soup.title.get_text(" ", strip=True) if home.soup.title else ""
     text = " ".join([title] + [p.text for p in v.pages])
     seen = _translit(text)
-    # strong tie: the registry phone or email on the site; weak tie: a distinctive word of our name, with no
-    # copyright line naming another company (a foreign parent's 'Brady Technologies Limited')
+    # tie: the registry phone or email on the site, or the whole name run together; never with a copyright line
+    # naming another company (a foreign parent's 'Brady Technologies Limited') unless our contact is shown
     shown = {re.sub(r"\D", "", m.group(0))[-8:] for m in PHONE_TEXT.finditer(text)}
     mail = (e.get("epostadresse") or "").strip().lower()
+    mail_dom = mail.rsplit("@", 1)[-1] if "@" in mail else ""
     contact = next((ph for ph in sorted(_digits_phones(e)) if ph in shown), None) or (
-        mail if mail and re.search(r"(?<![\w.\-])" + re.escape(mail) + r"(?![\w\-])", text.lower()) else None)
+        mail if mail and not same_site(mail_dom, bare(v.pages[0].host))  # our mail on its own domain is circular
+        and re.search(r"(?<![\w.\-])" + re.escape(mail) + r"(?![\w\-])", text.lower()) else None)
     # host names do not count ('sarsiaventure.com' as the title of a redirect stub)
     seen = re.sub(r"[\w.%+\-]+@[\w.\-]+", " ", seen)
     seen = re.sub(r"(?:[a-z0-9\-]+\.)+(?:no|com|net|org|se|dk|io|eu|as|biz|info|nu)\b", " ", seen)
     whole = re.sub(r"[^a-z0-9]", "", _translit(" ".join(w for w in name_words(e.get("navn") or "")
                                                         if w not in FORM_NAME_WORDS)))
-    hit = contact or next((t for t in toks if len(t) >= 5 and re.search(
-        r"(?<![a-z0-9])" + re.escape(t) + r"(?![a-z0-9])", seen)), None) or (
-        whole if len(whole) >= 6 and whole in re.sub(r"[^a-z0-9]", "", seen) else None)
+    # a single word of the name is no tie: it may be a founder's surname ('Founder Sveinung Gjethammer')
+    hit = contact or (whole if len(whole) >= 6 and whole in re.sub(r"[^a-z0-9]", "", seen) else None)
     if not hit:
         return False
     owner = _copyright_other(text, e.get("navn") or "")
@@ -5770,7 +5783,7 @@ async def declared_live_site(sp: "_Spend", ctx: CompanyContext, verdicts: list["
     why = "the site is published from the registry declaration only; nothing is derived from its pages"
     for fld, sec in DERIVED_FIELDS:
         ctx.mark(fld, sec, "ambiguous", note=why)
-    ctx.facts["website_declared_live"] = {"domain": registry_host, "declarers": n}
+    ctx.facts["website_declared_live"] = {"domain": registry_host, "declarers": n, "tie": hit}
     ctx.module_states["website"] = "available"
     return True
 
