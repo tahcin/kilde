@@ -3014,6 +3014,11 @@ def test_one_word_name_in_lower_case_with_legal_form():
     ("faktura.fjellbekk@tripletex.no", True),  # accounting platform
     ("kvittering@faktura.example-regnskap.no", True),  # a 'faktura' inbox subdomain
     ("post@nabosnekker.no", False),            # a genuine other company's address still counts
+    (f"{OURS}@fakturapost.no", True),          # Systemblokk shape: our org number at an e-invoice inbox
+    ("fjellbekk@ebilag.com", True),            # an e-invoice scan domain without a subdomain
+    ("faktura@nabosnekker.no", True),          # an invoice mailbox, whatever the domain
+    ("kunde@fjordregnskap.no", True),          # our accountant's inbox, labelled as the invoice address
+    ("post@bilagenturen.no", False),           # 'bil' + 'agenturen' is a car agency, not an invoice service
 ])
 def test_service_mail_domains_do_not_make_a_site_shared(inbox, exclusive):
     body = (f'<h1>Fjellbekk Trevare</h1><footer>Fjellbekk Trevare AS, org.nr. {OURS} '
@@ -3022,6 +3027,23 @@ def test_service_mail_domains_do_not_make_a_site_shared(inbox, exclusive):
     ctx = ctx_for(hjemmeside="fjellbekktrevare.no")
     run(f, ctx)
     assert ctx.facts["website_exclusive"] is exclusive
+
+
+def test_invoice_domain_owner_named_as_operator_still_blocks():
+    """An invoice inbox does not hide the inbox owner when its org number is printed on the site."""
+    body = (f'<h1>Fjellbekk Trevare</h1><footer>Nettstedet driftes av Ebilag Tjenester AS, org.nr. {OTHER} '
+            f'Faktura: <a href="mailto:fjellbekk@ebilag.com">fjellbekk@ebilag.com</a></footer>')
+    f = FakeFetcher({"https://fjellbekktrevare.no/": (200, html(body))})
+    ctx = ctx_for(hjemmeside="fjellbekktrevare.no")
+    run(f, ctx)
+    assert ctx.facts["website_exclusive"] is False
+
+
+def test_invoice_mailbox():
+    assert W.invoice_mailbox("999000002@fakturapost.no", None, "999000002")
+    assert W.invoice_mailbox("emmto@ebilag.com") and W.invoice_mailbox("ehf.fjellbekk@nabo.no")
+    assert not W.invoice_mailbox("frida@vaager.com") and not W.invoice_mailbox("post@kvistmaison.no")
+    assert not W.invoice_mailbox("post@fakturafabrikken-snekker.no")
 
 
 def test_service_mail_domain():
@@ -3837,3 +3859,216 @@ def test_search_overlay_listings_and_dates_inside_headings_are_not_news():
     page = W.parse_page(Snapshot("https://fjellbekk.no/", "https://fjellbekk.no/", 200, "x",
                                  html('<div><h3>Testlyd - Hallen 2026-10-01</h3><p>Billetter</p></div>').encode(), "text/html"))
     assert W.inline_news(page) == []
+
+
+# ---------------------------------------------------------------- registry-declared live site (revision 2)
+def _declarers(host, orgs):
+    rows = [{"organisasjonsnummer": o, "navn": f"ENTITY {o} AS", "hjemmeside": f"www.{host}"} for o in orgs]
+    return (W.BRREG_SEARCH + f"?hjemmeside={host}&size=100",
+            (200, json.dumps({"_embedded": {"enheter": rows}}), "application/json"))
+
+
+def _declared_case(body, declarers=(OURS,), title="Fjellbekk | Shipbrokers", extra=None):
+    url, resp = _declarers("fjellbekk.no", declarers)
+    pages = {"https://fjellbekk.no/": (200, html(body, title=title)), url: resp}
+    pages.update(extra or {})
+    ctx = ctx_for(hjemmeside="www.fjellbekk.no")
+    claims = run(FakeFetcher(pages), ctx)
+    return ctx, claims
+
+
+def test_declared_live_site_without_the_legal_name_is_official_with_nothing_derived():
+    """Strand Shipping shape: a script-built page that shows only a title with the distinctive name word."""
+    body = '<div id="app"></div><a href="https://www.facebook.com/fjellbekk">f</a>'
+    ctx, claims = _declared_case(body)
+    site = claims["official_website"]
+    assert site.availability == "available" and site.value == "fjellbekk.no"
+    assert site.match["method"] == "registry_declared_live"
+    assert not [c for c in ctx.claims if c.field == "social_profile" and c.availability == "available"]
+    assert claims["website_description"].availability == "ambiguous"
+    assert "related_website" not in claims
+
+
+def test_declared_live_site_shared_by_a_few_declarers_gives_the_domain_only():
+    ctx, claims = _declared_case("<p>Velkommen</p>", declarers=(OURS, OTHER, THIRD))
+    assert claims["official_website"].value == "fjellbekk.no"
+    assert "3 registry entities" in claims["official_website"].match["detail"]
+
+
+def test_declared_site_of_five_or_more_entities_is_never_official():
+    """OBOS and USBL shape: a housing manager's domain declared by many co-ops."""
+    many = (OURS, OTHER, THIRD, FOURTH, "999000045")
+    ctx, claims = _declared_case("<p>Velkommen</p>", declarers=many)
+    assert not [c for c in ctx.claims if c.field == "official_website" and c.availability == "available"]
+
+
+def test_declared_site_with_another_org_number_in_the_footer_stays_related():
+    body = f"<h1>Fjellbekk</h1><footer>Fjellbekk Shipping AS · Org.nr {OTHER}</footer>"
+    ctx, claims = _declared_case(body)
+    assert not [c for c in ctx.claims if c.field == "official_website" and c.availability == "available"]
+    assert claims["related_website"].value["other_organisation_number"] == OTHER
+
+
+def test_declared_site_with_another_org_number_only_in_body_text_is_official():
+    body = (f"<h1>Fjellbekk</h1><section><p>Vi leverte nytt tak for kunden Nabo Bygg AS (org.nr {OTHER}) "
+            "i fjor.</p></section>")
+    ctx, claims = _declared_case(body)
+    assert claims["official_website"].value == "fjellbekk.no"
+    assert OTHER in claims["official_website"].match["detail"]
+
+
+def test_declared_site_without_our_name_word_or_unreadable_registry_is_not_official():
+    ctx, claims = _declared_case("<p>Velkommen til en helt annen bedrift</p>", title="Hjem")
+    assert not [c for c in ctx.claims if c.field == "official_website" and c.availability == "available"]
+    pages = {"https://fjellbekk.no/": (200, html("<div id='app'></div>", title="Fjellbekk"))}
+    f = FakeFetcher(pages)
+    f.brreg_down = True
+    ctx2 = ctx_for(hjemmeside="www.fjellbekk.no")
+    try:
+        run(f, ctx2)
+    except Exception:
+        pass
+    assert not [c for c in ctx2.claims if c.field == "official_website" and c.availability == "available"]
+
+
+def test_declared_site_on_a_path_or_redirected_elsewhere_is_not_official():
+    url, resp = _declarers("fjellbekk.no", (OURS,))
+    pages = {"https://fjb.no/": (200, html("<div id='app'></div>", title="Fjellbekk")), url: resp}
+    ctx = ctx_for(hjemmeside="www.fjellbekk.no")
+    run(FakeFetcher(pages, redirects={"https://fjellbekk.no/": "https://fjb.no/"}), ctx)
+    assert not [c for c in ctx.claims if c.field == "official_website" and c.availability == "available"]
+
+
+# ---------------------------------------------------------------- registry contact proof for part-of-name domains
+KH = dict(navn="KVISTHOLT ANDERSEN AS", telefon="33 37 95 50",
+          forretningsadresse={"adresse": ["Semsveien 152"], "postnummer": "9999", "poststed": "TESTBY"})
+
+
+def _kh(body, rows, **rec):
+    W._SEARCH.clear()
+    W._NAME_SEARCH.clear()
+    ctx = ctx_for(**{**KH, **rec})
+    assert ("kvistholt.no", "guess_short", None) in W.candidates(ctx)
+    pages = {"https://kvistholt.no/": (200, html(body, title="Kvistholt")),
+             **_brreg("enheter", "kvistholt", rows)}
+    return ctx, run(FakeFetcher(pages), ctx)
+
+
+def test_part_of_name_domain_proven_by_registry_phone_and_whole_name():
+    """Herholdt shape: herholdt.no shows 'Herholdt Andersen AS' and the registry phone; another entity has the word."""
+    body = "<h1>Kvistholt</h1><footer>Kvistholt Andersen AS · Tlf +47 333 79 550</footer>"
+    other = [{"organisasjonsnummer": OTHER, "navn": "KVISTHOLT EIENDOM AS", "telefon": "41 00 00 09"}]
+    ctx, claims = _kh(body, other)
+    assert claims["official_website"].value == "kvistholt.no"
+    assert claims["official_website"].match["method"] == "phone_and_name"
+    assert "the domain is part of the name" in claims["official_website"].match["detail"]
+
+
+def test_part_of_name_domain_stays_withheld_without_the_whole_name_or_with_a_sharing_entity():
+    other = {"organisasjonsnummer": OTHER, "navn": "KVISTHOLT EIENDOM AS", "telefon": "41 00 00 09"}
+    # only the short word beside the phone
+    ctx, _ = _kh("<h1>Kvistholt</h1><footer>Kvistholt · Tlf 333 79 550</footer>", [other])
+    assert not ctx.claims_for("official_website")
+    # the other entity carrying the word shares our phone
+    ctx, _ = _kh("<h1>Kvistholt</h1><footer>Kvistholt Andersen AS · Tlf 333 79 550</footer>",
+                 [{**other, "telefon": "33379550"}])
+    assert not ctx.claims_for("official_website")
+    # the other entity appears on the site
+    ctx, _ = _kh("<h1>Kvistholt</h1><footer>Kvistholt Andersen AS · Tlf 333 79 550</footer>"
+                 "<p>Utleie: Kvistholt Eiendom AS</p>", [other])
+    assert not ctx.claims_for("official_website")
+    # the other entity mails from this domain
+    ctx, _ = _kh("<h1>Kvistholt</h1><footer>Kvistholt Andersen AS · Tlf 333 79 550</footer>",
+                 [{**other, "epostadresse": "post@kvistholt.no"}])
+    assert not ctx.claims_for("official_website")
+    # an address proof alone is not enough for a part-of-name domain
+    ctx, _ = _kh("<h1>Kvistholt</h1><footer>Kvistholt Andersen AS · Semsveien 152, 9999 Testby</footer>", [other],
+                 telefon=None)
+    assert not ctx.claims_for("official_website")
+
+
+def test_domain_from_the_name_before_og():
+    """Kragerø Bygg shape: kragero-bygg.no shows 'Kragerø Bygg & Sjøfrakt' and the registered address."""
+    rec = dict(navn="KVISTERØ BYGG OG SJØFRAKT AS",
+               forretningsadresse={"adresse": ["Store Ringvei 11A"], "postnummer": "9999", "poststed": "TESTBY"})
+    ctx = ctx_for(**rec)
+    assert ("kvistero-bygg.no", "guess_prefix", None) in W.candidates(ctx)
+    body = "<h1>Kvisterø Bygg &amp; Sjøfrakt</h1><footer>Store Ringvei 11A, 9999 Testby</footer>"
+    claims = run(FakeFetcher({"https://kvistero-bygg.no/": (200, html(body, title="Kvisterø Bygg"))}), ctx)
+    assert claims["official_website"].value == "kvistero-bygg.no"
+    assert claims["official_website"].match["method"] == "address_and_name"
+    # the shorter name alone with our address is someone else's company until the whole name is shown
+    W._SEARCH.clear()
+    W._NAME_SEARCH.clear()
+    ctx = ctx_for(**rec)
+    body2 = "<h1>Kvisterø Bygg AS</h1><footer>Store Ringvei 11A, 9999 Testby</footer>"
+    run(FakeFetcher({"https://kvistero-bygg.no/": (200, html(body2, title="Kvisterø Bygg"))}), ctx)
+    assert not [c for c in ctx.claims if c.field == "official_website" and c.availability == "available"]
+    assert W.prefix_domains("HANSEN & SØNN AS") == [] and W.prefix_domains("FJELLBEKK AS") == []
+
+
+def test_declared_site_of_a_foreign_parent_by_copyright_is_not_official():
+    """Brady shape: the declared site is the foreign parent's, '© 2026 Fjellbekk Technologies Limited'."""
+    body = "<h1>Fjellbekk</h1><footer>© Copyright 2026 Fjellbekk Technologies Limited. All rights reserved</footer>"
+    ctx, claims = _declared_case(body)
+    assert not [c for c in ctx.claims if c.field == "official_website" and c.availability == "available"]
+
+
+def test_declared_site_with_the_registry_phone_is_official_under_a_trade_name():
+    """ER Trading shape: the copyright names a short trade name, but the registry phone is on the page."""
+    body = "<h1>FT Trevare</h1><footer>Copyright © FT Trevare AS · Lyngveien 12B · (+47) 41 00 00 01</footer>"
+    url, resp = _declarers("fjellbekk.no", (OURS,))
+    pages = {"https://fjellbekk.no/": (200, html(body, title="Hjem - FT Trevare")), url: resp}
+    ctx = ctx_for(hjemmeside="www.fjellbekk.no", telefon="41 00 00 01")
+    claims = run(FakeFetcher(pages), ctx)
+    assert claims["official_website"].value == "fjellbekk.no"
+    assert "registry contact" in claims["official_website"].match["detail"]
+    W._HJEM_CACHE.clear()
+    ctx2 = ctx_for(hjemmeside="www.fjellbekk.no")  # without the phone, the other copyright owner blocks it
+    run(FakeFetcher(pages), ctx2)
+    assert not [c for c in ctx2.claims if c.field == "official_website" and c.availability == "available"]
+
+
+def test_declared_site_tied_only_by_a_trade_word_is_not_official():
+    """Mur & Flisarbeider shape: 'Mur og puss' on a page is a trade word, not our name."""
+    url, resp = _declarers("murflis.no", (OURS,))
+    pages = {"https://murflis.no/": (200, html("<p>Mur og puss, flislegging</p>", title="Kvalitet")), url: resp}
+    ctx = ctx_for(navn="MUR & FLISARBEIDER AS", hjemmeside="murflis.no")
+    run(FakeFetcher(pages), ctx)
+    assert not [c for c in ctx.claims if c.field == "official_website" and c.availability == "available"]
+
+
+def test_declared_site_tied_only_by_its_own_host_name_or_a_short_word_is_not_official():
+    """Sarsia shape: a redirect stub whose title is the domain; New Man's Land shape: 'land' alone is no tie."""
+    url, resp = _declarers("fjellbekkventure.com", (OURS,))
+    pages = {"https://fjellbekkventure.com/": (200, html("<p>The document is located here.</p>",
+                                                        title="fjellbekkventure.com")), url: resp}
+    ctx = ctx_for(navn="FJELLBEKK VENTURE AS", hjemmeside="fjellbekkventure.com")
+    run(FakeFetcher(pages), ctx)
+    assert not [c for c in ctx.claims if c.field == "official_website" and c.availability == "available"]
+    url, resp = _declarers("nyland.no", (OURS,))
+    pages = {"https://nyland.no/": (200, html("<p>Et land i nord</p>", title="Velkommen")), url: resp}
+    ctx = ctx_for(navn="NY LAND AS", hjemmeside="nyland.no")
+    run(FakeFetcher(pages), ctx)
+    assert not [c for c in ctx.claims if c.field == "official_website" and c.availability == "available"]
+    W._HJEM_CACHE.clear()
+    pages = {"https://nyland.no/": (200, html("<p>Portefølje</p>", title="Ny Land - Creative Portfolio")), url: resp}
+    ctx = ctx_for(navn="NY LAND AS", hjemmeside="nyland.no")
+    claims = run(FakeFetcher(pages), ctx)
+    assert claims["official_website"].value == "nyland.no"  # the whole name, run together, is shown
+
+
+def test_declared_foreign_group_site_is_not_official_even_with_our_contact():
+    """SH Group shape: shgroup.dk lists the Norwegian unit's phone; Brady shape: a 'Limited' parent's .com site."""
+    url, resp = _declarers("fjellbekk.dk", (OURS,))
+    pages = {"https://fjellbekk.dk/": (200, html("<p>Norway office: +47 41 00 00 01</p>", title="Fjellbekk Group")),
+             url: resp}
+    ctx = ctx_for(hjemmeside="fjellbekk.dk", telefon="41 00 00 01")
+    run(FakeFetcher(pages), ctx)
+    assert not [c for c in ctx.claims if c.field == "official_website" and c.availability == "available"]
+    body = "<p>Norway office: +47 41 00 00 01</p><footer>© Copyright 2026 Kvist Technologies Limited</footer>"
+    url, resp = _declarers("fjellbekk.com", (OURS,))
+    pages = {"https://fjellbekk.com/": (200, html(body, title="Kvist")), url: resp}
+    ctx = ctx_for(hjemmeside="fjellbekk.com", telefon="41 00 00 01")
+    run(FakeFetcher(pages), ctx)
+    assert not [c for c in ctx.claims if c.field == "official_website" and c.availability == "available"]
