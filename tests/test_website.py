@@ -4072,3 +4072,26 @@ def test_declared_foreign_group_site_is_not_official_even_with_our_contact():
     ctx = ctx_for(hjemmeside="fjellbekk.com", telefon="41 00 00 01")
     run(FakeFetcher(pages), ctx)
     assert not [c for c in ctx.claims if c.field == "official_website" and c.availability == "available"]
+
+
+def test_declared_site_presenting_another_registered_company_is_related():
+    """Strand Shipping shape: strand-shipping.no is titled 'Strand Shipping AS', a sister of the declaring
+    STRAND SHIPPING INVEST AS; our own full name is not on the site."""
+    rec = dict(navn="FJELLBEKK SHIPPING INVEST AS", hjemmeside="www.fjellbekk.no")
+    url, resp = _declarers("fjellbekk.no", (OURS,))
+    sister = _brreg("enheter", "Fjellbekk%20Shipping", [{"organisasjonsnummer": SISTER, "navn": "FJELLBEKK SHIPPING AS"}])
+    pages = {"https://fjellbekk.no/": (200, html("<div id='app'></div>", title="Fjellbekk Shipping AS – Shipbrokers")),
+             url: resp, **sister}
+    ctx = ctx_for(**rec)
+    claims = run(FakeFetcher(pages), ctx)
+    assert not [c for c in ctx.claims if c.field == "official_website" and c.availability == "available"]
+    assert claims["related_website"].value["other_organisation_number"] == SISTER
+    # our own full name on the site keeps it official (domain only)
+    W._HJEM_CACHE.clear()
+    W._SEARCH.clear()
+    W._NAME_SEARCH.clear()
+    pages["https://fjellbekk.no/"] = (200, html("<footer>Eier: Fjellbekk Shipping Invest AS</footer>",
+                                                 title="Fjellbekk Shipping AS – Shipbrokers"))
+    ctx = ctx_for(**rec)
+    claims = run(FakeFetcher(pages), ctx)
+    assert claims["official_website"].value == "fjellbekk.no"
