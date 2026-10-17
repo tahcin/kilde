@@ -310,6 +310,43 @@ def check_batch(ctxs: list[CompanyContext]) -> list[str]:
                 c.availability, c.value, c.confidence = "ambiguous", None, 0.0
                 c.note = "Withheld by the publication gate: the same profile appears for several companies in this batch"
                 notes.append(f"{ctx.org} social_profile: shared across companies ({value})")
+    notes += _shared_contact_short_label(ctxs)
+    return notes
+
+
+SHORT_LABEL_CONTACT = "the domain is part of the name, and the site shows the whole name"
+
+
+def _shared_contact_short_label(ctxs: list[CompanyContext]) -> list[str]:
+    """A site on a domain made from part of the name, proven by the registry phone or email, is withheld when
+    another company in the batch registers the same phone or email (an accountant's or manager's contact)."""
+    phones: dict[str, set[str]] = {}
+    mails: dict[str, set[str]] = {}
+    for ctx in ctxs:
+        reg = ctx.registry or {}
+        for k in ("telefon", "mobil"):
+            d = _digits(reg.get(k) or "")[-8:]
+            if len(d) == 8:
+                phones.setdefault(d, set()).add(ctx.org)
+        m = (reg.get("epostadresse") or "").strip().lower()
+        if m:
+            mails.setdefault(m, set()).add(ctx.org)
+    notes = []
+    for ctx in ctxs:
+        site = next((c for c in ctx.claims if c.field == "official_website" and c.availability == "available"), None)
+        if not site or SHORT_LABEL_CONTACT not in ((site.match or {}).get("detail") or ""):
+            continue
+        reg = ctx.registry or {}
+        mine = {_digits(reg.get(k) or "")[-8:] for k in ("telefon", "mobil")}
+        mail = (reg.get("epostadresse") or "").strip().lower()
+        if not (any(len(phones.get(d, ())) > 1 for d in mine if len(d) == 8) or (mail and len(mails.get(mail, ())) > 1)):
+            continue
+        for c in ctx.claims:
+            if c.availability == "available" and (c.field in DERIVED or c.field in ("official_website", "official_website_url")) \
+                    and (c.match or {}).get("method") not in ("registry_declared", "employer_orgnr"):
+                c.availability, c.value, c.confidence = "ambiguous", None, 0.0
+                c.note = "Withheld by the publication gate: the registry phone or email that proved this site is shared by another company in this batch"
+        notes.append(f"{ctx.org} official_website: proving contact shared in the batch")
     return notes
 
 

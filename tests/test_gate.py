@@ -238,3 +238,19 @@ def test_our_legal_form_at_the_end_of_a_handle_is_not_a_foreign_form():
                     ("social_profile", canonical_social("instagram", "https://instagram.com/arcticfeedingredientsas"))])
     gate.check(ctx)
     assert [c.availability for c in ctx.claims if c.field == "social_profile"] == ["available", "available"]
+
+
+def test_short_label_site_proven_by_a_contact_shared_in_the_batch_is_withheld():
+    detail = "registry phone number and legal name shown on the site; the domain is part of the name, and the site shows the whole name"
+
+    def one(org, name):
+        c = ctx_with(f"{name.split()[0].lower()}.no", {"navn": name, "telefon": "33 37 95 50"}, [])
+        c.org = org
+        c.claims[0].match = {"method": "phone_and_name", "detail": detail}
+        return c
+    a, b = one("999000002", "KVISTHOLT ANDERSEN AS"), one("999000010", "BRATTLI REGNSKAP AS")
+    gate.check_batch([a, b])
+    assert a.claims[0].availability == "ambiguous" and b.claims[0].availability == "ambiguous"
+    c = one("999000002", "KVISTHOLT ANDERSEN AS")
+    gate.check_batch([c])
+    assert c.claims[0].availability == "available"

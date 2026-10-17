@@ -1759,6 +1759,41 @@ async def _short_label_unique(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> 
     return True
 
 
+async def _short_label_contact_proof(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> bool:
+    """A domain made from part of our name (herholdt.no for HERHOLDT ANDERSEN AS) whose word other registered
+    names share is still ours when the site shows the registry phone or the exact registry email (the proof
+    already found) and our whole name as visible text, and no other registered entity carrying that word shares
+    the phone or email or appears on the site. Read from the cached name search of the short-label check; a
+    truncated search never passes. The name-collision check that follows still applies."""
+    if v.method not in ("phone_and_name", "email_and_name") or v.variant or v.cross or v.path_scoped or v.others \
+            or not v.pages or not same_site(bare(v.pages[0].host), bare(v.domain)):
+        return False
+    e = ctx.registry or {}
+    words = [w for w in name_words(e.get("navn") or "") if w not in FORM_NAME_WORDS]
+    if len(words) < 2 or not any(_visible(name_regex(words), p.text) for p in v.pages):
+        return False
+    label = re.sub(r"[^a-z0-9]", "", bare(v.domain).split(".")[0])
+    word = next((w for w in _distinct_words(e.get("navn") or "")
+                 if label in {"".join(x) for x in _ascii_variants([w])}), None)
+    if not word:
+        return False
+    rows, truncated = await registry_rows(sp, [word])
+    if truncated:
+        return False
+    phones = _digits_phones(e)
+    mail = (e.get("epostadresse") or "").strip().lower()
+    for r in rows:
+        if r.get("organisasjonsnummer") == ctx.org or r.get("overordnetEnhet") == ctx.org:
+            continue
+        if (v.method == "phone_and_name" and phones & _digits_phones(r)) or \
+                (v.method == "email_and_name" and mail and (r.get("epostadresse") or "").strip().lower() == mail):
+            return False  # the contact is shared with another entity carrying our word
+        if _active(r) and _other_entity_on_site(v.pages, r, ctx):
+            return False  # that entity appears on the site too
+    v.detail = f"{v.detail}; the domain is part of the name, and the site shows the whole name"
+    return True
+
+
 async def _check_collision(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> None:
     """For proofs other than our org number: reject the site when another active registered entity (or another
     company's workplace) carries the same distinctive name, unless the site names our full legal name (with its
@@ -1766,9 +1801,14 @@ async def _check_collision(sp: "_Spend", ctx: CompanyContext, v: Verdict) -> Non
     org number on the site or the registry-declared website."""
     if v.status != "proven" or v.method == "orgnr_on_page":
         return
-    if v.source == "guess_short" and not await _short_label_unique(sp, ctx, v):
+    if v.source == "guess_short" and not await _short_label_unique(sp, ctx, v) \
+            and not await _short_label_contact_proof(sp, ctx, v):
         v.status, v.method = "name_only", None
         v.detail = "a domain made from part of the name needs our org number on the site (chain or parent brand risk)"
+        return
+    if v.source == "guess_prefix" and v.variant:
+        v.status, v.method = "name_only", None
+        v.detail = "a domain made from the name before 'og' needs the whole legal name on the site"
         return
     e = ctx.registry or {}
     form = ((e.get("organisasjonsform") or {}).get("kode") or "").upper()
@@ -2015,7 +2055,7 @@ def legal_name_unique_page(v: Verdict, ctx: CompanyContext) -> tuple[tuple, tupl
     name = e.get("navn") or ""
     form = ((e.get("organisasjonsform") or {}).get("kode") or "").upper()
     if v.status != "name_only" or not (v.detail or "").startswith("legal name shown, but no org number") or \
-            v.cross or v.path_scoped or v.others or v.namesake or v.variant or v.source == "guess_short" or \
+            v.cross or v.path_scoped or v.others or v.namesake or v.variant or v.source in ("guess_short", "guess_prefix") or \
             form not in LEGAL_UNIQUE_FORMS or not v.pages or not _label_is_name(v.pages[0].host, name):
         return None
     legal = _legal_span(v.pages, name, form)
@@ -2119,6 +2159,20 @@ def website_seeds() -> dict[str, list[dict]]:
     return _SEEDS
 
 
+def prefix_domains(name: str) -> list[str]:
+    """Domains from the name before its first 'og' or '&' (KRAGERØ BYGG OG SJØFRAKT AS as kragero-bygg.no and
+    kragerobygg.no), when that part has two words or more. Such a site must still show the whole legal name."""
+    words = name_words(name)
+    cut = next((i for i, w in enumerate(words) if w in ("og", "&")), None)
+    if cut is None or cut < 2:
+        return []
+    head = [w for w in words[:cut] if re.fullmatch(r"[0-9a-zæøåäöüé]+", w)]
+    if len(head) < 2:
+        return []
+    v = _ascii_variants(head)[0]
+    return [f"{'-'.join(v)}.no", f"{''.join(v)}.no"]
+
+
 def candidates(ctx: CompanyContext) -> list[tuple[str, str, str | None]]:
     """(domain, source, start_url), in order: registry website, email domain, name-derived guesses."""
     e = ctx.registry or {}
@@ -2173,6 +2227,8 @@ def candidates(ctx: CompanyContext) -> list[tuple[str, str, str | None]]:
         full = re.sub(r"[^a-z0-9]", "", _translit(" ".join(name_words(e.get("navn") or ""))))
         lab = d.split(".")[0]
         add(d, "guess_short" if lab in SHORT_FORMS and lab != full else "guess")
+    for d in prefix_domains(e.get("navn") or ""):
+        add(d, "guess_prefix")
     for old in e.get("historiskeNavn") or []:  # former registered names
         nm = old.get("navn") if isinstance(old, dict) else old
         for d in name_domains(nm or "", e)[:2]:

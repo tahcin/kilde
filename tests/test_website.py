@@ -3937,3 +3937,67 @@ def test_declared_site_on_a_path_or_redirected_elsewhere_is_not_official():
     ctx = ctx_for(hjemmeside="www.fjellbekk.no")
     run(FakeFetcher(pages, redirects={"https://fjellbekk.no/": "https://fjb.no/"}), ctx)
     assert not [c for c in ctx.claims if c.field == "official_website" and c.availability == "available"]
+
+
+# ---------------------------------------------------------------- registry contact proof for part-of-name domains
+KH = dict(navn="KVISTHOLT ANDERSEN AS", telefon="33 37 95 50",
+          forretningsadresse={"adresse": ["Semsveien 152"], "postnummer": "9999", "poststed": "TESTBY"})
+
+
+def _kh(body, rows, **rec):
+    W._SEARCH.clear()
+    W._NAME_SEARCH.clear()
+    ctx = ctx_for(**{**KH, **rec})
+    assert ("kvistholt.no", "guess_short", None) in W.candidates(ctx)
+    pages = {"https://kvistholt.no/": (200, html(body, title="Kvistholt")),
+             **_brreg("enheter", "kvistholt", rows)}
+    return ctx, run(FakeFetcher(pages), ctx)
+
+
+def test_part_of_name_domain_proven_by_registry_phone_and_whole_name():
+    """Herholdt shape: herholdt.no shows 'Herholdt Andersen AS' and the registry phone; another entity has the word."""
+    body = "<h1>Kvistholt</h1><footer>Kvistholt Andersen AS · Tlf +47 333 79 550</footer>"
+    other = [{"organisasjonsnummer": OTHER, "navn": "KVISTHOLT EIENDOM AS", "telefon": "41 00 00 09"}]
+    ctx, claims = _kh(body, other)
+    assert claims["official_website"].value == "kvistholt.no"
+    assert claims["official_website"].match["method"] == "phone_and_name"
+    assert "the domain is part of the name" in claims["official_website"].match["detail"]
+
+
+def test_part_of_name_domain_stays_withheld_without_the_whole_name_or_with_a_sharing_entity():
+    other = {"organisasjonsnummer": OTHER, "navn": "KVISTHOLT EIENDOM AS", "telefon": "41 00 00 09"}
+    # only the short word beside the phone
+    ctx, _ = _kh("<h1>Kvistholt</h1><footer>Kvistholt · Tlf 333 79 550</footer>", [other])
+    assert not ctx.claims_for("official_website")
+    # the other entity carrying the word shares our phone
+    ctx, _ = _kh("<h1>Kvistholt</h1><footer>Kvistholt Andersen AS · Tlf 333 79 550</footer>",
+                 [{**other, "telefon": "33379550"}])
+    assert not ctx.claims_for("official_website")
+    # the other entity appears on the site
+    ctx, _ = _kh("<h1>Kvistholt</h1><footer>Kvistholt Andersen AS · Tlf 333 79 550</footer>"
+                 "<p>Utleie: Kvistholt Eiendom AS</p>", [other])
+    assert not ctx.claims_for("official_website")
+    # an address proof alone is not enough for a part-of-name domain
+    ctx, _ = _kh("<h1>Kvistholt</h1><footer>Kvistholt Andersen AS · Semsveien 152, 9999 Testby</footer>", [other],
+                 telefon=None)
+    assert not ctx.claims_for("official_website")
+
+
+def test_domain_from_the_name_before_og():
+    """Kragerø Bygg shape: kragero-bygg.no shows 'Kragerø Bygg & Sjøfrakt' and the registered address."""
+    rec = dict(navn="KVISTERØ BYGG OG SJØFRAKT AS",
+               forretningsadresse={"adresse": ["Store Ringvei 11A"], "postnummer": "9999", "poststed": "TESTBY"})
+    ctx = ctx_for(**rec)
+    assert ("kvistero-bygg.no", "guess_prefix", None) in W.candidates(ctx)
+    body = "<h1>Kvisterø Bygg &amp; Sjøfrakt</h1><footer>Store Ringvei 11A, 9999 Testby</footer>"
+    claims = run(FakeFetcher({"https://kvistero-bygg.no/": (200, html(body, title="Kvisterø Bygg"))}), ctx)
+    assert claims["official_website"].value == "kvistero-bygg.no"
+    assert claims["official_website"].match["method"] == "address_and_name"
+    # the shorter name alone with our address is someone else's company until the whole name is shown
+    W._SEARCH.clear()
+    W._NAME_SEARCH.clear()
+    ctx = ctx_for(**rec)
+    body2 = "<h1>Kvisterø Bygg AS</h1><footer>Store Ringvei 11A, 9999 Testby</footer>"
+    run(FakeFetcher({"https://kvistero-bygg.no/": (200, html(body2, title="Kvisterø Bygg"))}), ctx)
+    assert not [c for c in ctx.claims if c.field == "official_website" and c.availability == "available"]
+    assert W.prefix_domains("HANSEN & SØNN AS") == [] and W.prefix_domains("FJELLBEKK AS") == []
