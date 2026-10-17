@@ -3977,6 +3977,10 @@ def test_part_of_name_domain_stays_withheld_without_the_whole_name_or_with_a_sha
     ctx, _ = _kh("<h1>Kvistholt</h1><footer>Kvistholt Andersen AS · Tlf 333 79 550</footer>"
                  "<p>Utleie: Kvistholt Eiendom AS</p>", [other])
     assert not ctx.claims_for("official_website")
+    # the other entity mails from this domain
+    ctx, _ = _kh("<h1>Kvistholt</h1><footer>Kvistholt Andersen AS · Tlf 333 79 550</footer>",
+                 [{**other, "epostadresse": "post@kvistholt.no"}])
+    assert not ctx.claims_for("official_website")
     # an address proof alone is not enough for a part-of-name domain
     ctx, _ = _kh("<h1>Kvistholt</h1><footer>Kvistholt Andersen AS · Semsveien 152, 9999 Testby</footer>", [other],
                  telefon=None)

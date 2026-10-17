@@ -1788,6 +1788,8 @@ async def _short_label_contact_proof(sp: "_Spend", ctx: CompanyContext, v: Verdi
         if (v.method == "phone_and_name" and phones & _digits_phones(r)) or \
                 (v.method == "email_and_name" and mail and (r.get("epostadresse") or "").strip().lower() == mail):
             return False  # the contact is shared with another entity carrying our word
+        if _declares_site(r, v.domain):
+            return False  # that entity mails from or declares this domain (HERHOLDT AS on herholdt.no)
         if _active(r) and _other_entity_on_site(v.pages, r, ctx):
             return False  # that entity appears on the site too
     v.detail = f"{v.detail}; the domain is part of the name, and the site shows the whole name"
