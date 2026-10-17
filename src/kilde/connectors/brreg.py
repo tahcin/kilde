@@ -539,3 +539,89 @@ def emit_change_claims(ctx: CompanyContext, snap: Snapshot, items: list[dict]) -
                                               ensure_ascii=False),
                               effective_date=date, anchor=("oppdateringsid", item.get("oppdateringsid")))
         ctx.add_claim("registry_change", "activity", value, ev, as_of=date, match=m)
+
+
+# ---------------------------------------------------------------- dated public activity
+REGISTER_NAMES = {
+    "registration_date": "Registered in the Central Coordinating Register for Legal Entities",
+    "business_register_date": "Registered in the Register of Business Enterprises",
+}
+
+
+def _iso_local(stamp: str) -> str:
+    """'2021-01-21 16:40:42' as the register gives it, in ISO form; no time zone is added (the register states none)."""
+    return stamp.strip().replace(" ", "T", 1)
+
+
+def emit_dated_activity(ctx: CompanyContext) -> None:
+    """Registry events as dated public activity, in the 'title (time)' shape of dated news: founding, registration,
+    renamings and the update-feed events already published as registry_change. Every item reuses the registry
+    response it came from (no new requests) and quotes the source's own time."""
+    m = {"method": "registry_endpoint", "detail": f"Enhetsregisteret record and update feed for {ctx.org}"}
+    by_id = {e.id: e for e in ctx.evidence}
+
+    def cite(claim) -> list:
+        return [by_id[i] for i in claim.evidence_ids if i in by_id]
+
+    items: list[tuple[str, str, list, str]] = []  # (sort key, title, evidence, as_of)
+    for c in ctx.claims_for("registry_change"):
+        v = c.value if isinstance(c.value, dict) else {}
+        evs = cite(c)
+        stamp = None
+        for e in evs:
+            try:
+                stamp = json.loads(e.claim_span or "{}").get("dato")
+            except (ValueError, TypeError, AttributeError):
+                stamp = None
+            if stamp:
+                break
+        stamp = stamp or v.get("date")
+        if not stamp or not evs:
+            continue
+        kind = v.get("type")
+        words = [w for w in v.get("changed") or [] if not w.startswith("unspecified")]
+        words = [w for w in words if not (w.endswith(" (re-registered)") and w[:-16] in words)]
+        if kind == "registered":
+            title = "New record in the Central Coordinating Register for Legal Entities"
+        elif kind == "deleted":
+            title = "Deleted from the Central Coordinating Register for Legal Entities"
+        elif words:
+            title = "Registry record updated: " + ", ".join(words)
+        else:
+            title = "Registry record updated"
+        items.append((stamp, f"{title} ({stamp})", evs, stamp[:10]))
+    founded = ctx.claims_for("incorporation_date")
+    if founded and isinstance(founded[0].value, str) and cite(founded[0]):
+        d = founded[0].value
+        items.append((d, f"Founded ({d})", cite(founded[0]), d))
+    seen_dates = set()
+    for field in ("registration_date", "business_register_date"):
+        for c in ctx.claims_for(field)[:1]:
+            if isinstance(c.value, str) and c.value not in seen_dates and cite(c):
+                seen_dates.add(c.value)
+                items.append((c.value, f"{REGISTER_NAMES[field]} ({c.value})", cite(c), c.value))
+    hist = (ctx.registry or {}).get("historiskeNavn") or []
+    former = ctx.claims_for("former_names")
+    snap = None
+    if former:
+        for i in former[0].evidence_ids:
+            snap = ctx.snapshots.get(i)
+            if snap is not None:
+                break
+    if snap is not None and isinstance(hist, list):
+        rows = sorted((h for h in hist if isinstance(h, dict) and h.get("navn") and h.get("tilDato")),
+                      key=lambda h: h["tilDato"])
+        current = (ctx.registry or {}).get("navn")
+        for k, h in enumerate(rows):
+            new = rows[k + 1]["navn"] if k + 1 < len(rows) else current
+            if not new or new == h["navn"]:
+                continue
+            stamp = _iso_local(h["tilDato"])
+            ev = ctx.add_evidence(snap, source_class=OFFICIAL_REGISTRY, method="brreg_entity_v1", licence=LICENCE,
+                                  span=json.dumps({"navn": h["navn"], "tilDato": h["tilDato"]}, ensure_ascii=False,
+                                                  separators=(",", ":")),
+                                  effective_date=stamp[:10], anchor=("tilDato", h["tilDato"]))
+            items.append((stamp, f"Renamed from {h['navn']} to {new} ({stamp})", [ev], stamp[:10]))
+    for _, title, evs, as_of in sorted(items, key=lambda x: (x[0], x[1]), reverse=True):
+        ctx.add_claim("dated_activity", "activity", title, evs, as_of=as_of, match=m,
+                      note="registry event published as dated public activity")

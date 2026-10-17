@@ -696,7 +696,7 @@ var FIELD={legal_name:'Legal name',former_names:'Former names',legal_form:'Legal
  site_email:'Email on website',site_phone:'Phone on website',site_contact_email:'Email on website',site_contact_phone:'Phone on website',contact_email:'Email on website',contact_phone:'Phone on website',
  public_contract_award:'Public contract won',procurement_notice:'Tender notice (as buyer)',research_project:'Research project',food_inspection:'Food safety inspection',
  approval_sentral_godkjenning:'Approved for building work (DiBK)',state_aid_award:'State aid award',
- job_ad:'Job ads',careers_page:'Careers page',hiring_signal:'Careers page or job posting',dated_news:'Dated news post',official_website_url:'Website address',registry_change:'Registry update',site_page_updated:'Website page updated',news:'News',news_item:'News'};
+ job_ad:'Job ads',careers_page:'Careers page',hiring_signal:'Careers page or job posting',dated_news:'Dated news post',dated_activity:'Dated registry event',official_website_url:'Website address',registry_change:'Registry update',site_page_updated:'Website page updated',news:'News',news_item:'News'};
 var PLAT={linkedin:'LinkedIn',facebook:'Facebook',instagram:'Instagram',youtube:'YouTube',x:'X',twitter:'X',tiktok:'TikTok',github:'GitHub',pinterest:'Pinterest',vimeo:'Vimeo'};
 var FIN=['revenue','operating_result','salary_costs','profit_before_tax','annual_result','total_assets','cash_and_bank','equity','debt'];
 var BREAK={total_assets:1};

@@ -74,6 +74,7 @@ FIELD_FAMILY: dict[str, str] = {
     # activity
     "registry_change": "activity", "site_page_updated": "activity",
     "news": "dated_news", "news_item": "dated_news", "site_news": "dated_news", "dated_news": "dated_news",
+    "dated_activity": "dated_news",
     "hiring_signal": "hiring",
     # external registers
     "lei": "external_registers", "financial_licence": "external_registers", "ticker": "external_registers",

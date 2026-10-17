@@ -335,6 +335,11 @@ async def run_batch(orgs: list[str], opt: Options) -> tuple[list[dict], dict]:
                 ctx.error("activity", repr(exc))
         elif ctx.registry and want("activity") and "change_feed" in batch_info:
             ctx.mark("registry_change", "activity", "not_available", note="No registry updates in the last 12 months")
+        if ctx.registry and want("activity") and not ctx.facts.get("deleted"):
+            try:
+                brreg.emit_dated_activity(ctx)
+            except Exception as exc:  # noqa: BLE001
+                ctx.error("activity", repr(exc))
         if ctx.facts.get("deleted") and not any(c.field == "job_ad" for c in ctx.claims):
             ctx.mark("job_ad", "hiring", "not_applicable", note="the company is deleted from the register")
         if not ctx.claims_for("job_ad") and not any(c.field == "job_ad" for c in ctx.claims) and ctx.registry:
