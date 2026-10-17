@@ -1,6 +1,6 @@
 # 100-company smoke test
 
-Produced on Oct 14, 2026 from a fresh clone of this repository at commit `12b459d`, with the documented command:
+Produced on Oct 17, 2026 from a fresh clone of this repository at commit `0d4caa7` (revision 2), with the documented command:
 
 ```bash
 uv sync --frozen
@@ -16,6 +16,6 @@ uv run --frozen kilde run --organisations smoke/smoke-companies.jsonl --output s
 | `run-report.json` | runtime, requests by host, DNS lookups, coverage, validation checks, p50/p95 per company |
 | `report.html` | the self-contained report; open it in a browser |
 | `snapshots/` | every saved response behind a quoted span, named by SHA-256 (Brønnøysund role responses have birth dates removed before hashing) |
-| `determinism.json` | the same command run twice: 0 companies with different facts (5,845 available facts in each run) |
+| `determinism.json` | the same command run twice: 0 companies with different facts (6,410 available facts in each run) |
 
-Result: 100 of 100 envelopes, validation passed, 1,388 outbound HTTP requests, about 4 minutes, $0.
+Result: 100 of 100 envelopes, validation passed, 1,421 outbound HTTP requests, about 6.6 minutes while five other runs shared the same connection, $0.

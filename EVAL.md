@@ -124,3 +124,16 @@ Later fixes (after round 17 and in rounds 18 to 20) addressed the judges' findin
 Version 1's final runs (commit 94a2493): smoke 100 valid with identical facts (5,797 each); 1,000 companies valid at about 13 requests per company in 22.5 minutes.
 
 All scores above are from our own scorer and auditors, not Builderr's. Builderr's reference pool includes every entrant's verified finds and its own crawlers, so recall against it will be lower.
+
+## Revision 2 (Oct 17, code 0d4caa7, fresh clone)
+
+Changes, all precision-first:
+- **Registry events as dated public activity.** Update-feed entries, founding, registration and renamings are also published as `dated_activity` in the `title (time)` shape with the register's own timestamp, citing the same Brønnøysund responses as the `registry_change` and identity claims. No new requests. Every company with a registry record gets dated activity (997 of 1,000; the rest are deleted entities).
+- **Invoice inboxes no longer veto a proven site.** An e-invoice or bookkeeping address on another domain (fakturapost.no, ebilag.com, an accountant's invoice inbox) no longer marks a site as presented by another company, unless that domain's owner appears as operator.
+- **Registry-declared website as a fallback.** A company's own declared site is published (domain only, nothing derived) when it is live, no other entity declares it, it shows the registry phone or e-mail (not an address on the site's own domain) or the whole name, no other org number sits in an operator position, and no other registered company is named while ours is not. Never for holding, investment and property companies, funds or co-owned properties.
+- **Registry phone or e-mail as proof** for part-of-name domains when the whole legal name is also shown and no namesake shares the contact; a guess from the name before "og" or "&".
+- **Precision fixes found by this round's audit (also present in version 2):** a `tel:` link's number is used only when the same number is written as visible text, and news articles whose canonical address is on another domain (chain articles copied onto a member site) are not the company's news.
+
+Runs from a fresh clone at 0d4caa7: 569 tests pass; smoke 100 valid and run twice with identical facts (6,410 each); seed-1717017 head-to-head batch 1,275 requests; two fresh 100-company samples 1,402 and 1,286 requests; 1,000 companies valid, 12,882 requests, 18.2 minutes (see `profiles-1000/`).
+
+Audit: every published web-family claim on the two fresh samples (111 and 122 claims) checked live by two independent auditors. On the first, 108 own and 3 correctly labelled related websites. On the second, one wrong-company phone (a hidden `tel:` number) and five syndicated chain articles, both present in version 2 as well and fixed above; after the fix no wrong-company fact remains. Remaining wrong values: a booking agency's performer pages read as news posts (right company). Every `dated_activity` claim (8,000+ across the runs) was checked by script against its saved response and a sample against the live register: 0 problems.

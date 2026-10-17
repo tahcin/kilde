@@ -121,7 +121,7 @@ Every run can diff against the previous envelopes (`--previous`, or automaticall
 
 Every request goes through one budgeted client. Defaults: 20 outbound HTTP requests per company and 30 minutes per batch (`--time-budget 1800`), both configurable. Identity, roles, accounts and workplaces for every company run first; external sources share what is left. Each step has a timeout; a step that times out rolls back anything it published half-way, and timed-out website steps get one unhurried second pass. DNS or network failures are reported as `failed`, never as absence. Transient failures (timeouts, HTTP 429 and 5xx, failed registry searches) end as `failed` and are retried in a second pass, so a slow site never turns into a different answer on the next run. When time or requests run out, the remaining facts are marked `failed` with the reason and every envelope is still written.
 
-Measured from a fresh clone (version 2): 1,000 companies with 12,765 requests (about 13 per company), in 12.9 minutes while other runs shared the connection (about 12 to 20 minutes depending on network); 100 companies in about 4 minutes with 1,388 requests. Details in [EVAL.md](EVAL.md). The run report gives HTTP requests and DNS lookups separately; DNS lookups are used only to drop name-derived domains that do not exist before any HTTP request. Fetches to private, loopback, link-local or other non-public addresses are refused, including on redirects, and each redirect hop must be allowed by its own host's robots.txt. Two runs of the same batch produce identical facts (Builderr runs each entry twice and compares).
+Measured from a fresh clone (revision 2, Oct 17): 1,000 companies with 12,882 requests (about 13 per company) in 18.2 minutes (version 2 on Oct 14: 12.9 minutes; about 12 to 20 minutes depending on network); 100 companies in about 4 to 7 minutes with 1,250 to 1,420 requests. Details in [EVAL.md](EVAL.md). The run report gives HTTP requests and DNS lookups separately; DNS lookups are used only to drop name-derived domains that do not exist before any HTTP request. Fetches to private, loopback, link-local or other non-public addresses are refused, including on redirects, and each redirect hop must be allowed by its own host's robots.txt. Two runs of the same batch produce identical facts (Builderr runs each entry twice and compares).
 
 | Item | Cost |
 |---|---|
@@ -159,7 +159,7 @@ To rebuild without the crawler, run `scripts/build_website_seeds.py` and `script
 ## Tests and evaluation
 
 ```bash
-uv run --extra dev pytest -q   # 538 tests
+uv run --extra dev pytest -q   # 569 tests
 uv run python scorer/score.py --envelopes out/envelopes.jsonl --expected-count 100 --report-html out/report.html --out out/score.json
 ```
 

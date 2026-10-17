@@ -1,6 +1,6 @@
 # 1,000 company profiles
 
-Produced on Oct 14, 2026 from a fresh clone of this repository at commit `12b459d`, on 1,000 random companies from Builderr's public universe (seed 1000, none used during development):
+Produced on Oct 17, 2026 from a fresh clone of this repository at commit `0d4caa7` (revision 2), on 1,000 random companies from Builderr's public universe (seed 1000, none used during development):
 
 ```bash
 uv run --frozen kilde run --organisations companies-1000.jsonl --output run1000/envelopes.jsonl --run-id profiles-1000 --expected-count 1000
@@ -14,16 +14,17 @@ uv run --frozen kilde run --organisations companies-1000.jsonl --output run1000/
 | `report.html` | the self-contained report for all 1,000 companies |
 | `snapshots.tar.gz` | the saved responses behind every quoted span |
 
-Result: 1,000 of 1,000 envelopes, validation passed, 12,765 outbound HTTP requests (about 13 per company), 12.9 minutes while three other runs shared the same connection, $0.
+Result: 1,000 of 1,000 envelopes, validation passed, 12,882 outbound HTTP requests (about 13 per company), 18.2 minutes, $0.
 
 | Fact family | Companies | Facts |
 |---|---|---|
-| Verified official website | 120 | 120 |
-| Related website (page on a shared or group site, labelled) | 29 | 29 |
-| Social profiles | 65 | 126 |
-| Hiring signals (careers pages, postings, NAV ads) | 22 | 35 |
-| NAV job ads | 8 | 19 |
-| Dated news posts | 31 | 370 |
+| Verified official website | 118 | 118 |
+| Related website (page on a shared or group site, labelled) | 28 | 28 |
+| Social profiles | 63 | 122 |
+| Hiring signals (careers pages, postings, NAV ads) | 23 | 36 |
+| NAV job ads | 9 | 20 |
+| Dated news posts | 30 | 360 |
+| Dated registry activity (update feed, founding, registration, renamings) | 997 | 5,537 |
 | State aid awards (Støtteregisteret) | 94 | 578 |
 | Research and SkatteFUNN projects | 23 | 60 |
 | Public contracts won (TED) | 8 | 22 |

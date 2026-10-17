@@ -2,12 +2,12 @@
   "run_id": "profiles-1000",
   "agent": "Kilde",
   "version": "1.0.0",
-  "commit": "12b459db53ce9cc2f4c90a52e05bb1b71b85a4ec",
-  "started_at": "2026-10-14T15:28:13Z",
-  "completed_at": "2026-10-14T15:40:48Z",
+  "commit": "0d4caa73b8d2fc54c4d4f082b0431b10a57125a1",
+  "started_at": "2026-10-17T12:08:59Z",
+  "completed_at": "2026-10-17T12:26:33Z",
   "expected_count": 1000,
   "emitted_envelopes": 1000,
-  "runtime_ms": 775414,
+  "runtime_ms": 1093780,
   "publication_gate": {
     "withheld": 8,
     "notes": [
@@ -21,43 +21,43 @@
       "932686791 site_contact_email: email domain hotmail.com differs from the verified site hansenmultiservice.no and the registry email"
     ]
   },
-  "website_retries": 31,
+  "website_retries": 41,
   "company_runtime_ms": {
-    "p50": 16312,
-    "p95": 37653,
-    "max": 127874
+    "p50": 17556,
+    "p95": 45486,
+    "max": 128472
   },
   "operations": {
-    "requests": 12765,
+    "requests": 12882,
     "max_requests": 20000,
-    "dns_lookups": 19517,
+    "dns_lookups": 19877,
     "cache_hits": 0,
     "by_host": {
-      "data.brreg.no": 6443,
+      "data.brreg.no": 6437,
       "sgregister.dibk.no": 188,
       "api.finanstilsynet.no": 75,
       "api.gleif.org": 38,
-      "vannmeisling.no": 36,
-      "pam-stilling-feed.nav.no": 24,
-      "hans-helseth.no": 23,
+      "hans-helseth.no": 36,
+      "www.kafeoslo.no": 33,
+      "pam-stilling-feed.nav.no": 31,
+      "www.gassafe.no": 28,
+      "shoplifter.no": 25,
+      "www.nesoddguiden.no": 23,
+      "veldre-almenning.no": 21,
+      "www.buskerudbs.no": 21,
       "puerfons.no": 20,
       "harry-martinsen.no": 20,
       "msm.no": 20,
       "byggevarervest.no": 19,
       "www.funkworks.no": 19,
+      "vannmeisling.no": 19,
       "www.civilmanagement.no": 19,
       "berggynekologi.no": 18,
       "stereoprod.no": 18,
       "lienelektro.no": 18,
       "www.halob.no": 18,
-      "www.kafeoslo.no": 18,
       "emeliehudpleie.no": 18,
-      "takkforbilen.no": 18,
-      "bytte-varmtvannsbereder-moss.no": 18,
-      "www.borettslaget.no": 17,
-      "www.datarecoveryoslo.no": 17,
-      "jeloyelektro.no": 17,
-      "vestbo.no": 17
+      "takkforbilen.no": 18
     },
     "third_party_cost_usd": 0.0,
     "llm_calls": 0,
@@ -84,8 +84,8 @@
     "financials": 1.0,
     "leadership": 0.996,
     "locations": 0.752,
-    "web_presence": 0.149,
-    "hiring": 0.022,
+    "web_presence": 0.146,
+    "hiring": 0.023,
     "activity": 1.0
   }
 }

@@ -3,9 +3,9 @@
     "smoke1",
     "smoke2"
   ],
-  "commit": "12b459d",
+  "commit": "0d4caa7",
   "companies": 100,
   "differing_companies": [],
-  "available_facts_run1": 5845,
-  "available_facts_run2": 5845
+  "available_facts_run1": 6410,
+  "available_facts_run2": 6410
 }
