@@ -3868,11 +3868,13 @@ def _declarers(host, orgs):
             (200, json.dumps({"_embedded": {"enheter": rows}}), "application/json"))
 
 
-def _declared_case(body, declarers=(OURS,), title="Fjellbekk | Shipbrokers", extra=None):
+def _declared_case(body, declarers=(OURS,), title="Fjellbekk | Shipbrokers", extra=None, phone=False):
     url, resp = _declarers("fjellbekk.no", declarers)
+    if phone:
+        body += "<p>Ring oss: 41 00 00 01</p>"
     pages = {"https://fjellbekk.no/": (200, html(body, title=title)), url: resp}
     pages.update(extra or {})
-    ctx = ctx_for(hjemmeside="www.fjellbekk.no")
+    ctx = ctx_for(hjemmeside="www.fjellbekk.no", telefon="41 00 00 01")
     claims = run(FakeFetcher(pages), ctx)
     return ctx, claims
 
@@ -3880,7 +3882,7 @@ def _declared_case(body, declarers=(OURS,), title="Fjellbekk | Shipbrokers", ext
 def test_declared_live_site_without_the_legal_name_is_official_with_nothing_derived():
     """Strand Shipping shape: a script-built page that shows only a title with the distinctive name word."""
     body = '<div id="app"></div><a href="https://www.facebook.com/fjellbekk">f</a>'
-    ctx, claims = _declared_case(body)
+    ctx, claims = _declared_case(body, phone=True)
     site = claims["official_website"]
     assert site.availability == "available" and site.value == "fjellbekk.no"
     assert site.match["method"] == "registry_declared_live"
@@ -3890,7 +3892,7 @@ def test_declared_live_site_without_the_legal_name_is_official_with_nothing_deri
 
 
 def test_declared_live_site_shared_by_a_few_declarers_gives_the_domain_only():
-    ctx, claims = _declared_case("<p>Velkommen</p>", declarers=(OURS, OTHER, THIRD))
+    ctx, claims = _declared_case("<p>Velkommen</p>", declarers=(OURS, OTHER, THIRD), phone=True)
     assert claims["official_website"].value == "fjellbekk.no"
     assert "3 registry entities" in claims["official_website"].match["detail"]
 
@@ -3912,7 +3914,7 @@ def test_declared_site_with_another_org_number_in_the_footer_stays_related():
 def test_declared_site_with_another_org_number_only_in_body_text_is_official():
     body = (f"<h1>Fjellbekk</h1><section><p>Vi leverte nytt tak for kunden Nabo Bygg AS (org.nr {OTHER}) "
             "i fjor.</p></section>")
-    ctx, claims = _declared_case(body)
+    ctx, claims = _declared_case(body, phone=True)
     assert claims["official_website"].value == "fjellbekk.no"
     assert OTHER in claims["official_website"].match["detail"]
 
@@ -4077,10 +4079,11 @@ def test_declared_foreign_group_site_is_not_official_even_with_our_contact():
 def test_declared_site_presenting_another_registered_company_is_related():
     """Strand Shipping shape: strand-shipping.no is titled 'Strand Shipping AS', a sister of the declaring
     STRAND SHIPPING INVEST AS; our own full name is not on the site."""
-    rec = dict(navn="FJELLBEKK SHIPPING INVEST AS", hjemmeside="www.fjellbekk.no")
+    rec = dict(navn="FJELLBEKK SHIPPING MARIN AS", hjemmeside="www.fjellbekk.no", telefon="41 00 00 01")
     url, resp = _declarers("fjellbekk.no", (OURS,))
     sister = _brreg("enheter", "Fjellbekk%20Shipping", [{"organisasjonsnummer": SISTER, "navn": "FJELLBEKK SHIPPING AS"}])
-    pages = {"https://fjellbekk.no/": (200, html("<div id='app'></div>", title="Fjellbekk Shipping AS – Shipbrokers")),
+    pages = {"https://fjellbekk.no/": (200, html("<div id='app'></div><p>Tlf 41 00 00 01</p>",
+                                                title="Fjellbekk Shipping AS – Shipbrokers")),
              url: resp, **sister}
     ctx = ctx_for(**rec)
     claims = run(FakeFetcher(pages), ctx)
@@ -4090,8 +4093,38 @@ def test_declared_site_presenting_another_registered_company_is_related():
     W._HJEM_CACHE.clear()
     W._SEARCH.clear()
     W._NAME_SEARCH.clear()
-    pages["https://fjellbekk.no/"] = (200, html("<footer>Eier: Fjellbekk Shipping Invest AS</footer>",
+    pages["https://fjellbekk.no/"] = (200, html("<footer>Eier: Fjellbekk Shipping Marin AS</footer>",
                                                  title="Fjellbekk Shipping AS – Shipbrokers"))
     ctx = ctx_for(**rec)
     claims = run(FakeFetcher(pages), ctx)
     assert claims["official_website"].value == "fjellbekk.no"
+
+
+def test_declared_site_of_a_holding_or_named_by_a_founder_surname_is_not_official():
+    """Gjethammer shape: GJETHAMMER INVEST AS declares sagaseafood.no, the operating company's site, which names
+    its founder 'Sveinung Gjethammer' and 'Saga Seafood AS' and shows the holding's phone."""
+    body = ("<p>Founder Sveinung Fjellbekk established Kvist Seafood in 2004.</p>"
+            "<footer>Kvist Seafood AS - Lyngveien 12B, 9999 Testby · Tlf 41 00 00 01</footer>")
+    url, resp = _declarers("kvistseafood.no", (OURS,))
+    other = _brreg("enheter", "Kvist%20Seafood", [{"organisasjonsnummer": OTHER, "navn": "KVIST SEAFOOD AS"}])
+    for navn in ("FJELLBEKK INVEST AS", "FJELLBEKK MARIN AS"):
+        W._HJEM_CACHE.clear()
+        W._SEARCH.clear()
+        W._NAME_SEARCH.clear()
+        pages = {"https://kvistseafood.no/": (200, html(body, title="Kvist Seafood")), url: resp, **other}
+        ctx = ctx_for(navn=navn, hjemmeside="kvistseafood.no", telefon="41 00 00 01")
+        f = FakeFetcher(pages)
+        run(f, ctx)
+        assert not [c for c in ctx.claims if c.field == "official_website" and c.availability == "available"], navn
+    # the second (not a holding) sees the operating company in the visible text: a related website
+    rel = [c for c in ctx.claims if c.field == "related_website"]
+    assert rel and rel[0].value["other_organisation_number"] == OTHER
+
+
+def test_declared_site_word_tie_and_own_domain_mail_are_no_proof():
+    """A single name word, or the registry email shown on the declared domain itself, does not tie the site."""
+    url, resp = _declarers("fjellbekk.no", (OURS,))
+    pages = {"https://fjellbekk.no/": (200, html("<p>Skriv til post@fjellbekk.no</p>", title="Fjellbekk")), url: resp}
+    ctx = ctx_for(hjemmeside="fjellbekk.no", epostadresse="post@fjellbekk.no")
+    run(FakeFetcher(pages), ctx)
+    assert not [c for c in ctx.claims if c.field == "official_website" and c.availability == "available"]
