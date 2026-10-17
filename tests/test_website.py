@@ -4036,3 +4036,23 @@ def test_declared_site_tied_only_by_a_trade_word_is_not_official():
     ctx = ctx_for(navn="MUR & FLISARBEIDER AS", hjemmeside="murflis.no")
     run(FakeFetcher(pages), ctx)
     assert not [c for c in ctx.claims if c.field == "official_website" and c.availability == "available"]
+
+
+def test_declared_site_tied_only_by_its_own_host_name_or_a_short_word_is_not_official():
+    """Sarsia shape: a redirect stub whose title is the domain; New Man's Land shape: 'land' alone is no tie."""
+    url, resp = _declarers("fjellbekkventure.com", (OURS,))
+    pages = {"https://fjellbekkventure.com/": (200, html("<p>The document is located here.</p>",
+                                                        title="fjellbekkventure.com")), url: resp}
+    ctx = ctx_for(navn="FJELLBEKK VENTURE AS", hjemmeside="fjellbekkventure.com")
+    run(FakeFetcher(pages), ctx)
+    assert not [c for c in ctx.claims if c.field == "official_website" and c.availability == "available"]
+    url, resp = _declarers("nyland.no", (OURS,))
+    pages = {"https://nyland.no/": (200, html("<p>Et land i nord</p>", title="Velkommen")), url: resp}
+    ctx = ctx_for(navn="NY LAND AS", hjemmeside="nyland.no")
+    run(FakeFetcher(pages), ctx)
+    assert not [c for c in ctx.claims if c.field == "official_website" and c.availability == "available"]
+    W._HJEM_CACHE.clear()
+    pages = {"https://nyland.no/": (200, html("<p>Portefølje</p>", title="Ny Land - Creative Portfolio")), url: resp}
+    ctx = ctx_for(navn="NY LAND AS", hjemmeside="nyland.no")
+    claims = run(FakeFetcher(pages), ctx)
+    assert claims["official_website"].value == "nyland.no"  # the whole name, run together, is shown

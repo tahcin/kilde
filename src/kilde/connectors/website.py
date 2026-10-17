@@ -5679,7 +5679,14 @@ async def declared_live_site(sp: "_Spend", ctx: CompanyContext, verdicts: list["
     mail = (e.get("epostadresse") or "").strip().lower()
     contact = next((ph for ph in sorted(_digits_phones(e)) if ph in shown), None) or (
         mail if mail and re.search(r"(?<![\w.\-])" + re.escape(mail) + r"(?![\w\-])", text.lower()) else None)
-    hit = contact or next((t for t in toks if re.search(r"(?<![a-z0-9])" + re.escape(t) + r"(?![a-z0-9])", seen)), None)
+    # host names do not count ('sarsiaventure.com' as the title of a redirect stub)
+    seen = re.sub(r"[\w.%+\-]+@[\w.\-]+", " ", seen)
+    seen = re.sub(r"(?:[a-z0-9\-]+\.)+(?:no|com|net|org|se|dk|io|eu|as|biz|info|nu)\b", " ", seen)
+    whole = re.sub(r"[^a-z0-9]", "", _translit(" ".join(w for w in name_words(e.get("navn") or "")
+                                                        if w not in FORM_NAME_WORDS)))
+    hit = contact or next((t for t in toks if len(t) >= 5 and re.search(
+        r"(?<![a-z0-9])" + re.escape(t) + r"(?![a-z0-9])", seen)), None) or (
+        whole if len(whole) >= 6 and whole in re.sub(r"[^a-z0-9]", "", seen) else None)
     if not hit:
         return False
     if not contact and _copyright_other(text, e.get("navn") or ""):
