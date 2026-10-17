@@ -325,11 +325,12 @@ def test_partner_social_links_dropped_and_footer_id_kept():
 
 
 def test_tel_href_is_url_decoded():
-    body = '<footer>Fjellbekk Trevare AS <a href="tel:41%2000%2000%2001">Ring</a></footer>'
+    body = '<footer>Fjellbekk Trevare AS <a href="tel:41%2000%2000%2001">Ring 41 00 00 01</a></footer>'
     f = FakeFetcher({"https://fjellbekktrevare.no/": (200, html(body))})
     claims = run(f, ctx_for(telefon="41000001"))
     assert claims["official_website"].match["method"] == "phone_and_name"
     assert claims["site_contact_phone"].value == "+4741000001"
+    assert W.norm_phone("tel:41%2000%2000%2001") == "+4741000001"
 
 
 def test_structured_data_with_other_entity_name_skipped():
@@ -589,7 +590,7 @@ def test_exclusive_site_with_orgnr_on_about_page_sets_flag():
 
 
 def test_foreign_country_code_is_kept():
-    body = ('<h1>Fjellbekk Trevare</h1><a href="tel:+372 506 9999">Helista</a>'
+    body = ('<h1>Fjellbekk Trevare</h1><a href="tel:+372 506 9999">+372 506 9999</a>'
             '<a href="tel:+37259180640">Helista</a><a href="tel:004741000001">x</a>')
     f = FakeFetcher({"https://fjellbekk.ee/": (200, html(body))})
     ctx = ctx_for(hjemmeside="fjellbekk.ee", mobil="+372 5069999")
@@ -4129,3 +4130,49 @@ def test_declared_site_word_tie_and_own_domain_mail_are_no_proof():
     ctx = ctx_for(hjemmeside="fjellbekk.no", epostadresse="post@fjellbekk.no")
     run(FakeFetcher(pages), ctx)
     assert not [c for c in ctx.claims if c.field == "official_website" and c.availability == "available"]
+
+
+def test_tel_link_number_must_be_written_as_visible_text():
+    """Bygdesaga shape: href 'tel:75171288' (another company's number) behind a link that shows 941 56 933;
+    PK Byggservice shape: href 'tel:+4795040411' behind '+47 954 41 705'."""
+    body = (f'<footer>Fjellbekk Trevare AS · Org.nr {OURS} · <a href="tel:75171288">Tlf 941 56 933</a>'
+            ' · <a href="tel:+4795040411"><span>+47 954 41 705</span></a></footer>')
+    f = FakeFetcher({"https://fjellbekk.no/": (200, html(body))})
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(f, ctx)
+    phones = sorted(c.value for c in ctx.claims if c.field == "site_contact_phone" and c.availability == "available")
+    assert "+4775171288" not in phones and "+4795040411" not in phones
+    assert "+4794156933" in phones
+    # an icon link with no number anywhere in its block is not a published phone
+    f = FakeFetcher({"https://fjellbekk.no/": (200, html(f'<footer>Fjellbekk Trevare AS · Org.nr {OURS} '
+                                                         '<a href="tel:75171288"><i class="icon-phone"></i></a></footer>'))})
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(f, ctx)
+    assert not [c for c in ctx.claims if c.field == "site_contact_phone" and c.availability == "available"]
+
+
+def test_syndicated_chain_articles_are_not_company_news():
+    """Elmann shape: elmann.no/aktuelt lists Norgeseliten chain articles whose pages declare a canonical URL on
+    norgeseliten.no; none of them is the company's news."""
+    listing = ('<h1>Aktuelt</h1>'
+               + "".join(f'<article><a href="/aktuelt/sak-{i}/">Sak nummer {i} om strøm</a><time datetime="2025-0{i}-10">'
+                         f'10.0{i}.2025</time></article>' for i in range(1, 6)))
+    pages = {"https://fjellbekk.no/": (200, html(f'<a href="/aktuelt/">Aktuelt</a><footer>Org.nr {OURS}</footer>')),
+             "https://fjellbekk.no/aktuelt/": (200, html(listing))}
+    for i in range(1, 6):
+        head = f'<link rel="canonical" href="https://www.kjedeeliten.no/aktuelt/sak-{i}/">'
+        art = (f'<h1>Sak nummer {i} om strøm</h1><time datetime="2025-0{i}-10T10:00:00+02:00">10.0{i}.2025</time>'
+               '<p>Tekst.</p>')
+        pages[f"https://fjellbekk.no/aktuelt/sak-{i}/"] = (200, html(art, head=head))
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(FakeFetcher(pages), ctx)
+    assert not [c for c in ctx.claims if c.field == "dated_news" and c.availability == "available"]
+    for i in range(1, 6):  # the same listing with its own canonical URLs is the company's news
+        url = f"https://fjellbekk.no/aktuelt/sak-{i}/"
+        pages[url] = (200, pages[url][1].replace("kjedeeliten.no", "fjellbekk.no"))
+    ctx = ctx_for(hjemmeside="fjellbekk.no")
+    run(FakeFetcher(pages), ctx)
+    assert [c for c in ctx.claims if c.field == "dated_news" and c.availability == "available"]
+    assert W.foreign_canonical(W.parse_page(Snapshot(url="https://fjellbekk.no/a/", final_url="https://fjellbekk.no/a/",
+                               status=200, retrieved_at="x", content=html("", head='<link rel="canonical" href="/a/">').encode(),
+                               content_type="text/html")), "fjellbekk.no") is None

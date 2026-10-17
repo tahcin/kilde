@@ -700,10 +700,34 @@ def find_phone(page: Page, wanted: set[str], names: list[list[str]] | None = Non
                 return _window(page.text, m.start(), m.end(), 25)
     for a in page.soup.find_all("a", href=re.compile(r"^tel:", re.I)):
         d = re.sub(r"\D", "", unquote(a["href"]))
-        if len(d) >= 8 and d[-8:] in wanted:
+        if len(d) >= 8 and d[-8:] in wanted and tel_link_shown(a, page, d):
             if names is None or _phone_in_named_block(a, page, names):
                 return a["href"]
     return None
+
+
+def _shown_numbers(text: str) -> set[str]:
+    runs = [re.sub(r"\D", "", m.group(0)) for m in re.finditer(r"\+?\d[\d \u00a0.\-]{6,}\d", text or "")]
+    return {d[-8:] for d in runs if 8 <= len(d) <= 15}
+
+
+def tel_link_shown(a, page: Page, number: str) -> bool:
+    """A tel: link's number counts only when it is written as visible text: in the link itself, or, when the
+    link shows no number (an icon, 'Ring oss'), in its contact block. A link whose text shows a different number
+    (href 'tel:75171288' behind '941 56 933') is a template leftover, never the company's phone."""
+    want = re.sub(r"\D", "", number)[-8:]
+    own = _shown_numbers(a.get_text(" "))
+    if own:
+        return want in own
+    node = a
+    for _ in range(BLOCK_DEPTH):
+        node = node.parent
+        if node is None or getattr(node, "name", None) in (None, "body", "html", "[document]"):
+            break
+        text = node.get_text(" ")
+        if _shown_numbers(text):
+            return want in _shown_numbers(text)
+    return False
 
 
 STREET_SUFFIX = (("vegen", "veien", "veg", "vei", "vn"), ("gata", "gaten", "gate", "gt"))
@@ -3529,7 +3553,7 @@ def extract_contacts(pages: list[Page], domain: str, registry_phones: set[str] =
                 put(emails, addr, p, _window(p.text, m.start(), m.end(), 20), _nth_element_for(p, m.group(0), k))
         for a in p.soup.find_all("a", href=re.compile(r"^tel:", re.I)):
             n = norm_phone(a["href"])
-            if n:
+            if n and tel_link_shown(a, p, n):
                 put(phones, n, p, a["href"][:100], a)
         for m in PHONE_TEXT.finditer(p.text):
             k = seen(m.group(0).strip())
@@ -5129,7 +5153,21 @@ def _is_wix(page: Page) -> bool:
     return bool((gen and "wix" in (gen.get("content") or "").lower()) or b"static.wixstatic.com" in page.snap.content)
 
 
-async def _undated_listing(sp: "_Spend", page: Page, domain: str, floor: str, found: dict) -> None:
+def foreign_canonical(page: Page, domain: str) -> str | None:
+    """The page declares its canonical URL on another domain (a chain's article syndicated onto a member's site,
+    '<link rel="canonical" href="https://www.norgeseliten.no/aktuelt/...">'): returns that host."""
+    for ln in page.soup.find_all("link", href=True):
+        rel = ln.get("rel") or []
+        rel = rel if isinstance(rel, list) else str(rel).split()
+        if "canonical" in [str(r).lower() for r in rel]:
+            h = host_of(urljoin(page.url, ln["href"]))
+            if h and not same_site(h, domain) and not same_site(h, page.host):
+                return h
+    return None
+
+
+async def _undated_listing(sp: "_Spend", page: Page, domain: str, floor: str, found: dict,
+                           synd: list | None = None) -> None:
     """A news listing without dates: read its newest article pages (in page order, while the budget allows,
     at most five) and keep those that declare their own publication date."""
     for url, text, loose in listing_articles(page, domain)[:5]:
@@ -5139,6 +5177,10 @@ async def _undated_listing(sp: "_Spend", page: Page, domain: str, floor: str, fo
         if not art or not same_site(art.host, domain) or urlsplit(art.url).path in ("", "/") \
                 or art.url.rstrip("/") == page.url.rstrip("/"):
             continue
+        if foreign_canonical(art, domain):
+            if synd is not None:
+                synd.append(url)
+            continue  # another domain's article syndicated onto this site
         got = article_published(art, loose)
         if not got:
             continue
@@ -5275,7 +5317,7 @@ async def collect_dated_news(sp: "_Spend", ctx: CompanyContext, pages: list[Page
                     if _news_ok(it, floor, domain) and it["url"] not in found:
                         found[it["url"]] = (it, page.snap, None)
             if not found and not scope.shared:
-                await _undated_listing(sp, page, domain, floor, found)
+                await _undated_listing(sp, page, domain, floor, found, ctx.facts.setdefault("website_news_syndicated", []))
             ctx.facts["website_dated_news_checked"] = (ctx.facts.get("website_dated_news_checked") or [])[:2] + [page.url]
             if NEWS_PATH.search(urlsplit(page.url).path + "/") or listings:
                 ctx.facts["website_news_section"] = page.url
@@ -5287,6 +5329,10 @@ async def collect_dated_news(sp: "_Spend", ctx: CompanyContext, pages: list[Page
             if lp is None or not sp.can(1):
                 continue
             art, _ = await _fetch_page(sp, url)
+            if art and same_site(art.host, domain) and foreign_canonical(art, domain):
+                ctx.facts.setdefault("website_news_syndicated", []).append(url)
+                del found[url]  # another domain's article syndicated onto this site
+                continue
             if art and same_site(art.host, domain):
                 got = article_datetime(art)
                 if got and got[0][:10] == it["datetime"][:10]:
@@ -5299,6 +5345,10 @@ async def collect_dated_news(sp: "_Spend", ctx: CompanyContext, pages: list[Page
             for it in inline_news(p):
                 if _news_ok(it, floor, domain) and it["url"] not in found:
                     found[it["url"]] = (it, p.snap, None)
+    if ctx.facts.get("website_news_syndicated"):
+        # the site carries a chain's or partner's articles: only items whose own page was read and declares no
+        # other domain as canonical are the company's news
+        found = {u: x for u, x in found.items() if x[2] is None and _page_key(x[1].final_url or x[1].url) == _page_key(u)}
     if not found:
         return
     if _activity_blocked(ctx, "dated_news"):
@@ -5353,6 +5403,9 @@ async def _sitemap_posts(sp: "_Spend", ctx: CompanyContext, origin: str, domain:
             art, _st = await _fetch_page(sp, u)
             if not art or not same_site(art.host, domain):
                 continue
+            if foreign_canonical(art, domain):
+                ctx.facts.setdefault("website_news_syndicated", []).append(u)
+                continue  # another domain's article syndicated onto this site
             got = article_datetime(art)
             h1 = art.soup.find("h1")
             title = _clean(h1.get_text(" ", strip=True), 200) if h1 else None
