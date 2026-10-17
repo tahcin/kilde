@@ -4005,3 +4005,34 @@ def test_domain_from_the_name_before_og():
     run(FakeFetcher({"https://kvistero-bygg.no/": (200, html(body2, title="Kvisterø Bygg"))}), ctx)
     assert not [c for c in ctx.claims if c.field == "official_website" and c.availability == "available"]
     assert W.prefix_domains("HANSEN & SØNN AS") == [] and W.prefix_domains("FJELLBEKK AS") == []
+
+
+def test_declared_site_of_a_foreign_parent_by_copyright_is_not_official():
+    """Brady shape: the declared site is the foreign parent's, '© 2026 Fjellbekk Technologies Limited'."""
+    body = "<h1>Fjellbekk</h1><footer>© Copyright 2026 Fjellbekk Technologies Limited. All rights reserved</footer>"
+    ctx, claims = _declared_case(body)
+    assert not [c for c in ctx.claims if c.field == "official_website" and c.availability == "available"]
+
+
+def test_declared_site_with_the_registry_phone_is_official_under_a_trade_name():
+    """ER Trading shape: the copyright names a short trade name, but the registry phone is on the page."""
+    body = "<h1>FT Trevare</h1><footer>Copyright © FT Trevare AS · Lyngveien 12B · (+47) 41 00 00 01</footer>"
+    url, resp = _declarers("fjellbekk.no", (OURS,))
+    pages = {"https://fjellbekk.no/": (200, html(body, title="Hjem - FT Trevare")), url: resp}
+    ctx = ctx_for(hjemmeside="www.fjellbekk.no", telefon="41 00 00 01")
+    claims = run(FakeFetcher(pages), ctx)
+    assert claims["official_website"].value == "fjellbekk.no"
+    assert "registry contact" in claims["official_website"].match["detail"]
+    W._HJEM_CACHE.clear()
+    ctx2 = ctx_for(hjemmeside="www.fjellbekk.no")  # without the phone, the other copyright owner blocks it
+    run(FakeFetcher(pages), ctx2)
+    assert not [c for c in ctx2.claims if c.field == "official_website" and c.availability == "available"]
+
+
+def test_declared_site_tied_only_by_a_trade_word_is_not_official():
+    """Mur & Flisarbeider shape: 'Mur og puss' on a page is a trade word, not our name."""
+    url, resp = _declarers("murflis.no", (OURS,))
+    pages = {"https://murflis.no/": (200, html("<p>Mur og puss, flislegging</p>", title="Kvalitet")), url: resp}
+    ctx = ctx_for(navn="MUR & FLISARBEIDER AS", hjemmeside="murflis.no")
+    run(FakeFetcher(pages), ctx)
+    assert not [c for c in ctx.claims if c.field == "official_website" and c.availability == "available"]

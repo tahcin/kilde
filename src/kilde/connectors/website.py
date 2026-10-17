@@ -5630,6 +5630,21 @@ async def _declarer_count(sp: "_Spend", host: str) -> int | None:
     return len({r.get("organisasjonsnummer") for r in rows if bare(host_of(r.get("hjemmeside") or "")) == host})
 
 
+COPYRIGHT_OWNER = re.compile(r"(?:©|\([cC]\)|[Cc]opyright|COPYRIGHT)\s*(?:[Cc]opyright\s*)?(?:\d{4}(?:\s*[-–]\s*\d{4})?\s*)?"
+                             r"((?:[A-ZÆØÅ0-9][\w&.\-]*\s+){1,5}?)(AS|ASA|A/S|Ltd\.?|Limited|LIMITED|GmbH|AB|Oy|Inc\.?|LLC|BV|ApS)(?![\w])")
+
+
+def _copyright_other(text: str, our_name: str) -> str | None:
+    """A copyright line naming a company that is neither us nor a name made of our name's words (a sister
+    'Strand Shipping AS' beside 'Strand Shipping Invest AS' is family): returns that company's name."""
+    ours = {_translit(w) for w in name_words(our_name)}
+    for m in COPYRIGHT_OWNER.finditer(text):
+        theirs = {_translit(w) for w in name_words(m.group(1))} - {"all", "rights", "reserved"}
+        if theirs and not (theirs <= ours or ours <= theirs):
+            return f"{m.group(1).strip()} {m.group(2)}"
+    return None
+
+
 async def declared_live_site(sp: "_Spend", ctx: CompanyContext, verdicts: list["Verdict"],
                              registry_host: str | None) -> bool:
     """The company's own registry-declared website, live and not parked, published as official_website (the
@@ -5652,26 +5667,35 @@ async def declared_live_site(sp: "_Spend", ctx: CompanyContext, verdicts: list["
     for p in v.pages:
         if any(n not in v.ignore_orgs for n in other_orgnrs(p, ctx.org)) and v.status != "related":
             return False
-    toks = [t for t in _core_tokens(e.get("navn") or "") if len(t) >= 3 and t not in GENERIC_WORDS
-            and t not in REGIONS and t not in COMMON_LABELS and t not in COMMON_NOUNS]
+    toks = [t for t in _core_tokens(e.get("navn") or "") if len(t) >= 4 and t not in GENERIC_WORDS
+            and t not in REGIONS and t not in COMMON_LABELS and t not in COMMON_NOUNS and not generic_word(t)]
     home = v.pages[0]
     title = home.soup.title.get_text(" ", strip=True) if home.soup.title else ""
-    seen = _translit(" ".join([title] + [p.text for p in v.pages]))
-    hit = next((t for t in toks if re.search(r"(?<![a-z0-9])" + re.escape(t) + r"(?![a-z0-9])", seen)), None)
+    text = " ".join([title] + [p.text for p in v.pages])
+    seen = _translit(text)
+    # strong tie: the registry phone or email on the site; weak tie: a distinctive word of our name, with no
+    # copyright line naming another company (a foreign parent's 'Brady Technologies Limited')
+    shown = {re.sub(r"\D", "", m.group(0))[-8:] for m in PHONE_TEXT.finditer(text)}
+    mail = (e.get("epostadresse") or "").strip().lower()
+    contact = next((ph for ph in sorted(_digits_phones(e)) if ph in shown), None) or (
+        mail if mail and re.search(r"(?<![\w.\-])" + re.escape(mail) + r"(?![\w\-])", text.lower()) else None)
+    hit = contact or next((t for t in toks if re.search(r"(?<![a-z0-9])" + re.escape(t) + r"(?![a-z0-9])", seen)), None)
     if not hit:
+        return False
+    if not contact and _copyright_other(text, e.get("navn") or ""):
         return False
     n = await _declarer_count(sp, registry_host)
     if n is None or n >= DECLARED_CROWD:
         return False
     reg = next((c for c in ctx.claims_for("registry_website") if c.availability == "available"), None)
     evs = [x for x in ctx.evidence if reg and x.id in reg.evidence_ids]
-    span = title if title and _translit(title).find(hit) >= 0 else None
+    span = title if title and not contact and _translit(title).find(hit) >= 0 else None
     evs.append(_ev(ctx, home, span))
     shared = f"; {n} registry entities declare this domain" if n > 1 else ""
     others = f"; the site also prints organisation number(s) {', '.join(sorted(v.others))}" if v.others else ""
     m = {"method": "registry_declared_live", "url": public_url(v, canonical_url(home)),
          "detail": f"registry lists {registry_host} as the company's website; the site is live and shows "
-                   f"'{hit}'{shared}{others}"}
+                   f"{'the registry contact' if contact else repr(hit)}{shared}{others}"}
     ctx.add_claim("official_website", SECTION, site_domain(v.alias_host or home.host), evs, confidence=0.8, match=m,
                   note="The company's own registry-declared website, live; it was not proven from its pages, so "
                        "only the domain is published and nothing is derived from the site")
