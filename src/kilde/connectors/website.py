@@ -5605,6 +5605,8 @@ def _tried_note(verdicts: list["Verdict"]) -> str:
     return "domains tried: " + out + (f" and {len(seen) - TRIED_LIST} more" if len(seen) > TRIED_LIST else "")
 
 
+FOREIGN_CC_TLDS = {"se", "dk", "fi", "de", "ee", "lt", "lv", "pl", "uk", "nl", "fr", "es", "it", "ch", "at", "be", "ru",
+                   "is", "us", "ca", "au", "cn", "jp", "in", "br"}
 DECLARED_CROWD = 5  # a domain declared as hjemmeside by this many registry entities is a manager's or chain's site
 
 
@@ -5661,6 +5663,9 @@ async def declared_live_site(sp: "_Spend", ctx: CompanyContext, verdicts: list["
               and not (x.cross or x.path_scoped) and same_site(bare(x.pages[0].host), registry_host)), None)
     if v is None or is_parked(v.pages[0]):
         return False
+    country = ((e.get("forretningsadresse") or e.get("postadresse") or {}).get("landkode") or "NO")
+    if country == "NO" and bare(v.pages[0].host).rsplit(".", 1)[-1] in FOREIGN_CC_TLDS:
+        return False  # a foreign group company's site (shgroup.dk for SH GROUP NORWAY AS)
     for num in v.others:
         if not re.fullmatch(r"\d{9}", num) or _num_in_operator_position(v, num):
             return False
@@ -5689,8 +5694,9 @@ async def declared_live_site(sp: "_Spend", ctx: CompanyContext, verdicts: list["
         whole if len(whole) >= 6 and whole in re.sub(r"[^a-z0-9]", "", seen) else None)
     if not hit:
         return False
-    if not contact and _copyright_other(text, e.get("navn") or ""):
-        return False
+    owner = _copyright_other(text, e.get("navn") or "")
+    if owner and (not contact or not re.search(r"\b(?:AS|ASA|A/S)$", owner)):
+        return False  # another company's copyright; a foreign one (a parent's 'Limited') even beside our contact
     n = await _declarer_count(sp, registry_host)
     if n is None or n >= DECLARED_CROWD:
         return False

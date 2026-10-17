@@ -4056,3 +4056,19 @@ def test_declared_site_tied_only_by_its_own_host_name_or_a_short_word_is_not_off
     ctx = ctx_for(navn="NY LAND AS", hjemmeside="nyland.no")
     claims = run(FakeFetcher(pages), ctx)
     assert claims["official_website"].value == "nyland.no"  # the whole name, run together, is shown
+
+
+def test_declared_foreign_group_site_is_not_official_even_with_our_contact():
+    """SH Group shape: shgroup.dk lists the Norwegian unit's phone; Brady shape: a 'Limited' parent's .com site."""
+    url, resp = _declarers("fjellbekk.dk", (OURS,))
+    pages = {"https://fjellbekk.dk/": (200, html("<p>Norway office: +47 41 00 00 01</p>", title="Fjellbekk Group")),
+             url: resp}
+    ctx = ctx_for(hjemmeside="fjellbekk.dk", telefon="41 00 00 01")
+    run(FakeFetcher(pages), ctx)
+    assert not [c for c in ctx.claims if c.field == "official_website" and c.availability == "available"]
+    body = "<p>Norway office: +47 41 00 00 01</p><footer>© Copyright 2026 Kvist Technologies Limited</footer>"
+    url, resp = _declarers("fjellbekk.com", (OURS,))
+    pages = {"https://fjellbekk.com/": (200, html(body, title="Kvist")), url: resp}
+    ctx = ctx_for(hjemmeside="fjellbekk.com", telefon="41 00 00 01")
+    run(FakeFetcher(pages), ctx)
+    assert not [c for c in ctx.claims if c.field == "official_website" and c.availability == "available"]
