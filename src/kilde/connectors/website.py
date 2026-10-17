@@ -5710,6 +5710,8 @@ async def declared_live_site(sp: "_Spend", ctx: CompanyContext, verdicts: list["
     core = [w for w in words if w not in LEGAL_SUFFIX and w not in FORM_NAME_WORDS]
     if not core or words & DECLARING_HOLDINGS:
         return False  # holding and investment companies declare their operating company's site
+    if ((e.get("organisasjonsform") or {}).get("kode") or "") in NON_OPERATING | {"VPFO", "KIRK", "SÆR", "STAT", "FYLK", "KOMM"}:
+        return False  # funds, co-owned properties and public bodies declare their manager's or owner's site
     v = next((x for x in verdicts if x.source == "registry" and x.status in ("no_match", "related") and x.pages
               and not (x.cross or x.path_scoped) and same_site(bare(x.pages[0].host), registry_host)), None)
     if v is None or is_parked(v.pages[0]):
@@ -5748,8 +5750,8 @@ async def declared_live_site(sp: "_Spend", ctx: CompanyContext, verdicts: list["
     if owner and (not contact or not re.search(r"\b(?:AS|ASA|A/S)$", owner)):
         return False  # another company's copyright; a foreign one (a parent's 'Limited') even beside our contact
     n = await _declarer_count(sp, registry_host)
-    if n is None or n >= DECLARED_CROWD:
-        return False
+    if n is None or n >= DECLARED_CROWD or n > 1:
+        return False  # without page proof, only a domain no other entity declares (funds share their manager's site)
     other = await _presenting_entity(sp, ctx, v)
     if other and not other[0]:
         return False  # the registry name search failed

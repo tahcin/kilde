@@ -3891,10 +3891,11 @@ def test_declared_live_site_without_the_legal_name_is_official_with_nothing_deri
     assert "related_website" not in claims
 
 
-def test_declared_live_site_shared_by_a_few_declarers_gives_the_domain_only():
+def test_declared_live_site_shared_by_other_declarers_is_not_official():
+    """Pareto funds all declare their manager's paretoam.com and show its phone: without page proof, a domain
+    another entity also declares is never this company's official website."""
     ctx, claims = _declared_case("<p>Velkommen</p>", declarers=(OURS, OTHER, THIRD), phone=True)
-    assert claims["official_website"].value == "fjellbekk.no"
-    assert "3 registry entities" in claims["official_website"].match["detail"]
+    assert not [c for c in ctx.claims if c.field == "official_website" and c.availability == "available"]
 
 
 def test_declared_site_of_five_or_more_entities_is_never_official():
