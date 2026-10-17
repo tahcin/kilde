@@ -3859,3 +3859,81 @@ def test_search_overlay_listings_and_dates_inside_headings_are_not_news():
     page = W.parse_page(Snapshot("https://fjellbekk.no/", "https://fjellbekk.no/", 200, "x",
                                  html('<div><h3>Testlyd - Hallen 2026-10-01</h3><p>Billetter</p></div>').encode(), "text/html"))
     assert W.inline_news(page) == []
+
+
+# ---------------------------------------------------------------- registry-declared live site (revision 2)
+def _declarers(host, orgs):
+    rows = [{"organisasjonsnummer": o, "navn": f"ENTITY {o} AS", "hjemmeside": f"www.{host}"} for o in orgs]
+    return (W.BRREG_SEARCH + f"?hjemmeside={host}&size=100",
+            (200, json.dumps({"_embedded": {"enheter": rows}}), "application/json"))
+
+
+def _declared_case(body, declarers=(OURS,), title="Fjellbekk | Shipbrokers", extra=None):
+    url, resp = _declarers("fjellbekk.no", declarers)
+    pages = {"https://fjellbekk.no/": (200, html(body, title=title)), url: resp}
+    pages.update(extra or {})
+    ctx = ctx_for(hjemmeside="www.fjellbekk.no")
+    claims = run(FakeFetcher(pages), ctx)
+    return ctx, claims
+
+
+def test_declared_live_site_without_the_legal_name_is_official_with_nothing_derived():
+    """Strand Shipping shape: a script-built page that shows only a title with the distinctive name word."""
+    body = '<div id="app"></div><a href="https://www.facebook.com/fjellbekk">f</a>'
+    ctx, claims = _declared_case(body)
+    site = claims["official_website"]
+    assert site.availability == "available" and site.value == "fjellbekk.no"
+    assert site.match["method"] == "registry_declared_live"
+    assert not [c for c in ctx.claims if c.field == "social_profile" and c.availability == "available"]
+    assert claims["website_description"].availability == "ambiguous"
+    assert "related_website" not in claims
+
+
+def test_declared_live_site_shared_by_a_few_declarers_gives_the_domain_only():
+    ctx, claims = _declared_case("<p>Velkommen</p>", declarers=(OURS, OTHER, THIRD))
+    assert claims["official_website"].value == "fjellbekk.no"
+    assert "3 registry entities" in claims["official_website"].match["detail"]
+
+
+def test_declared_site_of_five_or_more_entities_is_never_official():
+    """OBOS and USBL shape: a housing manager's domain declared by many co-ops."""
+    many = (OURS, OTHER, THIRD, FOURTH, "999000045")
+    ctx, claims = _declared_case("<p>Velkommen</p>", declarers=many)
+    assert not [c for c in ctx.claims if c.field == "official_website" and c.availability == "available"]
+
+
+def test_declared_site_with_another_org_number_in_the_footer_stays_related():
+    body = f"<h1>Fjellbekk</h1><footer>Fjellbekk Shipping AS · Org.nr {OTHER}</footer>"
+    ctx, claims = _declared_case(body)
+    assert not [c for c in ctx.claims if c.field == "official_website" and c.availability == "available"]
+    assert claims["related_website"].value["other_organisation_number"] == OTHER
+
+
+def test_declared_site_with_another_org_number_only_in_body_text_is_official():
+    body = (f"<h1>Fjellbekk</h1><section><p>Vi leverte nytt tak for kunden Nabo Bygg AS (org.nr {OTHER}) "
+            "i fjor.</p></section>")
+    ctx, claims = _declared_case(body)
+    assert claims["official_website"].value == "fjellbekk.no"
+    assert OTHER in claims["official_website"].match["detail"]
+
+
+def test_declared_site_without_our_name_word_or_unreadable_registry_is_not_official():
+    ctx, claims = _declared_case("<p>Velkommen til en helt annen bedrift</p>", title="Hjem")
+    assert not [c for c in ctx.claims if c.field == "official_website" and c.availability == "available"]
+    pages = {"https://fjellbekk.no/": (200, html("<div id='app'></div>", title="Fjellbekk"))}
+    f = FakeFetcher(pages)
+    f.brreg_down = True
+    ctx2 = ctx_for(hjemmeside="www.fjellbekk.no")
+    try:
+        run(f, ctx2)
+    except Exception:
+        pass
+    assert not [c for c in ctx2.claims if c.field == "official_website" and c.availability == "available"]
+
+
+def test_declared_site_on_a_path_or_redirected_elsewhere_is_not_official():
+    url, resp = _declarers("fjellbekk.no", (OURS,))
+    pages = {"https://fjb.no/": (200, html("<div id='app'></div>", title="Fjellbekk")), url: resp}
+    ctx = ctx_for(hjemmeside="www.fjellbekk.no")
+    run(FakeFetcher(pages, redirects={"https://fjellbekk.no/": "https://fjb.no/"}), ctx)
+    assert not [c for c in ctx.claims if c.field == "official_website" and c.availability == "available"]

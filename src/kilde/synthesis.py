@@ -256,7 +256,8 @@ def summarise(ctx: CompanyContext, changes: list[dict]) -> dict[str, Any]:
                                              "and the site shows that workplace's name and registered address",
                "legal_name_unique": "the site shows the exact registered legal name, which no other registered "
                                     "entity carries, and its domain is that name",
-               "registry_declared": "the company registered it with Brønnøysundregistrene"}.get((site.match or {}).get("method"))
+               "registry_declared": "the company registered it with Brønnøysundregistrene",
+               "registry_declared_live": "the company registered it with Brønnøysundregistrene and the site is live"}.get((site.match or {}).get("method"))
         say(f"Its website is {site.value}" + (f" (verified because {how})." if how else ", matched to the registry by Kilde's identity checks."), site)
     socials = ctx.claims_for("social_profile")
     by_source: dict[str, list[Claim]] = {}

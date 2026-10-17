@@ -355,7 +355,8 @@ def emit_entity(ctx: CompanyContext, batch: WikidataBatch, qsnap: Snapshot, snap
     site, n = pick_website(statements(claims, "P856"))
     from .website import canonical_social, site_domain, social_path_is_link
     from urllib.parse import urlsplit as _us
-    known = {str(c.value) for c in ctx.claims_for("official_website")}
+    known = {str(c.value) for c in ctx.claims_for("official_website")
+             if (c.match or {}).get("method") != "registry_declared_live"}  # proven from the site's own pages
     site_dom = site_domain(_us(str(_value(site))).netloc) if site and isinstance(_value(site), str) else None
     # Wikidata items can conflate related entities (a pension foundation's item listed the operating
     # company's site), so its website is only a candidate: never published unless Kilde verified that

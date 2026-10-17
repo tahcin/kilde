@@ -5547,6 +5547,84 @@ def _tried_note(verdicts: list["Verdict"]) -> str:
     return "domains tried: " + out + (f" and {len(seen) - TRIED_LIST} more" if len(seen) > TRIED_LIST else "")
 
 
+DECLARED_CROWD = 5  # a domain declared as hjemmeside by this many registry entities is a manager's or chain's site
+
+
+async def _declarer_count(sp: "_Spend", host: str) -> int | None:
+    """How many registry entities declare this domain as their website (the cached hjemmeside search used for
+    co-declarers; one Brreg request at most). None when the lookup failed."""
+    host = bare(host)
+    rows = _HJEM_CACHE.get(host)
+    if rows is None:
+        if not sp.can_registry():
+            return None
+        try:
+            snap = await sp.get(f"{BRREG_API}/enheter?hjemmeside={host}&size=100", robots=False,
+                                headers={"Accept": "application/json"})
+        except (BudgetExhausted, _OutOfRequests):
+            raise
+        except Exception:
+            return None
+        if snap.status != 200:
+            return None
+        rows = (snap.json().get("_embedded") or {}).get("enheter") or []
+        _HJEM_CACHE[host] = rows
+    return len({r.get("organisasjonsnummer") for r in rows if bare(host_of(r.get("hjemmeside") or "")) == host})
+
+
+async def declared_live_site(sp: "_Spend", ctx: CompanyContext, verdicts: list["Verdict"],
+                             registry_host: str | None) -> bool:
+    """The company's own registry-declared website, live and not parked, published as official_website (the
+    domain only) when no page proved it: the site does not show the legal name (a script-built page), or it
+    prints other org numbers outside any operator position. Never when another org number sits in the footer,
+    header, contact or imprint block or on an operator page, when the site redirects to another domain, when it
+    names a different entity sharing our name, or when 5 or more registry entities declare the domain (housing
+    managers, chains). The page must show a distinctive word of our name. Nothing is derived from the site."""
+    e = ctx.registry or {}
+    raw = (e.get("hjemmeside") or "").strip()
+    if not registry_host or not raw or urlsplit(raw if "//" in raw else "https://" + raw).path.strip("/"):
+        return False
+    v = next((x for x in verdicts if x.source == "registry" and x.status in ("no_match", "related") and x.pages
+              and not (x.cross or x.path_scoped) and same_site(bare(x.pages[0].host), registry_host)), None)
+    if v is None or is_parked(v.pages[0]):
+        return False
+    for num in v.others:
+        if not re.fullmatch(r"\d{9}", num) or _num_in_operator_position(v, num):
+            return False
+    for p in v.pages:
+        if any(n not in v.ignore_orgs for n in other_orgnrs(p, ctx.org)) and v.status != "related":
+            return False
+    toks = [t for t in _core_tokens(e.get("navn") or "") if len(t) >= 3 and t not in GENERIC_WORDS
+            and t not in REGIONS and t not in COMMON_LABELS and t not in COMMON_NOUNS]
+    home = v.pages[0]
+    title = home.soup.title.get_text(" ", strip=True) if home.soup.title else ""
+    seen = _translit(" ".join([title] + [p.text for p in v.pages]))
+    hit = next((t for t in toks if re.search(r"(?<![a-z0-9])" + re.escape(t) + r"(?![a-z0-9])", seen)), None)
+    if not hit:
+        return False
+    n = await _declarer_count(sp, registry_host)
+    if n is None or n >= DECLARED_CROWD:
+        return False
+    reg = next((c for c in ctx.claims_for("registry_website") if c.availability == "available"), None)
+    evs = [x for x in ctx.evidence if reg and x.id in reg.evidence_ids]
+    span = title if title and _translit(title).find(hit) >= 0 else None
+    evs.append(_ev(ctx, home, span))
+    shared = f"; {n} registry entities declare this domain" if n > 1 else ""
+    others = f"; the site also prints organisation number(s) {', '.join(sorted(v.others))}" if v.others else ""
+    m = {"method": "registry_declared_live", "url": public_url(v, canonical_url(home)),
+         "detail": f"registry lists {registry_host} as the company's website; the site is live and shows "
+                   f"'{hit}'{shared}{others}"}
+    ctx.add_claim("official_website", SECTION, site_domain(v.alias_host or home.host), evs, confidence=0.8, match=m,
+                  note="The company's own registry-declared website, live; it was not proven from its pages, so "
+                       "only the domain is published and nothing is derived from the site")
+    why = "the site is published from the registry declaration only; nothing is derived from its pages"
+    for fld, sec in DERIVED_FIELDS:
+        ctx.mark(fld, sec, "ambiguous", note=why)
+    ctx.facts["website_declared_live"] = {"domain": registry_host, "declarers": n}
+    ctx.module_states["website"] = "available"
+    return True
+
+
 async def fetch_website(f: Fetcher, ctx: CompanyContext) -> None:
     e = ctx.registry or {}
     if not e or e.get("_gone") or ctx.facts.get("deleted"):
@@ -5721,6 +5799,11 @@ async def fetch_website(f: Fetcher, ctx: CompanyContext) -> None:
             ctx.module_states["website"] = "timeout"  # transient: the pipeline's retry pass runs it again
             return
 
+    try:
+        if await declared_live_site(sp, ctx, verdicts, registry_host):
+            return
+    except (BudgetExhausted, _OutOfRequests):
+        pass
     # Related sites: another organisation number printed, ours never.
     for v in verdicts:
         if v.status == "related" and v.pages and v.source in ("registry", "email"):
