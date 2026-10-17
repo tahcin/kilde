@@ -5647,6 +5647,43 @@ def _copyright_other(text: str, our_name: str) -> str | None:
     return None
 
 
+async def _presenting_entity(sp: "_Spend", ctx: CompanyContext, v: "Verdict") -> tuple[str, str, str] | None:
+    """Another registered entity whose full legal name the declared site shows in its title, a top heading or
+    its copyright line, while our own full current legal name appears nowhere on the site: (org number, name,
+    the text that names it). Uses the cached Brreg name search; at most four lookups."""
+    e = ctx.registry or {}
+    our_rx = _full_name_rx(e.get("navn") or "")
+    if our_rx and any(_visible(our_rx, p.text) or (p.soup.title and our_rx.search(p.soup.title.get_text(" ")))
+                      for p in v.pages):
+        return None
+    home = v.pages[0]
+    spots = [home.soup.title.get_text(" ", strip=True)] if home.soup.title else []
+    spots += [h.get_text(" ", strip=True) for p in v.pages for h in p.soup.find_all("h1")][:6]
+    spots += [m.group(0) for p in v.pages for m in COPYRIGHT_OWNER.finditer(p.text)][:4]
+    ours = re.sub(r"[^a-z0-9]", "", _translit(e.get("navn") or ""))
+    tried = 0
+    for spot in spots:
+        for m in ENTITY.finditer(spot or ""):
+            words = m.group(1).split()
+            for k in range(min(len(words), 4), 0, -1):  # 'Hjem - Strand Shipping AS': longest real name first
+                cand = " ".join(words[-k:] + [m.group(2)])
+                key = re.sub(r"[^a-z0-9]", "", _translit(cand))
+                if not re.search(r"[A-Za-zÆØÅæøå]", words[-k]) or key == ours or len(key) < 5:
+                    continue
+                if tried >= 4:
+                    return None
+                tried += 1
+                try:
+                    rows, _cut = await brreg_name_search(sp, "enheter", " ".join(words[-k:]))
+                except (_RegistrySearchFailed, _OutOfRequests):
+                    return "", "", ""  # unknown: the caller does not publish
+                for r in rows:
+                    if r.get("organisasjonsnummer") != ctx.org and _active(r) and \
+                            re.sub(r"[^a-z0-9]", "", _translit(r.get("navn") or "")) == key:
+                        return r["organisasjonsnummer"], r.get("navn") or cand, spot[:200]
+    return None
+
+
 async def declared_live_site(sp: "_Spend", ctx: CompanyContext, verdicts: list["Verdict"],
                              registry_host: str | None) -> bool:
     """The company's own registry-declared website, live and not parked, published as official_website (the
@@ -5700,6 +5737,24 @@ async def declared_live_site(sp: "_Spend", ctx: CompanyContext, verdicts: list["
     n = await _declarer_count(sp, registry_host)
     if n is None or n >= DECLARED_CROWD:
         return False
+    other = await _presenting_entity(sp, ctx, v)
+    if other and not other[0]:
+        return False  # the registry name search failed
+    if other:
+        # the title, heading or copyright line names another registered company and never our own name: the
+        # site is that company's (a sister's, as Strand Shipping AS on strand-shipping.no), so it is a related
+        # website, as group sites are
+        org2, name2, where = other
+        ev = _ev(ctx, home, where)
+        ctx.add_claim("related_website", SECTION, {"url": canonical_url(home), "other_organisation_number": org2},
+                      ev, availability="ambiguous", confidence=0.0,
+                      note=f"the registry website points to this domain, but the site presents {name2} ({org2}), "
+                           "another registered company, and not this company's own name. Not this company's official site.")
+        ctx.mark("official_website", SECTION, "ambiguous",
+                 note=f"the registry website {registry_host} presents another registered company, {name2} ({org2}); "
+                      "see related_website")
+        ctx.module_states["website"] = "ambiguous"
+        return True
     reg = next((c for c in ctx.claims_for("registry_website") if c.availability == "available"), None)
     evs = [x for x in ctx.evidence if reg and x.id in reg.evidence_ids]
     span = title if title and not contact and _translit(title).find(hit) >= 0 else None
